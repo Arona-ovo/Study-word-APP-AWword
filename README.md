@@ -8,7 +8,7 @@
 
 <br/>
 
-![platform](https://img.shields.io/badge/platform-Android%20%C2%B7%20%E5%BE%AE%E4%BF%A1%E5%B0%8F%E7%A8%8B%E5%BA%8F%20%C2%B7%20H5-2E6BFF?logo=android&logoColor=white)
+
 ![framework](https://img.shields.io/badge/uni--app-Vue%203-41B883?logo=vue.js&logoColor=white)
 ![offline-first](https://img.shields.io/badge/offline--first-%E2%9C%93-0F6E56?logo=airplane&logoColor=white)
 ![words](https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-640%20%E8%AF%8D%20%C2%B7%20626%20%E4%BE%8B%E5%8F%A5%20%C2%B7%20986%20%E5%B8%B8%E7%94%A8%E8%AF%8D-185FA5)
