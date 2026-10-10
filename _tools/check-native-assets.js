@@ -92,8 +92,12 @@ if (style === 'default') {
 // ---------- 4. 启动界面关闭策略 ----------
 console.log('== 4. 启动界面关闭策略 ==');
 const sp = (mf['app-plus'] || {}).splashscreen || {};
+// ⚠️ HBuilderX 的 manifest 可视化编辑器在改动「模块配置」时会顺手把这一项写回 false
+// （实测：取消勾选 Barcode 之后它变成了 false）。这里是**故意**设成 true 的 ——
+// 我们启用了自定义启动图（复刻 cover 首屏），必须让它撑到首页首帧渲染完再撤，
+// 否则中间会闪一帧白底。看到这条红，直接把 manifest 改回 true，别改断言。
 assert(sp.alwaysShowBeforeRender === true,
-  'alwaysShowBeforeRender=true（等首页渲染完再关启动图，避免闪白）');
+  'alwaysShowBeforeRender=true（等首页渲染完再关启动图，避免闪白；HBuilderX 改模块时会写回 false，改回来即可）');
 assert(sp.autoclose === true, 'autoclose=true（自动关闭）');
 assert(typeof sp.delay === 'number', 'delay 是数字（' + sp.delay + '）');
 if (typeof sp.waiting === 'boolean') {
@@ -107,6 +111,17 @@ const light = /linear-gradient\(165deg, #f2f7ff 0%, #e0ecff 52%, #cfe0ff 100%\)/
 assert(light, 'cover 首屏浅色底仍是 165deg #f2f7ff→#e0ecff→#cfe0ff（改这里要重新 gen-splash.py）');
 // 启动图生成脚本仍在，改设计稿可复现
 assert(fs.existsSync(path.join(__dirname, 'gen-splash.py')), '保留下 gen-splash.py 生成脚本（可复现）');
+
+// ---------- 6. 模块白名单 ----------
+// 勾选的原生模块会被打进基座/APK，没用到就是白白撑大体积。
+// Barcode（扫码）曾经被勾上，评估后**明确不用**：备份密文实测 240 KB，
+// 二维码版本 40 的硬上限是 2953 字节（手机对扫的可靠上限约 1~2 KB），差两个数量级，
+// 装不下；换机迁移走「导出 → 系统分享面板（含各厂商互传，Wi-Fi 直连）」。
+console.log('== 6. 原生模块白名单 ==');
+const mods = (mf['app-plus'] || {}).modules || {};
+const modKeys = Object.keys(mods);
+assert(!mods.Barcode, '未勾选 Barcode 扫码模块（备份 240KB 装不进二维码，换机走系统分享互传）');
+ok('已启用模块：' + (modKeys.length ? modKeys.join(' / ') : '（无）'));
 
 console.log('\n' + (fail ? '✗ FAIL ' + fail : '✓ ALL PASS ' + pass + ' 项'));
 process.exitCode = fail ? 1 : 0;

@@ -22,7 +22,11 @@ const eq = (a, b, m) => assert(a === b, m + '（期望 ' + b + '，实际 ' + a 
 
 (async () => {
   const SET = 'pkgManage/pages/settings/settings.vue';
-  const src = R(SET);
+  // ⚠️ 先归一化换行符：settings.vue 在 Windows 上是 CRLF（\r\n）。
+  // 下面第 8 组用 /\n    tapVersion\(\) \{\n/ 这种「带缩进的换行」正则抽方法体，
+  // 不归一化的话 \n 后面永远跟着 \r，正则一次都匹配不到 ——
+  // 表现为「方法明明写在文件里，脚本却报抽不出方法体」。
+  const src = R(SET).replace(/\r\n/g, '\n');
   // 去掉整行 // 注释再扫代码契约：readVersion() 里那段"为什么不再读宿主版本"的说明
   // 会命中 plus.runtime.version 之类的字面量，那是文档不是代码。
   const code = src.replace(/^\s*\/\/.*$/gm, '');
