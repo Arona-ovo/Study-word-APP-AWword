@@ -57,15 +57,20 @@
     <!-- 点读单词弹窗（与例句详情同一套视觉） -->
     <view class="pop-mask" v-if="pop.show" @tap="closePop">
       <view class="pop-card" @tap.stop="noop">
-        <view class="pop-word">{{ pop.word }}</view>
+        <!-- 点单词本身也能进词条页：以前点了毫无反应，用户只会以为界面卡了 -->
+        <view class="pop-word" @tap="openPopWord">{{ pop.word }}</view>
         <view class="pop-ph" v-if="pop.phonetic">/{{ pop.phonetic }}/</view>
         <view class="pop-meaning" v-if="pop.found">{{ pop.pos }} {{ pop.meaning }}</view>
         <view class="pop-meaning none" v-else>{{ $t('未收录（仍可发音）') }}</view>
-        <view class="pop-meta" v-if="pop.found">
-          <text class="pop-src">{{ pop.srcLabel }}</text>
+        <!-- 标签 = 这个词在不在「我正在背的词书」里；不在就整行不显示 -->
+        <view class="pop-meta" v-if="pop.srcLabel || pop.inflected">
+          <text class="pop-src" v-if="pop.srcLabel">{{ pop.srcLabel }}</text>
           <text class="pop-lemma" v-if="pop.inflected">原形 {{ pop.lemma }}</text>
         </view>
-        <view class="pop-replay" :data-text="pop.word" @tap="replayWord">{{ $t('再听一次') }}</view>
+        <view class="pop-actions">
+          <view class="pop-replay" :data-text="pop.word" @tap="replayWord">{{ $t('再听一次') }}</view>
+          <view class="pop-replay" @tap="openPopWord">{{ $t('查看词条') }}</view>
+        </view>
       </view>
     </view>
   </view>
@@ -143,13 +148,23 @@ export default {
         pos: entry.pos || '',
         meaning: entry.meaning || '',
         phonetic: entry.phonetic || '',
-        srcLabel: dict.SRC_LABEL[entry.src] || '',
+        srcLabel: dict.ownerLabel(raw),
         found: !!entry.found,
         lemma: entry.lemma || '',
         inflected: entry.inflected || ''
       }
       // 未收录的单词仍走有道单词级发音
       tts.speakWord(dict.speakForm(raw))
+    },
+
+    // 弹窗里的单词 / 「查看词条」→ 单词详情页（先关弹窗，返回时别还挂着）
+    openPopWord() {
+      const w = String(this.pop.word || '').trim().toLowerCase()
+      if (!w) return
+      this.closePop()
+      uni.navigateTo({
+        url: '/pkgManage/pages/word-detail/word-detail?w=' + encodeURIComponent(w)
+      })
     },
 
     closePop() {
@@ -296,4 +311,8 @@ export default {
   border-radius: 999rpx;
   padding: 12rpx 48rpx;
 }
+
+/* 「再听一次」与「查看词条」并排：行距统一由这层给 */
+.pop-actions { margin-top: 36rpx; display: flex; align-items: center; justify-content: center; gap: 20rpx; }
+.pop-actions .pop-replay { margin-top: 0; padding: 12rpx 34rpx; }
 </style>

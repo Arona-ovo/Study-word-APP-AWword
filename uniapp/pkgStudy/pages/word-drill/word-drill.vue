@@ -1,6 +1,13 @@
 <template>
   <view class="container page-nav wd" :class="appTheme" :style="appBgStyle" v-if="!empty">
-    <float-navbar :title="$t('刷单词')" />
+    <!-- 顶栏：平时是标题，**这一关答完**之后点它原地变搜索框（参考不背单词的随时查词）。
+         答完之前点只给一句提示 —— 答案都还没揭，能搜就等于能提前看答案。 -->
+    <word-search
+      ref="search"
+      :title="$t('刷单词')"
+      :book-id="bookId"
+      :locked="!canSearch"
+    />
 
     <block v-if="!finished">
       <!-- 顶部两条进度。
@@ -190,12 +197,17 @@
     <!-- 点读单词弹窗 -->
     <view class="pop-mask" v-if="pop.show" @tap="closePop">
       <view class="pop-card" @tap.stop="noop">
-        <view class="wd-pop-word">{{ pop.word }}</view>
+        <!-- 点单词本身也能进词条页：以前点了毫无反应，用户只会以为界面卡了 -->
+        <view class="wd-pop-word" @tap="openPopWord">{{ pop.word }}</view>
         <view class="wd-pop-ph" v-if="pop.phonetic">/{{ pop.phonetic }}/</view>
         <view class="wd-pop-meaning" v-if="pop.found">{{ pop.pos }} {{ pop.meaning }}</view>
         <view class="wd-pop-none" v-else>{{ $t('未收录（仍可发音）') }}</view>
-        <view class="wd-pop-src" v-if="pop.found">{{ pop.srcLabel }}</view>
-        <view class="wd-pop-replay" :data-text="pop.word" @tap="replay">{{ $t('再听一次') }}</view>
+        <!-- 标签 = 这个词在不在「我正在背的词书」里；不在就不显示这一行 -->
+        <view class="wd-pop-src" v-if="pop.srcLabel">{{ pop.srcLabel }}</view>
+        <view class="wd-pop-actions">
+          <view class="wd-pop-replay" :data-text="pop.word" @tap="replay">{{ $t('再听一次') }}</view>
+          <view class="wd-pop-replay" @tap="openPopWord">{{ $t('查看词条') }}</view>
+        </view>
       </view>
     </view>
   </view>
@@ -224,6 +236,7 @@ import { tokenize } from '../../../utils/tokenize'
 import { bookWordSet, targetWordSet, markTokens } from '../../../utils/word-mark'
 import * as sfx from '../../../utils/sfx.js'
 import FloatNavbar from '../../../components/float-navbar/float-navbar.vue'
+import WordSearch from '../../../components/word-search/word-search.vue'
 
 // 掌握度标签：三种来源的翻译都由 setupQuestion 预算好，模板里不做三元 + 占位符的组合
 const STATUS_NAME = { new: '新词', learning: '学习中', familiar: '熟悉', mastered: '已掌握' }
@@ -246,7 +259,7 @@ function savedDrillMode() {
 }
 
 export default {
-  components: { FloatNavbar },
+  components: { FloatNavbar, WordSearch },
   data() {
     return {
       labels: ['A', 'B', 'C', 'D'],
@@ -337,6 +350,8 @@ export default {
   onShow() {
     // 从设置页改完配色回来要生效（页面是 navigateTo 打开的，返回时走 onShow）
     try { this.barsSync = barsSyncColors() } catch (e) { this.barsSync = true }
+    // 从查词结果点进词条页、再返回：把搜索面板收起来
+    if (this.$refs.search) this.$refs.search.collapse()
   },
 
   onHide() {
@@ -347,6 +362,20 @@ export default {
     this.alive = false
     this.clearAnswerTimer()
     tts.stop()
+    // 搜索里的 AI 兜底可能还挂着定时器 → 一起收干净
+    if (this.$refs.search) this.$refs.search.close()
+  },
+
+  computed: {
+    /**
+     * 顶栏能不能点开查词：**这一关答完、结果出来了**才放行。
+     * 刷单词一轮三关，每关都是一次独立的"作答"（答完答错都会揭示答案），
+     * 所以这里用同一颗 answered 判定就够了 —— 关卡之间没有"答案还藏着"的中间态。
+     */
+    canSearch() {
+      if (this.finished) return true
+      return !!this.answered
+    }
   },
 
   methods: {
@@ -727,10 +756,22 @@ export default {
         pos: entry.pos || '',
         meaning: entry.meaning || '',
         phonetic: entry.phonetic || '',
-        srcLabel: dict.SRC_LABEL[entry.src] || '',
+        // 归属标签只认「我当前在背的那本书」：在 → 书名，不在 → 空
+        // （SRC_LABEL 说的是"命中哪一层"，背专升本的人会看到「核心词书」——串台）
+        srcLabel: dict.ownerLabel(raw, this.bookId),
         found: !!entry.found
       }
       tts.speakWord(dict.speakForm(raw))
+    },
+
+    // 弹窗里的单词 / 「查看词条」→ 单词详情页（先关弹窗，返回时别还挂着）
+    openPopWord() {
+      const w = String(this.pop.word || '').trim().toLowerCase()
+      if (!w) return
+      const url = '/pkgManage/pages/word-detail/word-detail?w=' + encodeURIComponent(w) +
+        '&book=' + encodeURIComponent(String(this.bookId || ''))
+      this.closePop()
+      uni.navigateTo({ url })
     },
 
     closePop() {
@@ -1326,6 +1367,10 @@ export default {
   border-radius: 999rpx;
   padding: 10rpx 32rpx;
 }
+
+/* 「再听一次」与「查看词条」并排：行距由这层统一给 */
+.wd-pop-actions { margin-top: 26rpx; display: flex; align-items: center; justify-content: center; gap: 18rpx; }
+.wd-pop-actions .wd-pop-replay { margin-top: 0; }
 
 .wd-empty-text {
   display: block;

@@ -1,6 +1,14 @@
 <template>
   <view class="container page-nav" :class="appTheme" :style="appBgStyle" v-if="!empty">
-    <float-navbar :title="$t('翻译练习')" />
+    <!-- 顶栏：平时是标题，**答完这一题之后**点它原地变搜索框（参考不背单词的随时查词）。
+         答完之前点只给一句提示 —— 没出结果就查词等于把答案摆在手边；
+         确认关进行中也不行，那一关考的就是目标词的意思。 -->
+    <word-search
+      ref="search"
+      :title="$t('翻译练习')"
+      :book-id="bookId"
+      :locked="!canSearch"
+    />
 
     <!-- 答题流程 -->
     <block v-if="!finished">
@@ -219,15 +227,20 @@
     <!-- 点读单词弹窗 -->
     <view class="pop-mask" v-if="pop.show" @tap="closePop">
       <view class="pop-card" @tap.stop="noop">
-        <view class="pop-word">{{ pop.word }}</view>
+        <!-- 点单词本身也能进词条页：以前点了毫无反应，用户只会以为界面卡了 -->
+        <view class="pop-word" @tap="openPopWord">{{ pop.word }}</view>
         <view class="pop-ph" v-if="pop.phonetic">/{{ pop.phonetic }}/</view>
         <view class="pop-meaning" v-if="pop.found">{{ pop.pos }} {{ pop.meaning }}</view>
         <view class="pop-meaning none" v-else>{{ $t('未收录（仍可发音）') }}</view>
-        <view class="pop-meta" v-if="pop.found">
-          <text class="pop-src">{{ pop.srcLabel }}</text>
+        <!-- 标签 = 这个词在不在「我正在背的词书」里；不在就整行不显示 -->
+        <view class="pop-meta" v-if="pop.srcLabel || pop.inflected">
+          <text class="pop-src" v-if="pop.srcLabel">{{ pop.srcLabel }}</text>
           <text class="pop-lemma" v-if="pop.inflected">原形 {{ pop.lemma }}</text>
         </view>
-        <view class="pop-replay" :data-text="pop.word" @tap="replay">{{ $t('再听一次') }}</view>
+        <view class="pop-actions">
+          <view class="pop-replay" :data-text="pop.word" @tap="replay">{{ $t('再听一次') }}</view>
+          <view class="pop-replay" @tap="openPopWord">{{ $t('查看词条') }}</view>
+        </view>
       </view>
     </view>
   </view>
@@ -259,6 +272,7 @@ import { tokenize, isEnglish } from '../../../utils/tokenize'
 import { bookWordSet, targetWordSet, markTokens, countMarked } from '../../../utils/word-mark'
 import * as sfx from '../../../utils/sfx.js'
 import FloatNavbar from '../../../components/float-navbar/float-navbar.vue'
+import WordSearch from '../../../components/word-search/word-search.vue'
 
 /* ---------- 作答方式：选择题 / 手动输入 ----------
    和刷单词页同一条规矩（见 word-drill.vue）：选了就一直固定着 ——
@@ -268,7 +282,7 @@ import FloatNavbar from '../../../components/float-navbar/float-navbar.vue'
 const PRACTICE_MODES = ['choice', 'input']
 
 export default {
-  components: { FloatNavbar },
+  components: { FloatNavbar, WordSearch },
   data() {
     return {
       labels: ['A', 'B', 'C', 'D'],
@@ -339,6 +353,19 @@ export default {
       critiqueError: ''
     }
   },
+  computed: {
+    /**
+     * 顶栏能不能点开查词。
+     * 条件 = 本题结果已经出来（对错都算）+ 不在目标词确认关里。
+     * 确认关是"这一题还没答完"的最后一段：那一关考的就是目标词的意思，
+     * 这会儿放行搜索等于直接给答案，所以必须一起挡住。
+     * 整组做完（finished）后没有题目可泄，直接放行。
+     */
+    canSearch() {
+      if (this.finished) return true
+      return !!this.answered && !this.confirming
+    }
+  },
   async onLoad(opt) {
     try {
       this.bookId = wordbook.currentBookId()
@@ -359,6 +386,8 @@ export default {
   onShow() {
     // 从设置页改完配色回来要生效（页面是 navigateTo 打开的，返回时走 onShow）
     try { this.barsSync = barsSyncColors() } catch (e) { this.barsSync = true }
+    // 从查词结果点进词条页、再返回：把搜索面板收起来，别让它杵在题目上面
+    if (this.$refs.search) this.$refs.search.collapse()
   },
 
   onHide() { this.clearAnswerTimer(); tts.stop() },
@@ -368,6 +397,8 @@ export default {
     this.alive = false
     this.clearAnswerTimer()
     tts.stop()
+    // 搜索里的 AI 兜底可能还挂着定时器 → 一起收干净
+    if (this.$refs.search) this.$refs.search.close()
   },
 
   methods: {
@@ -802,13 +833,26 @@ export default {
         pos: entry.pos || '',
         meaning: entry.meaning || '',
         phonetic: entry.phonetic || '',
-        srcLabel: dict.SRC_LABEL[entry.src] || '',
+        // 归属标签只认「我当前在背的那本书」：在 → 书名，不在 → 空（不渲染）
+        // 不能再用 dict.SRC_LABEL —— 那写的是"这次释义命中哪一层"，
+        // 背「福建专升本」的人会看到「核心词书」，看着像串台（用户反馈）
+        srcLabel: dict.ownerLabel(raw, this.bookId),
         found: !!entry.found,
         lemma: entry.lemma || '',
         inflected: entry.inflected || ''
       }
       // 未收录的单词仍走有道单词级发音（实测可用）
       tts.speakWord(dict.speakForm(raw))
+    },
+
+    // 弹窗里的单词 / 「查看词条」→ 单词详情页（顺手把弹窗关掉，回来别还挂着）
+    openPopWord() {
+      const w = String(this.pop.word || '').trim().toLowerCase()
+      if (!w) return
+      const url = '/pkgManage/pages/word-detail/word-detail?w=' + encodeURIComponent(w) +
+        '&book=' + encodeURIComponent(String(this.bookId || ''))
+      this.closePop()
+      uni.navigateTo({ url })
     },
 
     closePop() {
@@ -1502,6 +1546,10 @@ export default {
   border-radius: 999rpx;
   padding: 12rpx 48rpx;
 }
+
+/* 「再听一次」与「查看词条」并排：行距统一由这层给，两颗药丸自己不再带 margin-top */
+.pop-actions { margin-top: 36rpx; display: flex; align-items: center; justify-content: center; gap: 20rpx; }
+.pop-actions .pop-replay { margin-top: 0; padding: 12rpx 34rpx; }
 
 .empty { padding: 200rpx 60rpx; text-align: center; }
 

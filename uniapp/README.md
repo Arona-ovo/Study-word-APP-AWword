@@ -154,6 +154,13 @@
   （10 分钟 / 60 秒，原来是永久和 5 分钟），一次抖动不会让整场朗读一直降级
 - 逐词降级时**预连接下一个单元**（提前建好 `InnerAudioContext` 并灌 src），把单元之间的网络等待抹掉
 - **单词点读走在线词典音**（dict.youdao.com），发音更准，需联网；联网失败才用系统 TTS 兜底
+- **点读弹窗底下那行标签**用 `dict.ownerLabel(word, bookId)`，口径是「这个词属不属于**我正在背的那本书**」：  
+  在书里 → 返回书名（如「福建专升本」），不在 → 返回空串、调用方整行不渲染。  
+  **别改回 `dict.SRC_LABEL`** —— 那说的是"这次释义命中哪一层"（core / book / custom / common），  
+  正在背专升本的人点开一个词却看到「核心词书」，看着像串台。判定不看 `src`  
+  （同一个词可能既在核心表、也在当前词书里）：按 bookId 缓存一份小写词形集合  
+  （`wordbook.bookWords` 建，导入词 / 切词书后由 `dict.invalidateCache()` 一起清），  
+  屈折形态先经 `lemmaCandidates` 还原再比（improving → improve）
 - 项目根目录 `AndroidManifest.xml` 声明了 `TTS_SERVICE` 的 `<queries>`：Android 11+ 必须，  
   否则系统 TTS 绑不上引擎会自动降级（听感回到一词一顿）。云端打包才生效，标准基座真机运行不生效
 - `package="com.example.dancibei"` 是占位值，云端打包时以 HBuilderX 里配置的 Android 包名为准；  
@@ -535,6 +542,20 @@ m 高不代表不用复习（不复习它就会掉回去），due 到了也不�
 
 - `<float-navbar search />`：中间渲染 `<input>`（`confirm-type="search"`），右侧 `×` 清空，  
   向页面 emit `input` / `search` / `clear` / `focus` / `blur`；组件另暴露 `blurInput()` 供页面主动收起
+
+#### 练习页顶栏「随手查词」（components/word-search）
+
+翻译练习 / 刷单词的顶栏平时是一行标题，**点一下原地变搜索框**（参考不背单词）：
+
+- 组件 `components/word-search/word-search.vue` 包一层 `float-navbar`，  
+  非搜索态右侧画一颗放大镜（`searchable` 打开），点标题或放大镜都 emit `title-tap` → `open()`
+- **门禁不在组件里**，由页面用 `:locked` 传：练习页 `canSearch = finished || (answered && !confirming)`，  
+  刷单词页 `canSearch = finished || answered`。锁着时入口**置灰不隐藏**，点了 toast 说明原因
+  （没出结果就能搜 = 把答案摆在手边；练习页的确认关考的就是目标词的意思，更要挡住）
+- 检索顺序与首页同源：`search.localSearch`（本地，最多 8 条）→ `aiCache.findWord`（本机缓存，不花额度）  
+  → 停手 700ms 后 `explainWord()` 兜底；AI 结果**只展示、只进本机缓存**，收不收由用户在词条页决定
+- 结果卡就地铺在顶栏下方（不盖住题目、不接管返回键）；点结果 `navigateTo` 单词详情（`w` + `book`）
+- 页面 `onShow` 调 `collapse()`（从词条页返回别让面板杵在那儿）、`onUnload` 调 `close()`（清 AI 定时器）
 
 ##### 胶囊的「铺满 ↔ 收缩」
 

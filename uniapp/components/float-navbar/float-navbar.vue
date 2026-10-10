@@ -26,15 +26,28 @@
         :placeholder="placeholder"
         placeholder-style="color:#a8b0ab;font-size:26rpx"
         :confirm-type="isCommand ? 'send' : 'search'"
+        :focus="autofocus"
+        :hold-keyboard="keepKeyboard"
         @input="onInput"
         @confirm="onConfirm"
         @focus="onFocus"
         @blur="onBlur"
       />
-      <text v-else class="fnb-title">{{ title }}</text>
+      <!-- 标题栏本身可点：点了就切到搜索态（不是搜索态的页面才需要） -->
+      <text v-else class="fnb-title" :class="{ 'fnb-title-tappable': searchable }" @tap="onTitleTap">{{ title }}</text>
 
-      <view class="fnb-side" :class="{ 'fnb-side-flat': isFlat }" @tap="onClear">
+      <view
+        class="fnb-side"
+        :class="{ 'fnb-side-flat': isFlat, 'fnb-side-dim': dimSearchEntry }"
+        @tap="onRightTap"
+      >
         <text v-if="search && value" class="fnb-clear">×</text>
+        <!-- 非搜索态：右侧一颗放大镜，明示"这条顶栏点得开"。
+             还没答完题时置灰而不是藏起来 —— 藏了用户会以为这功能不存在（见项目约定 16）。 -->
+        <view v-else-if="!search && searchable" class="fnb-mag" hover-class="fnb-mag-press" hover-start-time="0" hover-stay-time="70">
+          <view class="mag-ring"></view>
+          <view class="mag-handle"></view>
+        </view>
       </view>
 
       <!-- 模式切换键：自动判定再准也有看走眼的时候，留一颗手动开关兜底。
@@ -83,7 +96,15 @@ export default {
     // 是否显示右侧的模式切换键（只有"搜索 + 指令"双模式的页面才需要）
     switchable: { type: Boolean, default: false },
     // 执行中：左槽换成转圈
-    busy: { type: Boolean, default: false }
+    busy: { type: Boolean, default: false },
+    // 标题栏能不能"点开搜索"（练习/刷单词这类页面用：平时是标题，点一下变搜索框）
+    searchable: { type: Boolean, default: false },
+    // 搜索暂时不可用（题还没答完）：放大镜与标题只置灰，点了发 title-tap 让页面解释原因
+    searchLocked: { type: Boolean, default: false },
+    // 切到搜索态时把输入框抢过来（弹键盘）
+    autofocus: { type: Boolean, default: false },
+    // 点页面别处不主动收键盘（搜索结果在下方的页面用，滚结果时键盘不闪）
+    keepKeyboard: { type: Boolean, default: false }
   },
   data() {
     return { barH: 0, focused: false }
@@ -111,6 +132,10 @@ export default {
     },
     modeText() {
       return this.isCommand ? 'AI' : t('搜')
+    },
+    // 搜索入口置灰：只在"非搜索态 + 可搜 + 当前还不能搜"时成立
+    dimSearchEntry() {
+      return !!(this.searchable && this.searchLocked && !this.search)
     }
   },
   created() {
@@ -188,6 +213,20 @@ export default {
     onLeftTap() {
       if (!this.search) { this.onBack(); return }
       this.$emit('search', this.value || '')
+    },
+    // 右槽：搜索态 = 清除；非搜索态 = 搜索入口（与点标题同义）
+    onRightTap() {
+      if (this.search) { this.onClear(); return }
+      this.onTitleTap()
+    },
+    /**
+     * 点标题 / 右侧放大镜 = 请求切到搜索模式。
+     * 组件只负责"用户想搜了"这个信号，能不能搜（比如题没答完）由页面判定 ——
+     * 它才知道现在的业务状态，组件不该猜。
+     */
+    onTitleTap() {
+      if (!this.searchable) return
+      this.$emit('title-tap')
     },
     onClear() {
       this.$emit('input', '')
@@ -385,6 +424,13 @@ export default {
   align-items: center;
   justify-content: center;
 }
+
+/* 搜索入口置灰：题还没答完时不能搜。**只降透明度、不隐藏** ——
+   藏起来用户会以为这功能不存在（项目约定 16），点了由页面说明为什么。 */
+.fnb-side-dim { opacity: 0.4; }
+
+/* 可点开的标题：按一下有点反馈，暗示"这里能按" */
+.fnb-title-tappable:active { opacity: 0.55; }
 
 /* 搜索模式的左右槽：展开态 76rpx，收起态 0（输入框随之铺满 / 收缩） */
 .fnb-search-mode .fnb-side {

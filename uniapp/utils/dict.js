@@ -4,7 +4,9 @@
 import { WORDS } from '../data/words.js';
 import { COMMON_RAW } from '../data/common-words.js';
 import { allByText } from '../data/lexicon.js';
+import { getBook } from '../data/wordbooks.js';
 import * as store from './store.js';
+import * as wordbook from './wordbook.js';
 import { lemmaCandidates, lemma } from './lemma.js';
 
 export const SRC_LABEL = {
@@ -133,9 +135,69 @@ export function speakForm(raw) {
   return r.found && r.lemma ? r.lemma : normalize(raw);
 }
 
+/* ---------- 点读弹窗底下那行「归属」标签 ----------
+   用户想看的其实是「这个词属不属于我正在背的那本书」，
+   而不是「这次词义是从哪一层翻出来的」。
+   SRC_LABEL 说的是后者：正在背「福建专升本」的人点开一个词，
+   底下却写着「核心词书」，看着就串台了（用户实测反馈）。
+   所以另开一个口径：
+     · 词在当前的词书里 → 返回那本书的名字（如「福建专升本」）
+     · 不在            → 返回空串，调用方整行不渲染（他就是要「没在这本书就不显示」）
+   判定不看 src：同一个词可能既在核心词表里、也在当前词书里，
+   这时标签该跟着"我在背什么"走，而不是跟着"命中哪一层"走。 */
+
+const BOOK_SETS = {};   // bookId -> { 小写词形: true }，避免每次点击都把整本书扫一遍
+
+function bookSetOf(bid) {
+  const key = String(bid || '');
+  if (!BOOK_SETS[key]) {
+    const set = {};
+    try {
+      wordbook.bookWords(key).forEach(function (w) {
+        const t = String((w && w.w) || '').toLowerCase();
+        if (t) set[t] = true;
+      });
+    } catch (e) { /* 词书读不出来 → 空集合，等于"哪本都没在" */ }
+    BOOK_SETS[key] = set;
+  }
+  return BOOK_SETS[key];
+}
+
+// 命中判定与 word-mark.inBook 同一口径：先比原形，再比词形还原（improved → improve）
+function inSet(key, set) {
+  if (set[key]) return true;
+  let cands = [];
+  try { cands = lemmaCandidates(key) || []; } catch (e) { return false; }
+  for (let i = 0; i < cands.length; i++) {
+    if (set[String(cands[i] || '').toLowerCase()]) return true;
+  }
+  return false;
+}
+
+/**
+ * 点读弹窗的归属标签。
+ * @param raw    点到的词形（可带大小写 / 屈折）
+ * @param bookId 要判定的词书，不传则用当前词书
+ * @returns 词书名字；不在书里返回 ''
+ */
+export function ownerLabel(raw, bookId) {
+  try {
+    const key = normalize(raw);
+    if (!key) return '';
+    const bid = bookId || wordbook.currentBookId();
+    if (!bid) return '';
+    if (!inSet(key, bookSetOf(bid))) return '';
+    const book = getBook(bid);
+    return (book && book.name) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
 // 导入新词 / 切换词书后清空缓存
 export function invalidateCache() {
   for (const k in cache) delete cache[k];
+  for (const k in BOOK_SETS) delete BOOK_SETS[k];
 }
 
 export { lemma };

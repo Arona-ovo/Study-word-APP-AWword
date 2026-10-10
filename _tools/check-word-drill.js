@@ -377,7 +377,8 @@ function wipe() {
     targetWordSet: wordMark.targetWordSet,
     markTokens: wordMark.markTokens,
     sfx: { play: () => {} },
-    FloatNavbar: {}
+    FloatNavbar: {},
+    WordSearch: {}
   }, 'word-drill.vue').default;
   is(!!drillPage && typeof drillPage.data === 'function', '页面脚本可加载（导出 default）');
   const newVM = () => Object.assign({}, drillPage.data(), drillPage.methods);
@@ -687,7 +688,8 @@ function wipe() {
       targetWordSet: wordMark.targetWordSet,
       markTokens: wordMark.markTokens,
       sfx: { play: () => {} },
-      FloatNavbar: {}
+      FloatNavbar: {},
+    WordSearch: {}
     }, 'word-drill.vue').default;
 
     const deck2 = ws.buildDeck(3, BID, 'daily');
