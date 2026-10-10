@@ -13,7 +13,6 @@
 ![offline-first](https://img.shields.io/badge/offline--first-%E2%9C%93-0F6E56?logo=airplane&logoColor=white)
 ![words](https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-640%20%E8%AF%8D%20%C2%B7%20626%20%E4%BE%8B%E5%8F%A5%20%C2%B7%20986%20%E5%B8%B8%E7%94%A8%E8%AF%8D-185FA5)
 ![ai](https://img.shields.io/badge/AI-OpenAI%20%E5%85%BC%E5%AE%B9-412991?logo=openai&logoColor=white)
-
 ![version](https://img.shields.io/badge/version-1.1%20Beta-orange)
 
 **不联网、不注册、不配 AI，也能完整背完一本书。**
