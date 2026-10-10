@@ -90,6 +90,38 @@ assert(!!cardImg && /chooseImage/.test(cardImg[0]), '走系统选图');
 assert(!!cardImg && /op: 'image\.set'/.test(cardImg[0]), '选完图走 image.set 指令（进历史栈可撤销）');
 assert(!!cardImg && /pageCommand\.commit/.test(cardImg[0]), '落盘走 pageCommand.commit（与指令链路同源）');
 
+console.log('== 4. 空输入：keyword 跟着清（× 收得掉），但不动模式/焦点 ==');
+// 顶栏的清除键是 v-if="search && value"，value 就是 keyword。
+// 空值分支以前只清结果不更新 keyword → 用户把字全删了 × 还杵在那儿，点了还会收键盘。
+// 但绝不能顺手把 modeLocked / inputFocused 也清了：那正是语音输入那个 bug 的来源
+// （输入法在语音中间态先发一个空 value 的 input 事件，清了就收键盘 + 解锁成搜索）。
+// 先看**代码**再看注释：这段分支里写了「不碰 modeLocked / inputFocused」的说明，
+// 注释里出现这两个词不代表代码碰了它们 —— 扫契约前先把 // 与 /* */ 注释剥掉。
+const emptyRaw = (onInput[0].match(/if \(!kw\) \{[\s\S]*?\n      \}/) || [''])[0];
+const emptyBr = emptyRaw.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+assert(!!emptyBr && /this\.keyword = ''/.test(emptyBr), '空值分支同步清空 keyword');
+assert(!/modeLocked/.test(emptyBr), '空值分支不动 modeLocked');
+assert(!/inputFocused/.test(emptyBr), '空值分支不动 inputFocused');
+assert(!/blurInput/.test(emptyBr), '空值分支不调 blurInput（不收键盘）');
+assert(!/clearSearch/.test(emptyBr), '空值分支不调 clearSearch');
+
+console.log('== 5. 指令应用：用发给模型的那份 doc（不是 await 之后新读的） ==');
+// plan 是模型看着 base 的 docDigest 做出来的（「删掉第 2 张卡片」里的 2 指的是 base 里的第 2 张）。
+// await 期间首页可能被 home:refresh 换过 doc，这时重新读一份再应用 → 序号对到别的卡上，删错卡片。
+const rc = home.match(/async runCommand\(text\) \{[\s\S]*?\n    \},/);
+assert(!!rc, '定位到 runCommand');
+assert(!!rc && /const base = this\.doc \|\| pageDoc\.get\(\)/.test(rc[0]), '先快照 base');
+assert(!!rc && /await pageAgent\.plan\(input, base/.test(rc[0]), 'plan 用 base');
+assert(!!rc && /applyCommands\(base, r\.commands/.test(rc[0]), 'applyCommands 也用 base（模型看到的那份）');
+assert(!!rc && !/applyCommands\(this\.doc \|\| pageDoc\.get\(\)/.test(rc[0]), '不再在 await 之后重新读 doc');
+// 上一条没跑完时再回车：不能静默 return（用户会以为"按了没反应"），
+// 也不能禁用输入框（:disabled 会抢焦点收键盘）—— 给一句提示。
+assert(!!rc && /if \(this\.cmdRunning\) \{/.test(rc[0]), '执行中再回车有独立分支');
+assert(!!rc && /showToast/.test(rc[0]), '执行中给提示（不是静默吞掉）');
+// 只看模板：脚本注释里提到 :disabled 不算数（这条规则针对的是模板里的 input 元素）
+const tplOnly = home.slice(0, home.indexOf('\n</template>'));
+assert(!/:disabled/.test(tplOnly), '首页模板里没有 :disabled（输入框禁用会抢焦点收键盘）');
+
 console.log('');
 console.log(fail === 0 ? 'ALL PASS (check-home-cmd)' : fail + ' FAILED');
 process.exit(fail === 0 ? 0 : 1)

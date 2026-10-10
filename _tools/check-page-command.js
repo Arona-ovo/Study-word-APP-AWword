@@ -285,6 +285,50 @@ function eq(a, b, label) {
   assert(r.ok && r.doc.cards.every(c => c.style && c.style.radius === 30), 'all 定位让每张卡片都改到');
   r = pageCommand.applyCommands(doc, [{ op: 'style.text', args: { target: { all: true }, size: 30 } }], {});
   assert(r.ok && r.doc.cards.every(c => c.style && c.style.fontSize === 30), 'style.text all 定位同样生效');
+
+  // ---- 结构类 op 的 all：用户说「去掉主页所有卡片」（真机截图 2026-10-10 19:17）----
+  // 以前只有 style.* 认 all：card.remove / card.hide 拿到 {all:true} 会一路走到
+  // pageDoc.indexOfRef 结尾的 return -1，然后被误报成「没找到这张卡片」。
+  // 根因是两个模块口径不一致 —— normalizeRef 支持 all，indexOfRef 不支持。
+  const allDoc = pageCommand.applyCommands(pageDoc.defaultDoc(),
+    [{ op: 'card.add', args: { type: 'note', title: 'A', text: 'x' } }], {}).doc;
+  eq(pageDoc.indicesOfRef(allDoc, { all: true }).length, allDoc.cards.length, 'indicesOfRef({all:true}) 命中全部卡片');
+  eq(pageDoc.indicesOfRef(allDoc, { id: 'chart' }).length, 1, 'indicesOfRef 单目标只回一个下标');
+  eq(pageDoc.indicesOfRef(allDoc, { title: '根本没有这张卡' }).length, 0, 'indicesOfRef 找不到回空数组');
+  // indexOfRef 保持单目标口径不动（move / text.set / image.set / card.design 还在用它）
+  eq(pageDoc.indexOfRef(allDoc, { all: true }), -1, 'indexOfRef 对 all 仍然回 -1（单目标口径不变）');
+
+  r = pageCommand.applyCommands(allDoc, [{ op: 'card.remove', args: { target: '所有' } }], {});
+  assert(r.ok, 'card.remove 接受字符串 "所有"');
+  eq(r.ok ? r.doc.cards.length : -1, 0, 'remove all 把首页清空');
+  r = pageCommand.applyCommands(allDoc, [{ op: 'card.remove', args: { target: '全部卡片' } }], {});
+  assert(r.ok, 'card.remove 接受 "全部卡片"');
+  r = pageCommand.applyCommands(allDoc, [{ op: 'card.hide', args: { target: '全部' } }], {});
+  assert(r.ok, 'card.hide 接受字符串 "全部"');
+  assert(r.ok && r.doc.cards.every(c => c.visible === false), 'hide all 把每张卡都收进收纳区');
+  r = pageCommand.applyCommands(r.doc, [{ op: 'card.show', args: { target: { all: true } } }], {});
+  assert(r.ok && r.doc.cards.every(c => c.visible !== false), 'show all 把收纳的卡都放出来');
+  // 全删后再来一次：幂等不炸，但也没有"删掉 0 张"的假成功
+  r = pageCommand.applyCommands(Object.assign({}, pageDoc.defaultDoc(), { cards: [] }),
+    [{ op: 'card.remove', args: { target: '所有' } }], {});
+  assert(!r.ok && /已经没有卡片/.test(r.reason || ''), '空首页删「所有」提示「已经没有卡片」，不是「没找到这张卡片」');
+  assert(pageCommand.applyCommands(allDoc, [{ op: 'card.move', args: { target: '所有', to: 'top' } }], {}).ok === false,
+    'card.move 仍不接受 all（单目标指令，乱给就失败）');
+  // 清空是破坏性操作，**撤销是它唯一的安全网** —— 必须真的能一张不少地收回来
+  pageCommand.clearHistory();
+  const keepDoc = pageCommand.commit(pageDoc.defaultDoc(), '清空前');
+  const wiped = pageCommand.applyCommands(keepDoc, [{ op: 'card.remove', args: { target: '所有' } }], {}).doc;
+  pageCommand.commit(wiped, '删除全部卡片');
+  eq(wiped.cards.length, 0, '清空后首页 0 张卡');
+  eq(pageCommand.canUndo(), true, '清空后可撤销');
+  const back = pageCommand.undo();
+  eq(back.cards.length, keepDoc.cards.length, '撤销把卡片一张不少地收回来');
+  assert(back.cards.every(c => c.visible !== false), '撤销回来的卡片都是显示状态');
+  const manual = schema.promptManual();
+  assert(/card\.hide \/ card\.show \/ card\.remove 都支持/.test(manual),
+    '手册告诉模型结构类指令也能用 all（否则模型会自己瞎挑一张卡）');
+  assert(!/只有样式指令/.test(manual), '手册里「只有样式指令能用 all」的旧说法已删掉');
+
   // text.rewrite all：只为有文案的 AI 卡发效果，内置卡不动
   const rwDoc = (function () {
     let d = pageDoc.defaultDoc();

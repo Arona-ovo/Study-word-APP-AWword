@@ -1,7 +1,13 @@
 // check-intent-route.js - 指令意图路由：子集合法性、瘦身幅度、安全回退
+//                        + 意图关键词表（界面用语 / 英文大小写 / 两张表同步）
 
-const pa = await import('file:///C:/Users/33156/WorkBuddy/2026-10-06-17-27-44/uniapp/services/page-agent.js');
-const schema = await import('file:///C:/Users/33156/WorkBuddy/2026-10-06-17-27-44/uniapp/utils/page-schema.js');
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const P = (rel) => 'file:///' + path.resolve(HERE, '..', 'uniapp', rel).replace(/\\/g, '/');
+const pa = await import(P('services/page-agent.js'));
+const schema = await import(P('utils/page-schema.js'));
+const intent = await import(P('utils/intent.js'));
 
 let pass = 0, fail = 0;
 function ok(cond, name, extra) {
@@ -60,6 +66,43 @@ const r4 = pa.routeOps('给我做一张倒计时卡片');
 ok(r4.ops && r4.ops.indexOf('card.design') >= 0, 'ops 含 card.design');
 const manual4 = schema.promptManual(r4.ops);
 ok(manual4.indexOf(specMarker.trim()) >= 0, '手册含设计说明书');
+
+// ---------- 5. 意图关键词表：界面用语要收得下 ----------
+// 「收纳 / 收起来 / 藏起来」是**首页自己界面上的说法**（收纳按钮、收纳区），
+// 用户会照着说。以前 VERB_DEL 里只有 删除/隐藏，
+// "卡片全收起来" 只命中「页面域」(+2)，够不到 4 分阈值 → 被判成查词。
+console.log('== 5. 意图关键词表 ==');
+const M = (s) => intent.detect(s).mode;
+const cmdCases = [
+  '卡片全收起来', '把倒计时卡片收纳起来', '把打卡走势藏起来',
+  '去掉主页所有卡片', '把所有卡片都删掉', '隐藏打卡走势'
+];
+cmdCases.forEach(s => ok(M(s) === 'command', '「' + s + '」→ 指令', M(s)));
+// 别把查词误判成指令：这类误判会真的去改首页，代价远大于"该改没改成"
+ok(M('apple') === 'search', '「apple」→ 查词');
+ok(M('Apple') === 'search', '「Apple」→ 查词');
+ok(M('abandon 是什么意思') === 'search', '「…是什么意思」→ 查词');
+ok(M('卡片') === 'search', '光说「卡片」→ 查词（不够 4 分）');
+
+// 英文指令：句首大写也要认。
+// VERB_* 里混着 'remove' / 'delete' / 'hide' / 'add'，而 hasAny 是大小写敏感的
+// indexOf —— 以前 lower 是算出来却没用的死变量，"Hide the chart card" 只能拿 0 分。
+['hide the chart card', 'Hide the chart card', 'Remove all cards', 'Add a countdown card', 'Delete the note']
+  .forEach(s => ok(M(s) === 'command', '英文「' + s + '」→ 指令（大小写不敏感）', M(s)));
+
+// ---------- 6. intent 与 ROUTE_RULES 关键词同步 ----------
+// 两张表不同步 = "判成指令，但手册里没给它该用的 op"，
+// 「去掉主页所有卡片」那个 bug 正是这么来的（手册说只有 style.* 能用 all，
+// 而删除路由出的 op 组里根本没有 style.*）。
+console.log('== 6. 两张关键词表同步 ==');
+['收纳', '收起来', '藏起来', '去掉', '隐藏', '删除', '移除'].forEach(k => {
+  const s = '把这张卡片' + k;
+  const r = pa.routeOps(s);
+  ok(M(s) === 'command', '「' + k + '」intent 判为指令', M(s));
+  ok(r.ops && r.ops.indexOf('card.hide') >= 0, '「' + k + '」routeOps 出 card.hide', r.ops);
+});
+// 英文指令拿不到中文关键词 → 回退全量，绝不因为猜错而"这个改不了"
+ok(pa.routeOps('Remove all cards').ops === null, '英文指令回退全量（不猜子集）');
 
 console.log('');
 console.log('== 汇总 ==');

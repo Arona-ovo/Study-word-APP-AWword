@@ -28,7 +28,12 @@ const IMPERATIVE = [
 // ---------- 变更动词 ----------
 const VERB_CHANGE = ['改成', '换成', '改为', '换为', '变成', '变为', '设置为', '设置成', '调成', '调到', '调整成', '调整为', '调高', '调低', '调大', '调小'];
 const VERB_ADD = ['添加', '新增', '加上', '加一个', '加个', '加一张', '加一张卡', 'create', 'add'];
-const VERB_DEL = ['删除', '移除', '去掉', '去掉那', '隐藏', '隐藏掉', '删掉', 'remove', 'delete', 'hide'];
+// ⚠️ 收纳/收起来/藏起来 是**界面自己的说法**（首页「收纳」按钮、收纳区），
+// 用户会照着说。以前只有 删除/隐藏 在表里，"卡片全收起来"只能命中「页面域」(+2)，
+// 够不到 4 分阈值 → 被判成查词。'不要' 也补上（page-agent 的路由表一直认它，
+// 两边关键词表不一致正是今天「去掉所有卡片」那个 bug 的同类成因）。
+const VERB_DEL = ['删除', '移除', '去掉', '去掉那', '隐藏', '隐藏掉', '删掉', '删了', '删去',
+  '收纳', '收起来', '收掉', '藏起来', '不要', 'remove', 'delete', 'hide'];
 const VERB_MOVE = ['移动', '挪到', '放到', '排到', '调到最', '置顶', '移到', '排序', '整理一下'];
 const VERB_RESET = ['重置', '恢复默认', '还原', '撤销上一步', '撤回到'];
 // 场景切换："进入沉浸专注模式" 这类没有具体变更动词，但明显是在下指令
@@ -91,17 +96,20 @@ export function detect(raw) {
   let score = 0;
   const hits = [];
 
-  if (hasAny(text, IMPERATIVE)) { score += 3; hits.push('使役'); }
-  if (hasAny(text, VERB_CHANGE)) { score += 4; hits.push('改值'); }
-  if (hasAny(text, VERB_ADD)) { score += 4; hits.push('新增'); }
-  if (hasAny(text, VERB_DEL)) { score += 4; hits.push('删除'); }
-  if (hasAny(text, VERB_MOVE)) { score += 4; hits.push('排序'); }
-  if (hasAny(text, VERB_RESET)) { score += 4; hits.push('重置'); }
-  if (hasAny(text, VERB_SCENE)) { score += 4; hits.push('场景'); }
-  if (hasAny(text, DOMAIN_WORDS)) { score += 2; hits.push('页面域'); }
+  // ⚠️ 一律用 lower 而不是 text：VERB_* 里混着 'remove' / 'delete' / 'hide' / 'add' 这些
+  // 英文关键词，而 hasAny 是**大小写敏感**的 indexOf。以前 lower 是算出来却没用的死变量，
+  // 结果 "Hide the chart card"（句首大写）只能拿 0 分被判成查词，全小写的 "hide…" 才认。
+  if (hasAny(lower, IMPERATIVE)) { score += 3; hits.push('使役'); }
+  if (hasAny(lower, VERB_CHANGE)) { score += 4; hits.push('改值'); }
+  if (hasAny(lower, VERB_ADD)) { score += 4; hits.push('新增'); }
+  if (hasAny(lower, VERB_DEL)) { score += 4; hits.push('删除'); }
+  if (hasAny(lower, VERB_MOVE)) { score += 4; hits.push('排序'); }
+  if (hasAny(lower, VERB_RESET)) { score += 4; hits.push('重置'); }
+  if (hasAny(lower, VERB_SCENE)) { score += 4; hits.push('场景'); }
+  if (hasAny(lower, DOMAIN_WORDS)) { score += 2; hits.push('页面域'); }
 
   // 2) 搜索信号（负分）
-  if (hasAny(text, LOOKUP_HINT)) { score -= 5; hits.push('查词'); }
+  if (hasAny(lower, LOOKUP_HINT)) { score -= 5; hits.push('查词'); }
   // 单个英文单词（含连字符/撇号）：几乎一定是查词
   if (ASCII_WORD.test(text) && text.length <= 24 && !/\s/.test(text)) {
     score -= 6; hits.push('单词');

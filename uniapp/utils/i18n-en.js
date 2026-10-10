@@ -285,6 +285,7 @@ export default {
   '当成指令试试': 'Try as a command',
   '这个我还改不了': 'I can’t change that yet',
   '指令没能应用': 'The command wasn’t applied',
+  '上一条还没执行完': 'Still working on the last command',
   '执行出错，已保持原样': 'Something went wrong; nothing changed',
   '改写文案': 'Rewrite text',
   '已撤销：': 'Undone: ',

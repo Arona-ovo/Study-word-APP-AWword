@@ -1167,7 +1167,13 @@ export default {
     async runCommand(text) {
       const input = String(text || '').trim()
       if (!input) return
-      if (this.cmdRunning) return
+      // 上一条还没跑完就再回车：以前是静默 return，用户看到的是"按了没反应、
+      // 也不知道为什么"。给一句话说明比什么都不说强。
+      // 这里**不能**禁用输入框来防重复提交 —— :disabled 会抢走焦点、把软键盘收掉。
+      if (this.cmdRunning) {
+        try { uni.showToast({ title: t('上一条还没执行完'), icon: 'none' }) } catch (e) {}
+        return
+      }
       this.cmdRunning = true
       this.cmdState = 'thinking'
       // 走指令就把搜索结果收起来，别让两块内容同时占着屏幕
@@ -1190,7 +1196,12 @@ export default {
           return
         }
         this.cmdState = 'running'
-        const res = pageCommand.applyCommands(this.doc || pageDoc.get(), r.commands, { live: this.live })
+        // ⚠️ 必须拿 **base**（发给模型的那一份）来应用，不能在这里重新读 this.doc。
+        // plan 是模型看着 base 的 docDigest 做出来的（「删掉第 2 张卡片」里的 2
+        // 指的就是 base 里的第 2 张）。await 期间首页可能被 home:refresh 之类的
+        // 事件换过 doc，这时重新读一份再应用 → 序号对到别的卡上，删错卡片。
+        // 所见即所得：模型看到的那份，就是被改的那份。
+        const res = pageCommand.applyCommands(base, r.commands, { live: this.live })
         if (!res.ok) {
           // 原子回退：applyCommands 失败时返回的仍是原 doc，页面一个字节都没变。
           // res.reason 已经是人话（内部操作名只留在 res.rawReason），这里直接显示；
@@ -1425,6 +1436,11 @@ export default {
         this.cached = null
         this.aiResult = null
         this.aiLoading = false
+        // keyword 要跟着清掉：顶栏的清除键是 `v-if="search && value"` 挂在 keyword 上的，
+        // 不更新的话用户把字全删了、× 还杵在那儿，点了还会收键盘。
+        // 只清 keyword，**不**碰 modeLocked、不碰 inputFocused ——
+        // 那两样一动，语音输入的中间态就会收键盘 + 把锁定的指令模式重置成搜索。
+        this.keyword = ''
         return
       }
       if (JUNK_TEXT.test(kw)) { this.clearSearch(); return }

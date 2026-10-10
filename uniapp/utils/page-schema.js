@@ -346,7 +346,11 @@ function refFromToken(s) {
   const t = String(s).trim();
   if (/^(last|末尾|最后|最后一张|最后一个)$/i.test(t)) return { ok: true, ref: { last: true } };
   if (/^(top|第一张|第一个|顶部|置顶)$/i.test(t)) return { ok: true, ref: { index: 0 } };
-  if (/^(all|全部|所有|所有卡片|每一张|每张)$/i.test(t)) return { ok: true, ref: { all: true } };
+  // 「所有/全部」的各种口语说法都收下 —— 用户说「去掉主页所有卡片」时模型很容易
+  // 原样返回这个词，收不到就会退化成"标题匹配"→ 找不到 → 报「没找到这张卡片」。
+  if (/^(all|every|全部|所有|全都|统统|全部卡片|所有卡片|所有的卡片|每一张|每张|每一张卡片|每一张卡)$/i.test(t)) {
+    return { ok: true, ref: { all: true } };
+  }
   const m = /^第\s*([0-9一二两三四五六七八九十]+)\s*[张个条块]?[卡片]?$/.exec(t);
   if (m) {
     const n = cnNum(m[1]);
@@ -687,7 +691,9 @@ export function promptManual(ops) {
       has('card.restore') || has('card.design') || has('text.set') || has('style.card') || has('image.set')) {
     lines.push('卡片定位 target：{id|index|type|last}，优先级 id > index > type > last；也可以直接给字符串（内置卡 id、"last"、"第2张"、卡片标题）。');
     lines.push('内置卡片 id（可见的那几张）：' + BUILTIN_TYPES.join(', ') + '。');
-    lines.push('AI 卡片的 id 见下方【当前首页】清单（#0 #1… 后面的那个 id）；只有样式指令 style.card / style.text 可以用 target:"all" 表示所有卡片。');
+    lines.push('AI 卡片的 id 见下方【当前首页】清单（#0 #1… 后面的那个 id）。');
+    lines.push('target 可以写 "all"（= 全部卡片，含已收纳的）：style.card / style.text / card.hide / card.show / card.remove 都支持 —— 用户说「去掉所有卡片」「全部隐藏」「都显示出来」时必须用 all，不要自己挑一张。');
+    lines.push('card.move / text.set / image.set / card.design 是单目标指令，不支持 all，必须给具体定位。');
     lines.push('');
   }
   if (has('card.add')) {

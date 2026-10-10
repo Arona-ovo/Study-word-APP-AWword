@@ -145,6 +145,25 @@ export function indexOfRef(doc, ref) {
   return -1;
 }
 
+/**
+ * ref → 命中卡片的下标**数组**（批量 op 用）。
+ *
+ * 为什么需要它：indexOfRef 是单目标口径，`{all:true}` 走到最后只会 return -1。
+ * 而 normalizeRef 是**支持** all 的（"所有/全部/all" 都解析成 {all:true}），
+ * 两个模块口径不一致 → 「去掉主页所有卡片」在 page-command 里被判「没找到这张卡片」
+ * （真机截图 2026-10-10 19:17）。这里是补上 all 的落点，而不是把 all 从 normalizeRef 拿掉。
+ *
+ * all = doc.cards 里的**全部**卡片（含已收纳的）。对 hide / show 这类幂等 op 没差别；
+ * 对 remove 就是真的全删 —— 有 20 步 undo 和 card.reset 兜底。
+ */
+export function indicesOfRef(doc, ref) {
+  const cards = (doc && doc.cards) || [];
+  const r = ref || {};
+  if (r.all) return cards.map((c, i) => i);
+  const i = indexOfRef(doc, r);
+  return i >= 0 ? [i] : [];
+}
+
 // ---------- 卡片编辑（内置编辑器 / 指令共用） ----------
 function cloneCards(doc) {
   return (doc.cards || []).map(c => Object.assign({}, c));

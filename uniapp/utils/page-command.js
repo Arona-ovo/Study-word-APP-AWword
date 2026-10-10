@@ -243,10 +243,19 @@ export const COMMANDS = {
   },
 
   'card.remove': (doc, args) => {
-    const i = pageDoc.indexOfRef(doc, args.target);
-    if (i < 0) return fail('没找到这张卡片', '首页上没找到这张卡片 —— 可以说「第 2 张」「最后一张」，或者直接写卡片标题');
+    // 批量定位：target 是 "所有/全部/all" 时拿到的是全部下标（见 pageDoc.indicesOfRef）
+    const idx = pageDoc.indicesOfRef(doc, args.target);
+    if (!idx.length) {
+      // 「去掉所有卡片」而首页本来就是空的：这不是"找不到某张卡"，别把用户带偏
+      if (args.target && args.target.all) return fail('首页上没有卡片', '首页上已经没有卡片了');
+      return fail('没找到这张卡片', '首页上没找到这张卡片 —— 可以说「第 2 张」「最后一张」，或者直接写卡片标题');
+    }
     const cards = cloneCards(doc);
-    const gone = cards.splice(i, 1)[0];
+    if (idx.length > 1) {
+      const keep = cards.filter((c, i) => idx.indexOf(i) < 0);
+      return { doc: withCards(doc, keep), note: '删除全部 ' + idx.length + ' 张卡片' };
+    }
+    const gone = cards.splice(idx[0], 1)[0];
     return { doc: withCards(doc, cards), note: '删除卡片「' + labelOf(gone) + '」' };
   },
 
@@ -265,21 +274,37 @@ export const COMMANDS = {
 
   // hide / show 做成幂等：重复执行不算失败，否则场景宏里"隐藏一张本来就没上的卡"会整批挂掉
   'card.hide': (doc, args) => {
-    const i = pageDoc.indexOfRef(doc, args.target);
-    if (i < 0) return fail('没找到这张卡片', '首页上没找到这张卡片 —— 可以说「第 2 张」「最后一张」，或者直接写卡片标题');
+    const idx = pageDoc.indicesOfRef(doc, args.target);
+    if (!idx.length) return fail('没找到这张卡片', '首页上没找到这张卡片 —— 可以说「第 2 张」「最后一张」，或者直接写卡片标题');
     const cards = cloneCards(doc);
-    if (!cards[i].visible) return { doc: doc, note: '', silent: true };
-    cards[i] = Object.assign({}, cards[i], { visible: false });
-    return { doc: withCards(doc, cards), note: '隐藏卡片「' + labelOf(cards[i]) + '」' };
+    let n = 0;
+    idx.forEach(i => {
+      if (cards[i].visible === false) return;    // 本来就收着 → 幂等跳过
+      cards[i] = Object.assign({}, cards[i], { visible: false });
+      n++;
+    });
+    if (!n) return { doc: doc, note: '', silent: true };
+    return {
+      doc: withCards(doc, cards),
+      note: idx.length === 1 ? '隐藏卡片「' + labelOf(cards[idx[0]]) + '」' : '收纳了 ' + n + ' 张卡片'
+    };
   },
 
   'card.show': (doc, args) => {
-    const i = pageDoc.indexOfRef(doc, args.target);
-    if (i < 0) return fail('没找到这张卡片', '首页上没找到这张卡片 —— 可以说「第 2 张」「最后一张」，或者直接写卡片标题');
+    const idx = pageDoc.indicesOfRef(doc, args.target);
+    if (!idx.length) return fail('没找到这张卡片', '首页上没找到这张卡片 —— 可以说「第 2 张」「最后一张」，或者直接写卡片标题');
     const cards = cloneCards(doc);
-    if (cards[i].visible) return { doc: doc, note: '', silent: true };
-    cards[i] = Object.assign({}, cards[i], { visible: true });
-    return { doc: withCards(doc, cards), note: '显示卡片「' + labelOf(cards[i]) + '」' };
+    let n = 0;
+    idx.forEach(i => {
+      if (cards[i].visible !== false) return;    // 本来就显示着 → 幂等跳过
+      cards[i] = Object.assign({}, cards[i], { visible: true });
+      n++;
+    });
+    if (!n) return { doc: doc, note: '', silent: true };
+    return {
+      doc: withCards(doc, cards),
+      note: idx.length === 1 ? '显示卡片「' + labelOf(cards[idx[0]]) + '」' : '显示了 ' + n + ' 张卡片'
+    };
   },
 
   'card.restore': (doc, args) => {
