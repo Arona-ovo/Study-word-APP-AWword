@@ -24,6 +24,8 @@ _big.tmp
 _probe.tmp
 _probe.txt
 processed_image_*.png
+# 校验脚本的手工跑数目录（日志、探针脚本、临时解出来的文件）
+_scratch/
 
 # ---- WorkBuddy 工作区数据（非工程文件） ----
 .workbuddy/

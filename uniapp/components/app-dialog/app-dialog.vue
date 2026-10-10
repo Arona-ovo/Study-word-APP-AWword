@@ -12,6 +12,7 @@
         :focus="show"
         :placeholder="placeholder"
         :maxlength="maxlength"
+        :password="password"
         @input="onInput"
         @confirm="onConfirm"
       />
@@ -88,6 +89,7 @@ import { t } from '../../utils/i18n.js';
 //     :confirm-text="dlg.confirmText" :cancel-text="dlg.cancelText"
 //     :danger="dlg.danger" :items="dlg.items"
 //     :value="dlg.value" :placeholder="dlg.placeholder" :error="dlg.error"
+//     :btn-mode="dlg.btnMode" :password="dlg.password" :maxlength="dlg.maxlength"
 //     @confirm="onConfirm" @cancel="onCancel" @input="onInput" />
 //
 // confirm 事件载荷随 mode 变化：sheet → 下标(number)，input → 文本(string)，confirm → true
@@ -111,6 +113,8 @@ export default {
     value: { type: String, default: '' },
     placeholder: { type: String, default: '' },
     error: { type: String, default: '' },
+    // 输入模式：掩码输入（备份密码这类）。默认明文 —— 大多数输入框输的是名字。
+    password: { type: Boolean, default: false },
     maxlength: { type: Number, default: 24 },
     // 点遮罩是否关闭（确认框默认不关，避免误触；菜单默认关）
     maskClosable: { type: Boolean, default: false },

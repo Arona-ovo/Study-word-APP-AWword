@@ -1149,14 +1149,14 @@ export default {
   border-radius: 999rpx;
 }
 
+/* 选中态用实心主色 —— 和刷单词页那排胶囊保持一致。
+   只有"白底 + 蓝字"时一排胶囊里区分度太弱，看不出哪个被选了。 */
 .mode-item.active {
-  background: #ffffff;
-  background: var(--solid, #ffffff);
-  color: #1d4fd8;
-  color: var(--brand-strong, #1d4fd8);
-  font-weight: 700;
-  box-shadow: 0 2rpx 8rpx rgba(23, 32, 26, 0.08);
-  box-shadow: 0 2rpx 8rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.08);
+  background: #2e6bff;
+  background: var(--brand, #2e6bff);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2rpx 8rpx rgba(46, 107, 255, 0.28);
   transition: background 200ms ease, color 200ms ease;
 }
 

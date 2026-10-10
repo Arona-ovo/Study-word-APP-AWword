@@ -28,12 +28,25 @@
         </view>
       </view>
 
-      <!-- 作答方式：选义 / 拼写 / 自评 -->
+      <!-- 作答方式：选义 / 拼写 / 自评
+           光有三个胶囊用户根本看不出点了会怎样（它只决定第一关的题型），
+           所以下面紧跟一条"本轮三关"预览：点哪一档，这一行当场就变。
+           同时把当前所处的那一关标出来，这条就兼做了进度指示。 -->
       <view class="wd-switch" :class="{ locked: answered }">
         <view class="wd-sw" :class="{ active: mode === 'choice' }" data-m="choice" @tap="switchMode">{{ $t('选义') }}</view>
         <view class="wd-sw" :class="{ active: mode === 'spell' }" data-m="spell" @tap="switchMode">{{ $t('拼写') }}</view>
         <view class="wd-sw" :class="{ active: mode === 'self' }" data-m="self" @tap="switchMode">{{ $t('自评') }}</view>
       </view>
+      <view class="wd-plan">
+        <text class="wd-plan-k">{{ $t('本轮三关') }}</text>
+        <view class="wd-plan-list">
+          <block v-for="(p, i) in modePlan" :key="i">
+            <text v-if="i > 0" class="wd-plan-sep">›</text>
+            <text class="wd-plan-i" :class="{ first: p.first, on: p.on }">{{ p.name }}</text>
+          </block>
+        </view>
+      </view>
+      <text class="wd-plan-hint">{{ $t('第一关跟着上面切换，后两关自动换成别的题型') }}</text>
 
       <!-- 词卡：不背单词式大词卡 —— 只给题干，答案和例句都藏着。
            三关的题干不一样：认得出 / 自评 给单词，想得起 / 写得出 只给中文释义
@@ -256,6 +269,10 @@ export default {
       promptIsWord: true,
       // 「第 2 关 · 想得起」这类标签，模板不做三元，JS 里预算成字符串
       modeLabel: '',
+      // 胶囊底下的"本轮三关"预览：[{ name, first, on }]。
+      // first = 这一档由上面的胶囊决定；on = 当前正处在这一关。
+      // 模板不做函数调用，序列变化一律在这里预算好（见 syncModePlan）
+      modePlan: [],
       selected: -1,
       input: '',
       canSubmit: false,
@@ -449,6 +466,7 @@ export default {
         b: step.need,
         m: t(MODE_LABEL[curMode] || '认得出')
       })
+      this.syncModePlan(step.streak)
       // 这个词是第几次出现：只在"答错过、被退回第一关又轮回来"时标「再确认」——
       // 正常闯第 2、3 关时 modeLabel 已经写着"第 N 关"了，再标一遍是废话
       const seen = this.seenTimes || (this.seenTimes = {})
@@ -508,6 +526,28 @@ export default {
         this.session.setModes(wordSession.buildModeSequence(m))
         this.setupQuestion(this.idx)
       }
+      // 没有会话时（极少数兜底路径）setupQuestion 不会跑，这里补一次，
+      // 保证"点胶囊 → 下面那行变"永远成立。
+      // ⚠️ 有会话时绝不能在这里再算一遍：那会把"当前第几关"冲回第 0 关。
+      else this.syncModePlan(0)
+    },
+
+    /**
+     * 胶囊底下的"本轮三关"预览。
+     * 为什么必须有：三个胶囊看起来像一排静态标签，用户点了不知道会发生什么 ——
+     * 而它实际只改第一关。把三关顺序摆出来、并把"当前在第几关"标出来，
+     * 点一下胶囊这一行立刻变，效果才看得见；顺带它还是个进度指示。
+     */
+    syncModePlan(streak) {
+      const seq = wordSession.buildModeSequence(this.mode)
+      const at = Math.max(0, Math.min(seq.length - 1, Number(streak) || 0))
+      this.modePlan = seq.map((k, i) => ({
+        // 兜底取 MODE_LABEL.recog 而不是再写一个中文字面量：
+        // 同一句中文在脚本里每出现一次就多一处"静态中文"，白白推高漏网计数
+        name: t(MODE_LABEL[k] || MODE_LABEL.recog),
+        first: i === 0,
+        on: i === at
+      }))
     },
 
     choose(e) {
@@ -841,7 +881,7 @@ export default {
   border: 2rpx solid var(--hairline, rgba(var(--surface-rgb, 255, 255, 255), 0.7));
   border-radius: 999rpx;
   padding: 6rpx;
-  margin-bottom: 24rpx;
+  margin-bottom: 14rpx;
 }
 
 .wd-switch.locked { opacity: 0.5; }
@@ -856,12 +896,67 @@ export default {
   color: var(--ink-2, #5a6560);
 }
 
+/* 选中态用实心主色，不再只是"白底 + 蓝字" ——
+   后者在一排胶囊里区分度太弱，用户会以为那三个只是标签、点了没反应。 */
 .wd-sw.active {
-  background: #ffffff;
-  background: var(--solid, #ffffff);
+  background: #2e6bff;
+  background: var(--brand, #2e6bff);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2rpx 8rpx rgba(46, 107, 255, 0.28);
+}
+
+/* ===== 本轮三关预览 =====
+   三个胶囊只决定第一关，这个事实光看胶囊是看不出来的 ——
+   把它摆成一行，点哪一档这一行就当场变，效果才"看得见"。 */
+.wd-plan {
+  display: flex;
+  align-items: center;
+  padding: 0 12rpx;
+}
+.wd-plan-k {
+  font-size: 22rpx;
+  color: #98a19b;
+  color: var(--ink-3, #98a19b);
+  margin-right: 12rpx;
+  flex-shrink: 0;
+}
+.wd-plan-list { display: flex; align-items: center; flex: 1; }
+.wd-plan-sep {
+  font-size: 22rpx;
+  color: #c8cdc9;
+  color: var(--ink-3, #98a19b);
+  margin: 0 8rpx;
+}
+.wd-plan-i {
+  font-size: 22rpx;
+  color: #5a6560;
+  color: var(--ink-2, #5a6560);
+  padding: 4rpx 12rpx;
+  border-radius: 999rpx;
+}
+/* 第一关 = 上面胶囊选的那一档，标成主色，把"选择 → 结果"这条因果画出来 */
+.wd-plan-i.first {
   color: #1d4fd8;
   color: var(--brand-strong, #1d4fd8);
-  font-weight: 600;
+  background: rgba(46, 107, 255, 0.1);
+  background: rgba(var(--brand-rgb, 46, 107, 255), 0.1);
+  font-weight: 500;
+}
+/* 当前所处的一关加一圈描边（和"第一关"可能不是同一个：答错过会退回第一关，
+   但序列本身没变，所以两者分开标） */
+.wd-plan-i.on {
+  border: 2rpx solid #2e6bff;
+  border: 2rpx solid var(--brand, #2e6bff);
+}
+.wd-plan-hint {
+  display: block;
+  font-size: 22rpx;
+  color: #98a19b;
+  color: var(--ink-3, #98a19b);
+  padding: 0 12rpx;
+  margin-top: 6rpx;
+  margin-bottom: 20rpx;
 }
 
 .pos-tag { background: rgba(46, 107, 255, 0.12); color: #1d4fd8; }

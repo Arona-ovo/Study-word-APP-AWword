@@ -331,7 +331,11 @@ export function modeAt(streak, modes) {
 
 export function createConfirmSession(deck, opts) {
   const review = !!(opts && opts.review);
-  const modes = (opts && opts.modes && opts.modes.length) ? opts.modes : CONFIRM_MODES;
+  // ⚠️ 必须是 let：setModes() 会在用户中途换作答方式时重新赋值。
+  // 写成 const 的话那一行直接抛 "Assignment to constant variable" ——
+  // 抛在 switchMode 里，setupQuestion 就不会跑，表现为"胶囊高亮了但题目没变"，
+  // 用户只会以为那三个按钮没用。
+  let modes = (opts && opts.modes && opts.modes.length) ? opts.modes : CONFIRM_MODES;
   const byId = {};
   (deck || []).forEach(x => { byId[x.id] = x });
   const state = {};

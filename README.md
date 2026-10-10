@@ -13,8 +13,8 @@
 ![offline-first](https://img.shields.io/badge/offline--first-%E2%9C%93-0F6E56?logo=airplane&logoColor=white)
 ![words](https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-640%20%E8%AF%8D%20%C2%B7%20626%20%E4%BE%8B%E5%8F%A5%20%C2%B7%20986%20%E5%B8%B8%E7%94%A8%E8%AF%8D-185FA5)
 ![ai](https://img.shields.io/badge/AI-OpenAI%20%E5%85%BC%E5%AE%B9-412991?logo=openai&logoColor=white)
-![checks](https://img.shields.io/badge/checks-67%20%E8%84%9A%E6%9C%AC%20%E5%85%A8%E7%BB%BF-success)
-![version](https://img.shields.io/badge/version-1.0%20Beta-orange)
+![checks](https://img.shields.io/badge/checks-68%20%E8%84%9A%E6%9C%AC%20%E5%85%A8%E7%BB%BF-success)
+![version](https://img.shields.io/badge/version-1.1%20Beta-orange)
 
 **⚡ 不联网、不注册、不配 AI，也能完整背完一本书。**
 
@@ -99,6 +99,20 @@
 - 📉 **掌握度概览**：已学 / 已掌握 / 全书进度（**整卡可点**，直接进词库详情）
 - 🔐 **本地账号**：SQLite + PBKDF2（可升级 argon2id）、UUID 主键、**软删除**、口令只留单向哈希，**零网络请求**
 
+### 📦 数据备份（换手机迁移）
+
+纯本地 App 最大的代价是"换手机就全没了"，所以设置 → **数据与账号**里有一键导出 / 导入：
+
+| | |
+|---|---|
+| 📤 **一键导出** | 学习进度、词书、错题、设置与 **AI 配置**打包成一个 `awword-backup-2026-10-10.json`，**内容整体加密** —— 文件里不会出现明文密钥 |
+| 🔑 **加密码导出** | 可选再套一层用户自设的密码（PBKDF2-HMAC-SHA256 12 万次派生）。**没有找回途径**（没有服务器可以找回），所以弹窗里会写清楚 |
+| 📲 **传到另一台手机** | 导出后直接调起**系统分享面板** —— Android 分享面板里自带附近分享 / Quick Share，以及小米互传、华为分享、OPPO / vivo 互传（四家已互通，Wi-Fi 直连），选它就能无线直传，不用我们自己发明传输协议 |
+| 📥 **导入前先看摘要** | 先用信封里的**明文摘要**告诉你这份备份里有几个词的掌握度、几条错题、几天记录、有没有 AI 配置，确认后才解密；**覆盖**二字写在按钮上，不藏在说明里 |
+| 🛡️ **坏文件挡得住** | 密码不对、文件被改过、版本更新、不是本应用的备份 —— 各有各的人话提示，不会写一半进 storage |
+
+加密是**零依赖**的：PBKDF2 派生 + HMAC-SHA256 密钥流 XOR + 完整性 MAC，复用项目里已有的 `hash.ts` / `random.ts`，没有引入任何三方库。
+
 ### ⚡ 性能
 
 - 🔎 首次启动延迟探测 CPU 算力 + 光栅化面积，自动推荐画质档位
@@ -141,14 +155,14 @@
 │   ├── data/                   640 词 · 626 例句 · 986 常用词
 │   └── components/             悬浮顶栏 / 悬浮底栏 / 卡片渲染器 / 引导遮罩 …
 ├── fujian-english-trainer/     原微信小程序版本，已定稿，不再同步
-└── _tools/                     67 个只读校验脚本，不改动工程文件
+└── _tools/                     68 个只读校验脚本，不改动工程文件
 ```
 
 📄 **工程向的详尽文档**（含每个模块的实现取舍、踩过的坑）见 👉 [**uniapp/README.md**](./uniapp/README.md)
 
 ---
 
-## 🧪 67 个自动化校验
+## 🧪 68 个自动化校验
 
 每个功能改动都配一个 `_tools/check-*.js`，全部只读源码、不改工程：
 
@@ -166,6 +180,8 @@ cd _tools && for f in check-*.js; do node "$f" || echo "FAIL: $f"; done
 | `check-tabbar.js` | 除逻辑外还盯**可见性**（光逻辑对、渲染不出来也会全绿，吃过这个亏） |
 | `check-i18n.js` | 扫裸拼接文案：拼接出来的 `复习 14 道错题` 在英文下语序是错的，必须整句进字典 |
 | `check-onboarding.js` | 引导目标的选择器必须真实存在，否则改个类名就让引导静默失效 |
+| `check-backup.js` | 备份**加密往返**、错密码 / 被篡改 / 版本不认识都要被挡下、密文里搜不到明文密钥、导入前摘要正确 |
+| `check-native-assets.js` | APK 图标与启动图的**配置层级** —— 写错层级 HBuilderX 不报错，云打包静默回退成默认图标 |
 
 ---
 
@@ -202,6 +218,29 @@ AI 释义、AI 点评、云端语音是需要联网的**增强项**，没配就�
 App 端的 `app-service.js` 跑在 uni-app 自带的 JS 引擎里，不是系统 WebView，
 老版本不认 Unicode 属性转义 —— 模块解析阶段直接 SyntaxError，表现是**整个 App 白屏**，
 而且**编译期完全不报错**。这也是我们专门写了 `check-app-compat.js` 的原因。
+
+</details>
+
+<details>
+<summary><b>换手机了，数据怎么搬过去？</b></summary>
+
+设置 → 数据与账号 → **导出数据**，会生成一个加密的 `.json` 备份并调起系统分享面板。
+在分享面板里选**附近分享 / Quick Share / 互传**（各家手机自带的互传已互通，走 Wi-Fi 直连），
+另一台手机收到后在同一个位置**导入**即可 —— 全程离线，不经任何服务器（我们也没有服务器）。
+
+也可以存下来手动传（微信发给自己、拷到电脑再回来都行）。备份默认不含明文密钥；
+如果选了「加密码导出」，导入时还要输入同一个密码，**这个密码没有任何找回途径**。
+
+</details>
+
+<details>
+<summary><b>能两台手机直接同步吗（不用手动导来导去）？</b></summary>
+
+不能，而且这是有意的：这是个**纯离线** App，没有账号、没有服务器，
+所以"自动同步"在架构上不存在 —— 换了手机要自己搬一次。
+
+但搬的过程很轻：导出 → 系统分享 → 另一台手机导入，全程几十秒，
+而且是**无线直传**（附近分享走 Wi-Fi 直连，不用数据线，也不经过第三方服务器）。
 
 </details>
 

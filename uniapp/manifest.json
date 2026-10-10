@@ -2,8 +2,8 @@
     "name" : "AWword",
     "appid" : "__UNI__53285BF",
     "description" : "英语单词与翻译练习：词书分批学习、中英互译、按掌握情况调整难度",
-    "versionName" : "1.0 Beta",
-    "versionCode" : "101",
+    "versionName" : "1.1 Beta",
+    "versionCode" : "111",
     "vueVersion" : "3",
     "transformPx" : false,
     "app-plus" : {
@@ -15,7 +15,7 @@
             "ignoreVersion" : true
         },
         "splashscreen" : {
-            "alwaysShowBeforeRender" : false,
+            "alwaysShowBeforeRender" : true,
             "waiting" : false,
             "autoclose" : true,
             "delay" : 0

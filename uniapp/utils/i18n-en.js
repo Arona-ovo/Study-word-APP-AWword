@@ -1092,5 +1092,77 @@ export default {
   '开启：已做用浅色、已会用主题色；关闭：已会改用绿色':
     'On: done = light tint, learned = accent. Off: learned turns green',
   // 练习页总结：大数字是"会了多少题"，副标题跟着说同一件事（不再报正确率 —— 两个口径已经分家）
-  '学会 {a} / {b} 题 · 掌握度已更新': 'Learned {a} / {b} · mastery updated'
+  '学会 {a} / {b} 题 · 掌握度已更新': 'Learned {a} / {b} · mastery updated',
+
+  // ---------- 数据导出 / 导入（设置 → 数据与账号） ----------
+  // 换手机迁移：导出一份整体加密的备份 → 传到另一台手机 → 那边导入
+  '导出数据': 'Export data',
+  '学习进度、词书、错题、设置与 AI 配置打包成一个加密文件':
+    'Pack progress, wordbooks, mistakes, settings and AI config into one encrypted file',
+  '导入数据': 'Import data',
+  '从备份恢复，导入前会先显示备份里有什么': 'Restore from a backup — you will see its summary first',
+  '导出时会调起系统分享，可以直接选「附近分享 / 互传」发给另一台手机；也可以存下来手动传。文件里不会出现明文密钥。':
+    'Export opens the system share sheet — pick Nearby Share or your phone maker\'s quick transfer to send it straight to another phone, or just save the file. Keys are never stored in plain text.',
+  '学习进度、词书、错题、设置与 AI 配置会打包成一个文件，内容整体加密。':
+    'Progress, wordbooks, mistakes, settings and AI config are packed into one fully encrypted file.',
+  '一键导出（推荐）': 'One-tap export (recommended)',
+  '加密码导出': 'Export with a password',
+  '复制备份内容': 'Copy backup to clipboard',
+  '设置备份密码': 'Set a backup password',
+  '导入时要输入同一个密码才能解开。没有找回途径，请务必记住。':
+    'The same password is required to import it. There is no recovery — please remember it.',
+  '至少 4 位': 'At least 4 characters',
+  '密码至少 4 位': 'Password needs at least 4 characters',
+  '正在打包…': 'Packing…',
+  '备份内容已复制': 'Backup copied',
+  '复制失败，请改用导出到文件': 'Copy failed — try exporting to a file instead',
+  '这台设备不能写文件，已复制到剪贴板': 'This device cannot write files — copied to clipboard instead',
+  '导出失败，请稍后再试': 'Export failed, please try again',
+  '已调起系统分享，可以选「附近分享 / 互传」直接发给另一台手机。':
+    'Share sheet opened — pick Nearby Share or quick transfer to send it to another phone.',
+  '已存到手机：': 'Saved to phone: ',
+  '这份备份有密码，导入时要输入同一个密码。':
+    'This backup is password-protected — you will need the same password to import it.',
+  '导出完成': 'Export complete',
+  '导出': 'Export',
+  '好的': 'OK',
+  '正在查找备份…': 'Looking for backups…',
+  '手机上还没找到备份文件，请先复制备份内容':
+    'No backup file found on this phone — copy the backup content first',
+  '从剪贴板导入': 'Import from clipboard',
+  '选择备份文件': 'Choose a backup file',
+  '在手机上找到 {n} 份备份': 'Found {n} backups on this phone',
+  '剪贴板里没有备份内容': 'No backup content in the clipboard',
+  '正在读取备份…': 'Reading backup…',
+  '读不到这个备份文件': 'Cannot read this backup file',
+  '{n} 个词的掌握度': 'mastery for {n} words',
+  '{n} 条错题': '{n} mistakes',
+  '{n} 本自建词书': '{n} custom wordbooks',
+  '{n} 个导入词': '{n} imported words',
+  '{a} 天学习记录（{b} ~ {c}）': '{a} days of history ({b} – {c})',
+  '设置与 AI 配置': 'settings and AI config',
+  '对话陪练记录': 'chat practice history',
+  '这不是 AWword 的备份文件': 'This is not an AWword backup file',
+  '备份来自更新版本的 App，请先升级': 'This backup comes from a newer version — please update first',
+  '这份备份有密码': 'This backup is password-protected',
+  '输入导出时设的密码才能解开。': 'Enter the password set at export time to unlock it.',
+  '解密并导入': 'Decrypt and import',
+  '备份密码': 'Backup password',
+  '导入这份备份？': 'Import this backup?',
+  '导入会覆盖本机现有的全部学习数据与设置，不可撤销。':
+    'Importing overwrites all local learning data and settings. This cannot be undone.',
+  '覆盖导入': 'Overwrite and import',
+  '正在导入…': 'Importing…',
+  '部分数据导入失败，请重试': 'Some data failed to import, please retry',
+  '这份备份设有密码': 'This backup requires a password',
+  '密码不对，再试一次': 'Wrong password, try again',
+  '备份文件被改动过，已拒绝导入': 'The backup file was modified — import refused',
+  '备份内容为空': 'The backup is empty',
+  '备份文件已损坏': 'The backup file is corrupt',
+  '未备份': 'Never backed up',
+  '上次备份 {s}': 'Last backup {s}',
+
+  // 刷单词：作答方式胶囊下的"本轮三关"预览（三个胶囊只决定第一关，光看胶囊看不出来）
+  '本轮三关': '3 steps',
+  '第一关跟着上面切换，后两关自动换成别的题型': 'Step 1 follows the switch above; the other two rotate automatically'
 };

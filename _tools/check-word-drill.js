@@ -430,6 +430,100 @@ function wipe() {
   is(vm.mode === beforeBad, '胶囊没有 data-m 时不炸、不改方式', vm.mode);
   settingsMod.set({ study: { drillMode: 'choice' } });
 
+  // ⚠️ 真 bug 守门：上面几次 switchMode 都发生在"还没有会话"的时候，
+  // 于是 setModes 那条分支从来没被执行 —— 典型的假绿。
+  // 真刷题时会话一定存在，setModes 若给 const 重新赋值会抛
+  // "Assignment to constant variable"，抛在 setupQuestion 之前，
+  // 表现就是"胶囊高亮了、题目纹丝不动"—— 用户只以为按钮没用。
+  (function () {
+    const v = newVM();
+    v.bookId = BID;
+    v.bookSet = wordMark.bookWordSet(BID);
+    v.questions = ws.buildDeck(4, BID, 'daily');
+    v.session = ws.createConfirmSession(v.questions, { modes: ws.buildModeSequence('choice') });
+    v.setupQuestion(0);
+    let threw = '';
+    try {
+      v.switchMode({ currentTarget: { dataset: { m: 'spell' } } });
+    } catch (e) {
+      threw = String((e && e.message) || e);
+    }
+    eq(threw, '', '会话存在时切换作答方式不能抛错（modes 必须是 let）');
+    eq(v.mode, 'spell', '会话存在时切换 → 偏好真的改了');
+    eq(v.curMode, 'spell', '会话存在时切换 → 当前题目当场重画成新题型（这就是"看得见的后果"）');
+    eq(v.promptIsWord, false, '切到拼写 → 题干立刻只给中文释义（不再显示单词）');
+    // 切回来的链路同样要通
+    let threw2 = '';
+    try {
+      v.switchMode({ currentTarget: { dataset: { m: 'choice' } } });
+    } catch (e) {
+      threw2 = String((e && e.message) || e);
+    }
+    eq(threw2, '', '切回去同样不抛错');
+    eq(v.curMode, 'recog', '切回选义 → 当前题重画成认得出');
+    eq(v.promptIsWord, true, '切回选义 → 题干重新显示单词');
+  })();
+
+  /* ---------------- 10b. 三关预览（让"点胶囊有用"看得见） ---------------- */
+  // 真问题：三个胶囊看着像一排静态标签，用户点了不知道会发生什么 ——
+  // 而它实际只改第一关。所以胶囊下面必须有一条会跟着变的"本轮三关"。
+  console.log('== 10b. 三关预览（胶囊点了要有可见后果）==');
+  (function () {
+    const v = newVM();
+    v.bookId = BID;
+    v.bookSet = wordMark.bookWordSet(BID);
+    v.questions = ws.buildDeck(4, BID, 'daily');
+    v.session = ws.createConfirmSession(v.questions, { modes: ws.buildModeSequence(v.mode) });
+    const names = () => v.modePlan.map(p => p.name).join(' > ');
+
+    v.switchMode({ currentTarget: { dataset: { m: 'choice' } } });
+    eq(v.modePlan.length, 3, '预览列出 3 关（不是只列当前这一关）');
+    eq(names(), '认得出 > 想得起 > 写得出', '选义 → 认→想→写');
+    is(v.modePlan[0].first === true, '第 1 项标了 first（= 跟着胶囊变的那一档）');
+    is(v.modePlan[1].first === false && v.modePlan[2].first === false, '后两关不标 first');
+    is(v.modePlan[0].on === true, '当前在第 1 关 → 第 1 项标 on');
+
+    v.switchMode({ currentTarget: { dataset: { m: 'spell' } } });
+    eq(names(), '写得出 > 认得出 > 想得起', '拼写 → 写→认→想（点完当场变，这就是"看得见的后果"）');
+    v.switchMode({ currentTarget: { dataset: { m: 'self' } } });
+    eq(names(), '自评 > 认得出 > 想得起', '自评 → 自评→认→想（自评只占第一关）');
+    is(v.modePlan.every(p => typeof p.name === 'string' && p.name.length > 0), '每一项都有名字（模板不做函数调用，靠它预算）');
+
+    // on 跟着连击走：过了第一关就该标到第 2 项 —— 这条顺带把它变成进度指示
+    v.switchMode({ currentTarget: { dataset: { m: 'choice' } } });
+    v.syncModePlan(1);
+    is(v.modePlan[1].on === true, '连对一次 → on 移到第 2 项（预览兼做进度指示）');
+    is(v.modePlan[0].on === false, '第 1 项不再标 on');
+    v.syncModePlan(0);
+    is(v.modePlan[0].on === true, '连击清零（答错退回第一关）→ on 回到第 1 项');
+    // 走一遍真实链路：setupQuestion 必须把当前连击喂给预览（而不是永远标第 1 关）。
+    // 用单词会话，答对后它会被排回队首，setupQuestion(0) 拿到的就是这个词
+    const one = [v.questions[0]];
+    v.questions = one;
+    v.session = ws.createConfirmSession(one, { modes: ws.buildModeSequence('choice') });
+    v.setupQuestion(0);
+    is(v.modePlan[0].on === true, '闯第 1 关时预览标在第 1 项 = true', v.modePlan[0].on);
+    v.session.answer(true);
+    v.setupQuestion(v.questions.indexOf(v.session.current()));
+    is(v.modePlan[1].on === true, '答对一关后重画 → 预览跟着标到第 2 项（真链路，不是只测函数）');
+
+    // 模板契约：预览条必须真的渲染出来，且在胶囊下方、卡片上方
+    const wdTpl = pv.slice(0, pv.lastIndexOf('</template>'));
+    const iSw = wdTpl.indexOf('class="wd-switch"');
+    const iPlan = wdTpl.indexOf('class="wd-plan"');
+    const iCard = wdTpl.indexOf('class="card wd-card"');
+    is(iSw > 0 && iPlan > iSw, '预览条排在胶囊之后');
+    is(iCard > iPlan, '预览条排在词卡之前（顺序：胶囊 → 预览 → 提示 → 词卡）');
+    is(/v-for="\(p, i\) in modePlan"/.test(wdTpl), '模板遍历 modePlan（不是写死三个）');
+    is(/:class="\{ first: p\.first, on: p\.on \}"/.test(wdTpl), '模板按 first / on 上样式');
+    is(/\{\{ \$t\('第一关跟着上面切换，后两关自动换成别的题型'\) \}\}/.test(wdTpl), '有一行说明文字讲清因果');
+    is(/\{\{ \$t\('本轮三关'\) \}\}/.test(wdTpl), '预览条有「本轮三关」标签');
+    // 选中态必须足够明显：只有"白底 + 蓝字"的话，一排胶囊里根本看不出哪个被选了
+    const swActive = (pv.match(/\.wd-sw\.active\s*\{[\s\S]*?\}/) || [''])[0];
+    is(/background:\s*var\(--brand/.test(swActive), '选中态用实心主色（不是只换个字色）');
+    is(/color:\s*#ffffff/.test(swActive), '选中态文字转白（对比度够）');
+  })();
+
   /* ---------------- 11. 多次确认会话（不背单词机制） ---------------- */
   // 用假词表精确驱动：createConfirmSession 是纯逻辑，不依赖真实掌握度
   console.log('== 11. 多次确认会话（三关跨题型）==');

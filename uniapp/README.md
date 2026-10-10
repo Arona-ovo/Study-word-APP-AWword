@@ -52,6 +52,7 @@
 - [五、全局视觉统一](#五全局视觉统一磨砂玻璃--去蓝色顶栏)
 - [五之二、本地账号系统](#五之二本地账号系统纯本地零网络请求)
 - [五之三、首页自定义](#五之三首页自定义跳转--小组件--拖拽收纳)
+- [五之四、数据备份与换机迁移](#五之四数据备份与换机迁移utilsbackupjs--utilsbackup-iojs)
 - [六、与原小程序的差异](#六与原小程序的差异)
 
 ## 📁 目录说明
@@ -311,6 +312,25 @@
 拼写  → 写得出 → 认得出 → 想得起
 自评  → 自评   → 认得出 → 想得起
 ```
+
+#### 胶囊底下必须有「本轮三关」预览
+
+三个胶囊**只决定第一关**，这个事实光看胶囊根本看不出来 —— 用户会以为那三个按钮点了没用。
+所以胶囊正下方跟一条预览（`modePlan`，由 `syncModePlan(连击)` 预计算，模板不做函数调用）：
+
+- 点哪一档，这一行**当场就变**（`switchMode` → `setModes` → `setupQuestion` → `syncModePlan`）
+- 第 1 项标 `first`（主色淡底）= 跟着胶囊变的那一档，把「选择 → 结果」这条因果画出来
+- 当前所处的那一关标 `on`（主色描边），这条顺带兼做进度指示
+- 底下再一行小字说明因果：「第一关跟着上面切换，后两关自动换成别的题型」
+
+选中态用**实心主色**（`var(--brand)` + 白字），不再只是"白底 + 蓝字" ——
+后者在一排胶囊里区分度太弱，看不出哪个被选了。练习页那两个（`选择题 / 手动输入`）同样处理。
+
+> ⚠️ **修过一个真 bug**：`createConfirmSession` 里 `modes` 声明成了 `const`，而
+> `setModes()` 会重新赋值 → 抛 `Assignment to constant variable`。
+> 抛在 `setupQuestion` 之前，表现就是"**胶囊高亮了、题目纹丝不动**"——
+> 用户只会以为按钮没用。原校验是假绿：那几次 `switchMode` 都发生在
+> **还没有会话**的时候，`setModes` 分支从来没被执行过。已补「会话存在时切换」的回归断言。
 
 ### 跨天巩固：1/3/7/15/30/60/100 天阶梯
 
@@ -1143,6 +1163,108 @@ uniapp/pages/home/home.vue                   ← 布局驱动 + 编辑态 + 拖�
 ```bash
 node --experimental-strip-types _tools/check-home.js
 ```
+
+## 五之四、数据备份与换机迁移（`utils/backup.js` + `utils/backup-io.js`）
+
+这是个**纯本地**应用：数据全在本机 storage，没有服务器、没有账号同步。
+好处是"数据只属于你"，代价是**换手机就全没了** —— 之前没有任何补救办法。
+所以设置 → **数据与账号**里加了一键导出 / 导入，把这条路径补上。
+
+### 加密：防什么、不防什么
+
+备份里含 AI 配置（地址 + 密钥）。密钥明文躺在导出文件里是不能接受的 ——
+这个文件会被发到微信、存进网盘、留在下载目录。所以 **payload 整体是密文**，
+信封里只有 `meta`（词数 / 错题数这类统计）是明文，方便导入前先确认这份备份对不对。
+
+| 档位 | 密钥来源 | 迭代 | 防什么 |
+|---|---|---|---|
+| `standard`（默认，一键） | App 内置口令 | 10 000 | **防明文泄露，不防逆向**：文本编辑器打开只看到 base64，看不到 `sk-xxx`；反编译拿到内置口令就能解开 —— 这是有意的取舍，换手机时用户最需要的是"别让我再输一遍密码" |
+| `password`（可选） | 用户自设密码 | 120 000 | 真机密性，代价是**忘了密码这份备份就废了**（没有任何找回途径，因为压根没有服务器） |
+
+原语全部零依赖，复用项目里已有的实现：
+
+- `sha256` / `hmacSha256` / `utf8Bytes` ← `utils/hash.ts`
+- `randomBytes` ← `utils/random.ts`
+- PBKDF2-HMAC-SHA256 与 HMAC 密钥流在 `backup.js` 里现搭（各十来行），**没有引入任何三方库**
+
+构造：PBKDF2 派生 → 拆成 **enc / mac 两把子密钥**（不能拿同一把既加密又算 MAC）→
+HMAC-SHA256 当 PRF 生成密钥流（counter mode）→ XOR → 密文 MAC。
+每次导出都新生成 salt 与 nonce，所以 (key, nonce) 不会重复。
+**先验 MAC 再解密**，被篡改的文件在这一步就被挡下。
+
+### 传到另一台手机：调系统分享就够了
+
+导出后转 `content://`（FileProvider）再发 `Intent.ACTION_SEND`：
+
+```js
+// 私有目录的 file:// 直接给别人，Android 7+ 会抛 FileUriExposedException
+uri = FileProvider.getUriForFile(main, pkg + '.dc.fileprovider', file);
+intent.setType(type); intent.putExtra(Intent.EXTRA_STREAM, uri);
+intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+main.startActivity(Intent.createChooser(intent, '导出备份'));
+```
+
+Android 的**系统分享面板里自带**附近分享 / Quick Share，以及小米互传、华为分享、
+OPPO / vivo 互传（四家已互通，走 Wi-Fi 直连，60~140 MB/s）。
+也就是说**手机对手机无线直传不用自己实现** —— 调起系统分享就等于支持了。
+
+> 已经查证过两条"看起来更酷"的路，都走不通：
+> **Wi-Fi Direct** 在 uni-app 里做不了（Vue / H5 运行时层访问不到 `WifiP2pManager`，
+> 没有成熟合规插件，iOS 更不开放）；**有线 OTG 手机连手机**在 Android 上不可靠。
+> 而系统分享面板已经把这件事做得更好。
+
+三端降级：`writeBackup` / `scanBackups` / `shareFile` 全部有失败路径 ——
+写不出文件退回**复制备份内容**到剪贴板；H5 走 Blob 下载 + `<input type="file">`；
+小程序没有通用文件 API，导出导入都走剪贴板（提示里会写清楚可能被截断）。
+
+### 导入：先看你导的是什么，再问要不要覆盖
+
+拿到一个文件就覆盖掉全部数据是很吓人的事，所以顺序是：
+
+1. `peek(text)` —— 只读信封里的明文 `meta`，**不解密**：几个词的掌握度 / 几条错题 /
+   几本自建词书 / 几天学习记录（含起止日期）/ 有没有 AI 配置 / 有没有对话记录
+2. 弹二次确认：摘要 + 「导入会覆盖本机现有的全部学习数据与设置，不可撤销」，
+   按钮写**「覆盖导入」**而不是「确定」
+3. 确认后才 `decode` → `restore`。密码档的备份会先问密码（`input` 模式 + 掩码），
+   密码错会**再给一次机会**，不会把人踢回第一步
+
+`decode` 抛的是英文代号（`NEED_PASSWORD` / `BAD_PASSWORD` / `TAMPERED` /
+`NEWER_VERSION` / `NOT_BACKUP` / `EMPTY` / `BROKEN`），由 `importErrText()` 翻成人话 ——
+内部代号只进 console，不直接给用户看。
+
+### 搬什么、不搬什么
+
+```js
+STORAGE_KEYS = {
+  study:    'fj_eng_state_v1',   // 掌握度 / 错题 / 打卡 / 自建词书
+  settings: 'fj_app_settings_v1',// 外观 / 语音 / AI 配置 / 收藏 / 首页布局
+  chat:     'fj_chat_v1',
+  usage:    'fj_usage_v1',
+  apiUsage: 'fj_api_usage_v1'
+}
+```
+
+AI 缓存 `fj_ai_cache_v1` **刻意不搬**：它有 7 天 TTL，本来就会过期，搬过去只是把文件撑大。
+
+### 页面接线（设置页）
+
+- 位置：「数据与账号」分组里，**「本地存储学习数据」之后、「清除学习数据」之前** ——
+  想备份的人不该先看见一排红色
+- 收起时分组右侧显示 `backupHint`：`未备份` / `上次备份 10-10`（存档在 `settings.backup.lastAt`）
+- `backupBusy` 期间在行上显示进度文案（`正在打包…` / `正在查找备份…`），避免"点了没反应"
+- 导出完成弹 **alert 模式**弹窗：文件名 + 是"已调起分享"还是"已存到手机（绝对路径）"
+
+**相关文件**：`utils/backup.js`（收集 / 加密 / 信封 / 恢复）、`utils/backup-io.js`（跨端文件 IO）、
+`pkgManage/pages/settings/settings.vue`、`utils/settings.js`（`backup.lastAt`）、
+`components/app-dialog/app-dialog.vue`（新增 `password` 掩码输入与 `btn-mode="alert"`）
+**校验**：`_tools/check-backup.js`（12 组：收集范围 / 信封 / 往返 / 密码档 / 拒绝形态 /
+peek / 落盘 / 文件名 / 跨端契约 / 页面接线 / **页面运行时真跑方法** / backupHint 必须是 computed）
+
+> 第 11 组"真跑方法"是最后一道防线：前 10 组只看源码字符串，会"假绿" ——
+> 方法名写了但弹窗没弹出来、覆盖确认没走、密码错了却直接覆盖，读代码全都发现不了。
+> 所以第 11 组把 `settings.vue` 的 `<script>` 真正 `loadCode` 起来，注入假 IO，
+> 一路跑完 `askExport → onExportMenu → onConfirmYes → previewImport → doImport`，
+> 断言弹窗形态、按钮文案、storage 落盘、错密码后再弹输入框、被篡改时"挡下即止不写半份数据"。
 
 ## 六、与原小程序的差异
 

@@ -7,7 +7,7 @@
 // version 是对外显示的版本号（设置 › 关于 › 版本），改它同时要改 manifest.json
 // 的 versionName，两处保持一致（check-version-egg.js 会盯）。
 export const BUILD_INFO = {
-  version: '1.0 Beta',
+  version: '1.1 Beta',
   lexCount: 3893,
   coreCount: 640,
   bookCount: 6,

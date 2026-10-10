@@ -641,6 +641,7 @@
     <view class="sec" :class="{ open: openSec === 'data' }">
       <view class="sec-head" data-k="data" @tap="toggleSec">
         <text class="sec-name">{{ $t('数据与账号') }}</text>
+        <text v-if="openSec !== 'data'" class="sec-hint">{{ secHint('data') }}</text>
         <text class="sec-arrow">›</text>
       </view>
       <view class="sec-body" v-if="openSec === 'data'">
@@ -651,6 +652,34 @@
           </view>
           <switch :checked="privacy.storeLocal" :color="brandMain" disabled />
         </view>
+
+        <!-- ===== 导出 / 导入：换手机时唯一的迁移路径 =====
+             放在「清除 / 退出」这些危险项之前 —— 真要清数据的人会往下翻，
+             但想备份的人不该先看到一排红色。 -->
+        <view class="row" @tap="askExport">
+          <view class="row-main">
+            <text class="row-title">{{ $t('导出数据') }}</text>
+            <text class="row-desc">{{ $t('学习进度、词书、错题、设置与 AI 配置打包成一个加密文件') }}</text>
+          </view>
+          <text class="row-value">{{ backupHint }}</text>
+          <text class="row-arrow">›</text>
+        </view>
+        <view class="row" @tap="askImport">
+          <view class="row-main">
+            <text class="row-title">{{ $t('导入数据') }}</text>
+            <text class="row-desc">{{ $t('从备份恢复，导入前会先显示备份里有什么') }}</text>
+          </view>
+          <text class="row-arrow">›</text>
+        </view>
+        <view v-if="backupBusy" class="row">
+          <view class="row-main">
+            <text class="row-title muted">{{ backupStage }}</text>
+          </view>
+        </view>
+        <view class="backup-note">
+          <text class="backup-note-text">{{ $t('导出时会调起系统分享，可以直接选「附近分享 / 互传」发给另一台手机；也可以存下来手动传。文件里不会出现明文密钥。') }}</text>
+        </view>
+
         <view class="row" @tap="clearLearningData">
           <view class="row-main">
             <text class="row-title danger">{{ $t('清除学习数据') }}</text>
@@ -729,6 +758,11 @@
       :items="confirm.items"
       :danger="confirm.danger"
       :seq="confirm.seq"
+      :btn-mode="confirm.btnMode"
+      :value="confirm.value"
+      :placeholder="confirm.placeholder"
+      :password="confirm.password"
+      :maxlength="confirm.maxlength"
       @confirm="onConfirmYes"
       @cancel="confirm.show = false"
     />
@@ -779,6 +813,8 @@ import * as apiUsage from '../../../utils/api-usage.js'
 import * as onboarding from '../../../utils/onboarding.js'
 import { speakSentence as aiSpeak } from '../../../services/voice.js'
 import * as sfx from '../../../utils/sfx.js'
+import * as backup from '../../../utils/backup.js'
+import * as backupIO from '../../../utils/backup-io.js'
 // 只有几百字节的规模快照：设置页在分包里，不能为了显示几个数字去 import 语料本身
 import { BUILD_INFO } from '../../../data/build-info.js'
 import {
@@ -838,8 +874,17 @@ export default {
       // 危险确认（confirm 模式）与语言选择（sheet 模式）共用一张弹窗
       confirm: {
         show: false, mode: 'confirm', title: '', content: '',
-        confirmText: t('确定'), items: [], danger: true, seq: 0, action: ''
+        confirmText: t('确定'), items: [], danger: true, seq: 0, action: '',
+        // input / alert 模式用（导出密码、导入完成提示）
+        btnMode: 'confirm', value: '', placeholder: '', password: false, maxlength: 24
       },
+      // ---------- 数据导出 / 导入（换手机迁移） ----------
+      // busy 期间行上显示一行进度文案（打包中 / 正在查找备份…），避免"点了没反应"
+      backupBusy: false,
+      backupStage: '',
+      // 待导入的备份原文：先预览摘要、二次确认后才真正解密写入
+      pendingImport: '',
+      lastBackupAt: 0,
       // 外观
       accents: ACCENTS,
       accentKey: 'blue',
@@ -1047,6 +1092,14 @@ export default {
       if (this.followSystem) return t('已跟随系统 · 读取到') + (this.systemDark ? t('深色') : t('浅色'));
       return this.darkOn ? t('底色转深灰，文字转亮，背景图自动降亮度') : t('当前为浅色');
     },
+    // 上次导出的日期。没备份过就把"未备份"摆出来 —— 换手机时这行字是最值钱的提醒。
+    // 必须是 computed：模板按属性 {{ backupHint }} 取，写进 methods 会被渲染成函数源码。
+    backupHint() {
+      if (!this.lastBackupAt) return t('未备份')
+      const d = new Date(this.lastBackupAt)
+      const p = (n) => (n < 10 ? '0' : '') + n
+      return t('上次备份 {s}', { s: p(d.getMonth() + 1) + '-' + p(d.getDate()) })
+    },
     engineKey() {
       return this.voice.engine || 'auto';
     },
@@ -1126,6 +1179,8 @@ export default {
       if (k === 'about') return 'v' + this.version
       if (k === 'cache') return this.cacheHint
       if (k === 'perf') return this.smooth ? t('已开启') : t('已关闭')
+      // 收起时最该看见的是"我这数据备份过没有"
+      if (k === 'data') return this.backupHint
       return ''
     },
 
@@ -1215,6 +1270,244 @@ export default {
         icon: 'success'
       })
     },
+
+    // ================= 数据导出 / 导入（换手机迁移） =================
+    //
+    // 这是个纯本机应用：没有服务器、没有账号，换手机原本等于数据全没。
+    // 迁移路径必须存在，而且必须比"重新背一遍"省力：
+    //   导出 → 得到一个整体加密的文件 → 系统分享（附近分享 / 互传 / 微信）→ 新手机导入。
+    // 全程离线，不经任何服务器 —— 也确实没有服务器可以经。
+
+    // 导出入口：三选一。默认那档就叫"一键"，因为绝大多数人只想按一下。
+    askExport() {
+      if (this.backupBusy) return
+      this.confirm = Object.assign(this.blankConfirm(), {
+        show: true,
+        mode: 'sheet',
+        danger: false,
+        title: t('导出数据'),
+        content: t('学习进度、词书、错题、设置与 AI 配置会打包成一个文件，内容整体加密。'),
+        items: [
+          { label: t('一键导出（推荐）'), key: 'quick' },
+          { label: t('加密码导出'), key: 'pwd' },
+          { label: t('复制备份内容'), key: 'copy' }
+        ],
+        action: 'export-menu'
+      })
+    },
+
+    onExportMenu(key) {
+      if (key === 'quick') return this.doExport('', false)
+      if (key === 'copy') return this.doExport('', true)
+      // 加密码：先问密码，并把"没有找回途径"说清楚，别让人随手设一个然后忘掉
+      this.confirm = Object.assign(this.blankConfirm(), {
+        show: true,
+        mode: 'input',
+        danger: false,
+        title: t('设置备份密码'),
+        content: t('导入时要输入同一个密码才能解开。没有找回途径，请务必记住。'),
+        confirmText: t('导出'),
+        placeholder: t('至少 4 位'),
+        password: true,
+        maxlength: 32,
+        action: 'export-pwd'
+      })
+    },
+
+    async doExport(password, clipboardOnly) {
+      if (this.backupBusy) return
+      this.backupBusy = true
+      this.backupStage = t('正在打包…')
+      try {
+        const text = backup.encode(backup.collect(), password)
+        const name = backup.fileName()
+        // 只复制到剪贴板（用户明确选了这条）
+        if (clipboardOnly) {
+          const ok = await backupIO.copyToClipboard(text)
+          this.backupBusy = false
+          uni.showToast({ title: ok ? t('备份内容已复制') : t('复制失败，请改用导出到文件'), icon: ok ? 'success' : 'none' })
+          return
+        }
+        const w = await backupIO.writeBackup(text, name)
+        if (!w.ok) {
+          // 写不出文件（小程序端没有文件 API）：退到剪贴板，至少数据还能带走
+          const ok = await backupIO.copyToClipboard(text)
+          this.backupBusy = false
+          uni.showToast({ title: ok ? t('这台设备不能写文件，已复制到剪贴板') : t('导出失败，请稍后再试'), icon: 'none' })
+          return
+        }
+        this.backupStage = t('已保存')
+        // 调起系统分享 —— 这一步才是"传到另一台手机"的实现：
+        // Android 分享面板里自带附近分享 / Quick Share 与各家的互传，
+        // 走的都是 Wi-Fi 直连，比我们自己实现任何传输都快也稳。
+        const shared = await backupIO.shareFile(w.path)
+        this.backupBusy = false
+        this.markBackupDone(name)
+        this.showExportResult(shared, name, w.path, !!password)
+      } catch (e) {
+        this.backupBusy = false
+        uni.showToast({ title: t('导出失败，请稍后再试'), icon: 'none' })
+      }
+    },
+
+    showExportResult(shared, name, path, withPwd) {
+      const where = shared
+        ? t('已调起系统分享，可以选「附近分享 / 互传」直接发给另一台手机。')
+        : t('已存到手机：') + (backupIO.toAbsolutePath(path) || name)
+      const extra = withPwd ? t('这份备份有密码，导入时要输入同一个密码。') : ''
+      this.confirm = Object.assign(this.blankConfirm(), {
+        show: true,
+        btnMode: 'alert',
+        danger: false,
+        title: t('导出完成'),
+        content: name + '\n' + where + extra,
+        confirmText: t('好的'),
+        action: ''
+      })
+    },
+
+    markBackupDone(name) {
+      this.lastBackupAt = Date.now()
+      try { settings.set({ backup: { lastAt: this.lastBackupAt, lastFile: String(name || '') } }) } catch (e) {}
+    },
+
+    // 导入入口：App 端先把手机上已有的备份扫出来让用户挑；H5 走文件选择器；
+    // 小程序没有通用文件 API，只能从剪贴板读。
+    async askImport() {
+      if (this.backupBusy) return
+      const p = backupIO.platform()
+      if (p === 'h5') {
+        const text = await backupIO.pickFile()
+        if (!text) return
+        return this.previewImport(text)
+      }
+      if (p === 'app') {
+        this.backupBusy = true
+        this.backupStage = t('正在查找备份…')
+        const files = await backupIO.scanBackups()
+        this.backupBusy = false
+        this.backupStage = ''
+        if (!files.length) return this.readImportFromClipboard(t('手机上还没找到备份文件，请先复制备份内容'))
+        const items = files.slice(0, 8).map(f => ({ label: f.name, key: f.path }))
+        items.push({ label: t('从剪贴板导入'), key: '__clipboard__' })
+        this.confirm = Object.assign(this.blankConfirm(), {
+          show: true,
+          mode: 'sheet',
+          danger: false,
+          title: t('选择备份文件'),
+          content: t('在手机上找到 {n} 份备份', { n: files.length }),
+          items: items,
+          action: 'import-pick'
+        })
+        return
+      }
+      return this.readImportFromClipboard('')
+    },
+
+    async readImportFromClipboard(emptyTip) {
+      const text = await backupIO.readClipboard()
+      if (!text) {
+        uni.showToast({ title: emptyTip || t('剪贴板里没有备份内容'), icon: 'none' })
+        return
+      }
+      this.previewImport(text)
+    },
+
+    async readImportFile(path) {
+      this.backupBusy = true
+      this.backupStage = t('正在读取备份…')
+      const text = await backupIO.readFile(path)
+      this.backupBusy = false
+      this.backupStage = ''
+      if (!text) {
+        uni.showToast({ title: t('读不到这个备份文件'), icon: 'none' })
+        return
+      }
+      this.previewImport(text)
+    },
+
+    // 摘要用信封里的明文 meta 拼。拿到一个文件就覆盖全部数据是很吓人的事，
+    // 先让人看清"这份备份里到底是什么"，再问要不要覆盖。
+    summaryText(meta) {
+      const m = meta || {}
+      const parts = [t('{n} 个词的掌握度', { n: m.words || 0 })]
+      if (m.wrong) parts.push(t('{n} 条错题', { n: m.wrong }))
+      if (m.userBooks) parts.push(t('{n} 本自建词书', { n: m.userBooks }))
+      if (m.customWords) parts.push(t('{n} 个导入词', { n: m.customWords }))
+      if (m.dayCount) parts.push(t('{a} 天学习记录（{b} ~ {c}）', { a: m.dayCount, b: m.from, c: m.to }))
+      if (m.hasSettings) parts.push(t('设置与 AI 配置'))
+      if (m.hasChat) parts.push(t('对话陪练记录'))
+      return parts.join('，') + '。'
+    },
+
+    previewImport(text) {
+      const info = backup.peek(text)
+      if (!info) {
+        uni.showToast({ title: t('这不是 AWword 的备份文件'), icon: 'none' })
+        return
+      }
+      if (Number(info.v) > backup.BACKUP_VERSION) {
+        uni.showToast({ title: t('备份来自更新版本的 App，请先升级'), icon: 'none' })
+        return
+      }
+      this.pendingImport = text
+      const sum = this.summaryText(info.meta)
+      if (info.enc === 'password') {
+        this.confirm = Object.assign(this.blankConfirm(), {
+          show: true, mode: 'input', danger: false,
+          title: t('这份备份有密码'),
+          content: sum + t('输入导出时设的密码才能解开。'),
+          confirmText: t('解密并导入'),
+          placeholder: t('备份密码'),
+          password: true, maxlength: 32,
+          action: 'import-pwd'
+        })
+        return
+      }
+      this.confirm = Object.assign(this.blankConfirm(), {
+        show: true,
+        title: t('导入这份备份？'),
+        content: sum + t('导入会覆盖本机现有的全部学习数据与设置，不可撤销。'),
+        confirmText: t('覆盖导入'),
+        action: 'import-go'
+      })
+    },
+
+    async doImport(password) {
+      if (this.backupBusy) return
+      this.backupBusy = true
+      this.backupStage = t('正在导入…')
+      try {
+        const decoded = backup.decode(this.pendingImport, password)
+        const r = backup.restore(decoded)
+        this.backupBusy = false
+        this.pendingImport = ''
+        if (r.failed && r.failed.length) {
+          uni.showToast({ title: t('部分数据导入失败，请重试'), icon: 'none' })
+          return
+        }
+        this.refresh()
+        uni.showToast({ title: t('导入完成'), icon: 'success' })
+      } catch (e) {
+        this.backupBusy = false
+        const code = String((e && e.message) || '')
+        uni.showToast({ title: this.importErrText(code), icon: 'none' })
+        // 密码错了再给一次机会：pendingImport 还留着，把输入框原样弹回来
+        if (code === 'BAD_PASSWORD' || code === 'NEED_PASSWORD') this.previewImport(this.pendingImport)
+      }
+    },
+
+    // decode 抛的是英文代号，给用户的必须是人话
+    importErrText(code) {
+      if (code === 'NEED_PASSWORD') return t('这份备份设有密码')
+      if (code === 'BAD_PASSWORD') return t('密码不对，再试一次')
+      if (code === 'TAMPERED') return t('备份文件被改动过，已拒绝导入')
+      if (code === 'NEWER_VERSION') return t('备份来自更新版本的 App，请先升级')
+      if (code === 'NOT_BACKUP') return t('这不是 AWword 的备份文件')
+      if (code === 'EMPTY') return t('备份内容为空')
+      return t('备份文件已损坏')
+    },
+
     // ---------- 外观 ----------
     pickAccent(e) {
       const key = e.currentTarget.dataset.k
@@ -1340,6 +1633,8 @@ export default {
       this.readEngineStatus()
       // 彩蛋发现次数（老数据没有 egg 字段，兜 0）
       this.eggFound = ((s.egg || {}).found || 0)
+      // 上次导出的时间（老数据没有 backup 字段，兜 0 = 从未备份）
+      this.lastBackupAt = Number(((s.backup || {}).lastAt) || 0)
     },
     // 配置指纹：地址/模型/密钥任一变化即视为"未验证"
     configSig() {
@@ -1510,11 +1805,14 @@ export default {
 
     // 弹窗初始态：confirm（危险确认）与 sheet（选语言）共用一张卡片，
     // 每次开弹窗都从这张空白表起，避免上一轮的 items / mode 串味
+    // input / alert 这几个字段也必须各自归零：上一轮弹的是密码框（password=true），
+    // 下一轮如果只覆盖 title，用户会看到一个莫名被掩码的输入框
     blankConfirm() {
       return {
         show: false, mode: 'confirm', title: '', content: '',
         confirmText: t('确定'), items: [], danger: true,
-        seq: (this.confirm && this.confirm.seq || 0) + 1, action: ''
+        seq: (this.confirm && this.confirm.seq || 0) + 1, action: '',
+        btnMode: 'confirm', value: '', placeholder: '', password: false, maxlength: 24
       }
     },
 
@@ -1554,6 +1852,27 @@ export default {
         this.doClear('words')
       } else if (act === 'clear-sentences') {
         this.doClear('sentences')
+      } else if (act === 'export-menu') {
+        // sheet：载荷是选中下标
+        const pick = items[payload]
+        if (pick && pick.key) this.onExportMenu(pick.key)
+      } else if (act === 'export-pwd') {
+        // input：载荷是文本
+        const pwd = String(payload || '')
+        if (pwd.length < 4) {
+          uni.showToast({ title: t('密码至少 4 位'), icon: 'none' })
+          return
+        }
+        this.doExport(pwd, false)
+      } else if (act === 'import-pick') {
+        const pick = items[payload]
+        if (!pick) return
+        if (pick.key === '__clipboard__') this.readImportFromClipboard('')
+        else this.readImportFile(pick.key)
+      } else if (act === 'import-pwd') {
+        this.doImport(String(payload || ''))
+      } else if (act === 'import-go') {
+        this.doImport('')
       }
     }
   }
@@ -2021,6 +2340,22 @@ export default {
 .row-value { font-size: 24rpx; color: var(--ink-2, #5a6560); flex-shrink: 0; text-align: right; }
 
 .row-arrow { font-size: 32rpx; color: #c8cdc9; flex-shrink: 0; }
+
+/* 导出 / 导入下面那句说明：比 row-desc 更淡一号，且不带分隔线，
+   读起来像"注"，不像又一行设置 */
+.backup-note {
+  padding: 20rpx 0 26rpx;
+  border-bottom: 2rpx solid rgba(23, 32, 26, 0.07);
+  border-bottom: 2rpx solid rgba(var(--neutral-rgb, 23, 32, 26), 0.07);
+}
+
+.backup-note-text {
+  display: block;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #98a19b;
+  color: var(--ink-3, #98a19b);
+}
 
 /* 行内文字按钮（如"重新检测"） */
 .row-action {

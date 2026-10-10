@@ -36,6 +36,10 @@ function defaults() {
     egg: { found: 0 },
     // 隐私
     privacy: { storeLocal: true },
+    // 数据备份（换手机迁移，见 utils/backup.js）。
+    // 只记"上次导出过什么"，纯粹用于设置页显示一行提示；
+    // 备份内容本身在文件 / 剪贴板里，不在这里。
+    backup: { lastAt: 0, lastFile: '' },
     // 外观：主题色 / 背景（key 见 utils/theme.js 的 ACCENTS 与 BACKGROUNDS）
     theme: {
       accent: 'blue',      // 主题色

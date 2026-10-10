@@ -31,12 +31,19 @@ const eq = (a, b, m) => assert(a === b, m + '（期望 ' + b + '，实际 ' + a 
   const bi = await import(U('data/build-info.js'));
   const info = bi.BUILD_INFO;
   assert(!!info && typeof info.version === 'string', 'data/build-info.js 导出了 BUILD_INFO.version');
-  eq(info.version, '1.0 Beta', '快照里的版本号');
+  eq(info.version, '1.1 Beta', '快照里的版本号');
 
   // manifest 是严格 JSON（HBuilderX 会重写它），别加注释
   const mf = JSON.parse(R('manifest.json'));
   eq(mf.versionName, info.version, 'manifest.json 的 versionName 与快照一致');
   assert(/^\d+$/.test(String(mf.versionCode)), 'versionCode 仍是整数（' + mf.versionCode + '）');
+  // versionCode 只涨不跌，且前两位 = 主版本+次版本（1.1 → 111）。
+  // 只改 versionName 不改 versionCode 是最容易漏的一步：系统/商店按 versionCode 判断
+  // "是不是新版"，不涨就装不上（覆盖安装被拒），而界面上却显示着"新版本" —— 极难排查。
+  const mm = String(info.version).match(/^(\d+)\.(\d+)/);
+  assert(!!mm && String(mf.versionCode).indexOf(mm[1] + mm[2]) === 0,
+    'versionCode 前两位跟着主/次版本走（' + mf.versionCode + ' ↔ ' + info.version + '）');
+  assert(Number(mf.versionCode) >= 111, 'versionCode 只涨不跌（地板 111 = 1.1）');
 
   // 页面里不能再出现"读宿主 App 版本"的兜底：那正是小程序端显示 8.0.5 的根因
   assert(code.indexOf('plus.runtime.version') < 0, '不再读 plus.runtime.version');

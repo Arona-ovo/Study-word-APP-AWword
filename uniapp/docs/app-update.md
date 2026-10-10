@@ -1,7 +1,8 @@
 # App 自动覆盖更新方案（Android / uni-app）
 
 面向本项目现状：HBuilderX 云打包 Android APK、无服务器、AppID 尚未获取、
-`manifest.json` 当前 `versionName=1.1.0 / versionCode=101`、
+`manifest.json` 当前 `versionName=1.1 Beta / versionCode=111`（与 `data/build-info.js` 的
+`BUILD_INFO.version` 同步维护，`versionCode` 只涨不跌）、
 `app-plus.distribute.android.permissions` 只有 `INTERNET`。
 
 ---
