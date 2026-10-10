@@ -1,11 +1,12 @@
 # _tools/gen-avatar.py - 生成「我的」页默认头像（uniapp/static/avatar-default.jpg）
 #
 # 为什么要有这个脚本：
-#   默认头像原来复用的是 static/mascot.jpg ——  那是张 800x480 的横版看板娘线稿，
-#   而头像在 profile.vue 里是 110rpx 的正圆（mode="aspectFill"）。
-#   横图塞进正圆：aspectFill 先按短边放大再裁掉左右，脸会被拉大、头顶和蝴蝶结全被切掉，
-#   实际显示出来只剩半张脸，很难看。
-#   这里把方形的看板娘原画（static/icons/icon-1024.png，与应用图标同源）裁成正方形，
+#   默认头像原来复用的是 static/mascot.jpg —— 那是张 800x480 的横版看板娘线稿。
+#   头像在 profile.vue 里是 110rpx 的正圆（mode="aspectFill"）：横图会被按短边放大、
+#   再取中间一块正方形，结果是人物在圆里又小又偏，光环和蝴蝶结还被切掉
+#   （对照图见 _tools/_scratch/avatar-before-after.py）。这种"能看见、但不像头像"的问题
+#   不看真机根本发现不了，所以这里干脆做一张专门的方形头像图。
+#   原画用 static/icons/icon-1024.png（与应用图标同源的正方形构图），裁成正方形、
 #   让「脸」落在正圆中心，再压成 512x512 的 jpg。
 #
 # 用法：python gen-avatar.py      （输出 ../../uniapp/static/avatar-default.jpg）

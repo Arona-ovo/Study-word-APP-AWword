@@ -8,7 +8,7 @@
 //  4) 用户自定义过的昵称不被迁移覆盖
 //  5) 默认头像必须指向 static/avatar-default.jpg（正方形、体积可控），
 //     不能再指回 800x480 的静态横图 mascot.jpg —— 头像框是 110rpx 正圆 + aspectFill，
-//     横图会被裁得只剩半张脸，这种问题肉眼不看真机根本发现不了
+//     横图取中间方形后人物又小又偏、在圆里看不清脸，这种问题肉眼不看真机根本发现不了
 
 const fs = require('fs');
 const path = require('path');
@@ -77,7 +77,7 @@ const av = /this\.profile\.avatar \|\| '([^']+)'/.exec(vueClean);
 assert(av, 'profile.vue 有头像兜底表达式 profile.avatar || 默认图');
 if (av) eq(av[1], '/static/avatar-default.jpg', '默认头像路径');
 assert(!/static\/mascot\.jpg/.test(vueClean),
-  '不再引用横版 mascot.jpg（800x480 塞进正圆会被 aspectFill 裁烂）');
+  '不再引用横版 mascot.jpg（800x480 取中间方后人物小且偏，不适合圆形头像）');
 
 /** 极简 JPEG 尺寸解析：扫到 SOF 段读高宽（不引第三方库） */
 function jpegSize(buf) {
