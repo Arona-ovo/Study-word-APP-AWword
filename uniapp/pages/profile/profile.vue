@@ -136,7 +136,9 @@ export default {
   },
   computed: {
     avatarSrc() {
-      return this.profile.avatar || '/static/mascot.jpg'
+      // 没设过头像就用本地默认图：512x512 正方形（圆的看板娘脸），
+      // 不能用 static/mascot.jpg —— 那是 800x480 横图，塞进 110rpx 正圆会被 aspectFill 裁烂。
+      return this.profile.avatar || '/static/avatar-default.jpg'
     }
   },
   onShow() {

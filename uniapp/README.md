@@ -61,9 +61,10 @@
 ├── main.js / App.vue        # 入口 + 全局样式（设计令牌与原 DESIGN.md 一致）
 ├── pages.json               # 路由 + tabBar(4 项带图标) + 窗口样式（替代原 app.json）
 ├── manifest.json            # 应用配置（App 打包在此配置）
-├── static/mascot.jpg        # 看板娘图片（「我的」页默认头像）
+├── static/avatar-default.jpg  # 「我的」页默认头像（512x512 正方形，_tools/gen-avatar.py 生成）
+├── static/mascot.jpg        # 看板娘横版原画（现只给仓库根 README 当 Logo，App 内不再引用）
 ├── static/mascot/           # 启动页阿罗娜七表情（smile/tongue/hi/nervous/sad/angry/shocked，按学习状态切换，见 pages/cover）
-├── static/                  # mascot.jpg + tabbar/ 底部导航图标（scripts/gen-tab-icons.py 生成）
+├── static/                  # 默认头像 / 看板娘 / icons/ 应用图标 / tabbar/ 底部导航图标（scripts/gen-tab-icons.py 生成）
 ├── data/  words.js / sentences.js / wordbooks.js / common-words.js   # 题库与词书
 ├── services/                # 统一 AI 服务层（详见下文「AI 服务层」）
 │   ├── config.js            # 中心化配置：设置 + 环境变量，密钥零硬编码；含服务商预设
