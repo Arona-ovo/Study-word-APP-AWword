@@ -480,6 +480,10 @@ export const COMMAND_PARAMS = {
     mood: vStr(20, '')
   },
   'goal.set': { newWords: vInt(5, 300, null), practice: vInt(5, 300, null) },
+  // 换词书。name / id 二选一（都给也行），name 支持简称：
+  // 用户说"换成四级词书"时模型写 {name:"四级"} 就能命中，不必记 id。
+  // 不能把两个都设成 required —— 模型常常只说得清其中一种。
+  'book.switch': { name: vStr(24, ''), id: vStr(24, '') },
   'skin.save': { name: req(vStr(16, '')) },
   'skin.apply': { name: req(vStr(16, '')) },
   'macro.run': { name: req(vEnum(['exam', 'commute', 'bedtime', 'focus'], 'exam')) },
@@ -504,6 +508,7 @@ export const COMMAND_META = {
   'theme.set': { group: '主题', desc: '主题色 / 深色模式 / 字体 / 动效 / 密度' },
   'bg.set': { group: '背景', desc: '背景预设 / 图片 / 渐变 / 蒙版 / 模糊 / 心情' },
   'goal.set': { group: '学习', desc: '调整当前词书的每日目标' },
+  'book.switch': { group: '学习', desc: '切换当前词书。name 可写简称（四级 / 六级 / 考研 / 专升本 / 高考 / 中考），id 写精确 id' },
   'skin.save': { group: '快照', desc: '把当前首页存成命名快照' },
   'skin.apply': { group: '快照', desc: '应用某个已保存的快照' },
   'macro.run': { group: '场景', desc: '运行内置场景宏：exam/commute/bedtime/focus' },
@@ -521,6 +526,17 @@ export function normalizeCommand(raw) {
   }
   const srcRaw = (raw.args && typeof raw.args === 'object') ? raw.args : raw;
   let src = srcRaw;
+
+  // book.switch：name / id 至少给一个。
+  // 放这里（而不是执行层）是因为这条报错会**回喂给模型重试一轮**，
+  // 在 plan 阶段就拦下，模型有机会补上参数；等执行层才发现就整批回退了。
+  if (op === 'book.switch') {
+    const hasName = String(srcRaw.name == null ? '' : srcRaw.name).trim() !== '';
+    const hasId = String(srcRaw.id == null ? '' : srcRaw.id).trim() !== '';
+    if (!hasName && !hasId) {
+      return { ok: false, reason: 'book.switch：需要 name 或 id —— 说清要换成哪本词书（name 可写简称，如 四级 / 考研 / 专升本）' };
+    }
+  }
 
   // 特殊参数（对象 / 数组 / 多形态）单独归一化，再拼回去
   const extra = {};
@@ -710,6 +726,11 @@ export function promptManual(ops) {
     lines.push('背景：preset=' + BG_PRESETS.join('/') + '；gradient={from,to,angle}；mood 为心情/颜色词（如 沉静/活泼/温暖/蓝色渐变）——用户描述自定义颜色时用 mood 或 gradient，preset 只能填上面列出的预设名');
   }
   if (has('theme.set') || has('bg.set')) lines.push('');
+  if (has('book.switch')) {
+    lines.push('book.switch：name 或 id 给一个就行；name 支持简称（四级 / 六级 / 考研 / 专升本 / 高考 / 中考）。'
+      + '可选词书清单见下方【当前首页】的「可选词书」—— 只能从里面挑，不要编书名。');
+    lines.push('');
+  }
   if (has('card.design')) {
     lines.push(cardSpec.promptSpec());
     lines.push('');

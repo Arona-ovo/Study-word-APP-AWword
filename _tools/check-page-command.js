@@ -58,6 +58,7 @@ function eq(a, b, label) {
   const schema = await import(P('utils/page-schema.js'));
   const pageDoc = await import(P('utils/page-doc.js'));
   const pageCommand = await import(P('utils/page-command.js'));
+  const wordbook = await import(P('utils/wordbook.js'));
   const intent = await import(P('utils/intent.js'));
   const pageAgent = await import(P('services/page-agent.js'));
   const imageGen = await import(P('services/image-gen.js'));
@@ -108,7 +109,9 @@ function eq(a, b, label) {
 
   /* ---------------- 3. 指令归一化 ---------------- */
   console.log('== 3. 指令归一化：白名单与必填 ==');
-  eq(schema.COMMAND_OPS.length, 20, '指令条目数 = 20（含 card.design）');
+  // 20 → 21：2026-10-10 新增 book.switch（换词书），AI 第一次越过"改页面"动学习数据。
+  // 这条数字断言就是防"悄悄多出一个 op"的，加指令时同步改这里。
+  eq(schema.COMMAND_OPS.length, 21, '指令条目数 = 21（含 card.design 与 book.switch）');
   assert(schema.COMMAND_OPS.indexOf('card.design') >= 0, '指令表含 card.design');
   assert(schema.normalizeCommand({ op: 'card.drop' }).ok === false, '未知 op 被拒');
   assert(schema.normalizeCommand({ op: 'card.remove' }).ok === false, '缺少必填 target 被拒');
@@ -426,6 +429,70 @@ function eq(a, b, label) {
   eq(r.doc.cards.map(c => c.id), DEF_LAYOUT, 'card.reset 回到默认首页');
 
   /* ---------------- 6. 原子回退与撤销 ---------------- */
+  /* ---------------- 5b. 换词书 book.switch ---------------- */
+  // 2026-10-10 新增：这是 AI 第一次越过"改页面"去动学习数据，
+  // 所以除了匹配正确，还要守住两件事：① 换错了能撤销；② 整批失败要回滚。
+  console.log('== 5b. 换词书 book.switch ==');
+  const BOOK0 = wordbook.currentBookId();
+  pageCommand.clearHistory();
+  const switchTo = (name) => {
+    const r = pageCommand.applyCommands(pageDoc.defaultDoc(), [{ op: 'book.switch', args: { name: name } }], {});
+    const applied = (r.applied && r.applied[0]) || {};
+    const got = wordbook.currentBookId();
+    wordbook.switchBook(BOOK0);   // 每条都还原，别污染后面的用例
+    return { ok: r.ok, got: got, note: applied.note || '', reason: r.reason || '' };
+  };
+  assert(schema.COMMAND_OPS.indexOf('book.switch') >= 0, '白名单含 book.switch');
+  assert(schema.promptManual().indexOf('- book.switch：') >= 0, '全量手册写了 book.switch');
+
+  const s1 = switchTo('四级');
+  eq(s1.got, 'cet4', '简称「四级」→ cet4');
+  assert(s1.note.indexOf('大学英语四级') >= 0, 'note 报出切到了哪本：' + s1.note);
+  eq(switchTo('大学英语四级').got, 'cet4', '精确书名 → cet4');
+  eq(switchTo('cet6').got, 'cet6', 'id 精确 → cet6');
+  eq(switchTo('六级').got, 'cet6', '简称「六级」→ cet6');
+  eq(switchTo('我要背考研词汇').got, 'kaoyan', '含糊说法「我要背考研词汇」→ kaoyan');
+  eq(switchTo('高中').got, 'gao_kao', '「高中」→ 高考英语');
+  eq(switchTo('初中').got, 'junior_core', '「初中」→ 中考英语');
+
+  const sNow = switchTo(BOOK0);   // 传当前这本的 id，走"已经是当前"分支
+  assert(sNow.ok && sNow.got === BOOK0, '已经是当前词书时幂等（不报错）');
+  assert(sNow.note.indexOf('已经在用') >= 0, '幂等时给出说明而不是静默：' + sNow.note);
+
+  const sBad = switchTo('日语');
+  assert(sBad.ok === false, '没有这本词书 → 整条失败');
+  assert(sBad.reason.indexOf('没找到') >= 0 && sBad.reason.indexOf('现在有') >= 0,
+    '失败文案给出可选清单：' + sBad.reason);
+  assert(sBad.reason.indexOf('book.switch') < 0, '失败文案不带 op 名');
+
+  const nBook = schema.normalizeCommands([{ op: 'book.switch', args: {} }]);
+  assert(nBook.ok === false, 'name / id 都不给 → 归一化阶段就拦下（还能回喂模型重试）');
+  assert((nBook.errors[0] || '').indexOf('name 或 id') >= 0, '报错写清要补什么：' + nBook.errors[0]);
+  assert(schema.normalizeCommands([{ op: 'book.switch', args: { name: '四级' } }]).ok, '只给 name 也能过');
+
+  // 撤销要能把词书一起还原 —— commit 必须靠 effects 里的 prev 记基线
+  pageCommand.clearHistory();
+  const rBook = pageCommand.applyCommands(pageDoc.defaultDoc(), [{ op: 'book.switch', args: { name: '六级' } }], {});
+  pageCommand.commit(rBook.doc, '换词书', rBook.effects);
+  assert(wordbook.currentBookId() === 'cet6', '提交后词书是 cet6');
+  pageCommand.undo();
+  eq(wordbook.currentBookId(), BOOK0, '撤销把词书一起还原');
+
+  // 整批失败：已经切走的词书必须切回来，不能"报错了但词书被换了"
+  const rRoll = pageCommand.applyCommands(pageDoc.defaultDoc(), [
+    { op: 'book.switch', args: { name: '六级' } },
+    { op: 'card.remove', args: { target: { title: '这张卡肯定不存在' } } }
+  ], {});
+  assert(rRoll.ok === false, '后一条失败 → 整批失败');
+  eq(wordbook.currentBookId(), BOOK0, '整批失败时词书回滚');
+  pageCommand.clearHistory();
+
+  const dgBook = pageAgent.docDigest(pageDoc.defaultDoc(), pageDoc.liveValues());
+  assert(dgBook.indexOf('【可选词书】') >= 0, 'digest 带可选词书清单（模型才不会编书名）');
+  assert(dgBook.indexOf('大学英语四级') >= 0, '清单里有具体书名');
+  const rRouteBook = pageAgent.routeOps('换成四级词书');
+  assert(rRouteBook.ops && rRouteBook.ops.indexOf('book.switch') >= 0, '路由认得换词书', rRouteBook.ops);
+
   console.log('== 6. 失败回退 / 撤销 ==');
   const before = pageDoc.defaultDoc();
   r = pageCommand.applyCommands(before, [
@@ -622,6 +689,24 @@ function eq(a, b, label) {
   assert(sp.indexOf('只能输出 JSON') >= 0, 'system prompt 强调纯 JSON');
   assert(sp.indexOf('card.add') >= 0, 'system prompt 含指令手册');
   assert(sp.indexOf('当前首页') >= 0, 'system prompt 含当前页面状态');
+
+  // 「很多问题回答不了」：29/66 条真实口语压根没有 op 能表达（问学习数据 / 出练习题 /
+  // 换词书 / 定时提醒 / 换语言 / 导出数据）。以前模型只会干巴巴一句"这个我还改不了"。
+  // 这里守住三条：① 问学习数据要能答（用 digest 里的真数据，不许编）；
+  // ② 做不到的要指路去对应页面；③ 不许硬凑指令。
+  assert(sp.indexOf('commands 必须是空数组') >= 0, 'system prompt 教模型"只回答不操作"');
+  assert(sp.indexOf('真实学习数据') >= 0 && sp.indexOf('一个都不许编') >= 0,
+    '问答规则：数字只能取自真实学习数据');
+  ['练习页', '刷单词页', '词库页', '统计页', '设置页', '对话陪练页', '复习列表页']
+    .forEach(p => assert(sp.indexOf(p) >= 0, '指路清单含「' + p + '」'));
+  assert(sp.indexOf('硬凑一条不相关的指令') >= 0, '明确禁止硬凑指令');
+
+  // 出图的临时规则是动态插入的（wantsImage 命中时才有），编号不能和 10/11/12 撞号，
+  // 撞号会让模型不知道该听哪条。
+  const spImg = pageAgent.systemPrompt(pageDoc.defaultDoc(), pageDoc.liveValues(), '已为你生成好一张背景图');
+  assert(spImg.indexOf('13. 已为你生成好一张背景图') >= 0, '出图临时规则编号 13（不与 10/11/12 撞号）',
+    spImg.split('\n').filter(l => /^1[0-3]\./.test(l)).map(l => l.slice(0, 12)));
+  assert(/(^|\n)(10|11|12)\./.test(spImg), '问答规则仍在（10/11/12）');
   assert(pageAgent.docDigest(pageDoc.defaultDoc(), pageDoc.liveValues()).indexOf('真实学习数据') >= 0,
     '状态摘要含真实学习数据');
   assert(pageAgent.aiImagePrompt('帮我把背景换成下雨的窗边').indexOf('rain') >= 0
@@ -816,6 +901,12 @@ function eq(a, b, label) {
   // 部分成功（有指令被跳过）必须说出来，不能只报成功摘要
   assert(/this\.cmdError\s*=\s*r\.error/.test(homeSrc), 'home.vue 接住 plan 的「有指令被跳过」提示');
   assert(/没做到/.test(homeSrc), '指令条对部分成功给出说明文案');
+
+  // 换词书是唯一会立刻写 store 的指令（不在 pageDoc 里），撤销靠 commit 记的基线。
+  // 不把 effects 传进 commit，撤销就成了"页面退回去、词书还停在新那本"。
+  assert(/pageCommand\.commit\(res\.doc, summary, res\.effects\)/.test(homeSrc),
+    'home.vue 把 effects 传给 commit（撤销才能还原词书）');
+  assert(/ef\.kind === 'book'/.test(homeSrc), 'home.vue 接住换词书副作用（刷新 live 与目标数）');
 
   // 模型侧也要提前知道装不装得下 —— 不写进 prompt，它就照常吐 card.add 撞我们的报错，
   // 用户看到的还是"指令失败"；写进去它就会 commands 为空 + say 里解释。

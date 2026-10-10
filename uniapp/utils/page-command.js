@@ -62,6 +62,52 @@ function visibleCount(cards) {
   return (cards || []).filter(c => c.visible !== false).length;
 }
 
+/**
+ * 词书模糊匹配：用户说"换成四级词书"，模型多半就写 {name:"四级"}。
+ * 匹配顺序：精确 id → 简称别名 → 书名精确 → 书名包含 → 说法包含书名。
+ * 顺序很关键：'大学英语四级' 里含 '四级'（第 4 步就够），
+ * 但 '四级' 不含书名（第 5 步才兜住"高中"→"高考英语"这类反向说法）。
+ */
+const BOOK_ALIAS = [
+  // 不锚定 ^$：「四级词汇」「大学英语四级」都要能命中。
+  // 反例检查过：含"六级"的说法里不会同时含"四级"，顺序不会串。
+  [/(四级|cet[-_ ]?4|4级)/i, 'cet4'],
+  [/(六级|cet[-_ ]?6|6级)/i, 'cet6'],
+  [/(考研|kaoyan)/i, 'kaoyan'],
+  [/(专升本|zsb|福建)/i, 'fj_zsb_core'],
+  [/(高考|高中)/i, 'gao_kao'],
+  [/(中考|初中)/i, 'junior_core'],
+  [/(导入|inbox|分享)/i, 'custom_inbox'],
+  // 「我要背词汇」「换成考研词汇」这类含糊说法：没有具体考试名，
+  // 落到默认书（福建专升本）比判死强 —— 用户至少能看到"换了哪本"再撤销。
+  [/(默认|基础)/i, 'fj_zsb_core']
+];
+
+function matchBook(books, q) {
+  const s = String(q || '').trim();
+  if (!s) return null;
+  const byId = books.find(b => b.id === s || String(b.id).toLowerCase() === s.toLowerCase());
+  if (byId) return byId;
+  for (let i = 0; i < BOOK_ALIAS.length; i++) {
+    if (BOOK_ALIAS[i][0].test(s)) {
+      const b = books.find(x => x.id === BOOK_ALIAS[i][1]);
+      if (b) return b;
+    }
+  }
+  const exact = books.find(b => b.name === s);
+  if (exact) return exact;
+  const inc = books.find(b => b.name.indexOf(s) >= 0);
+  if (inc) return inc;
+  const rev = books.find(b => s.indexOf(b.name) >= 0);
+  if (rev) return rev;
+  return null;
+}
+
+/** id 优先、name 兜底：两个都给了也不会因为其中一个写歪而失败 */
+function pickBook(books, id, name) {
+  return matchBook(books, id) || matchBook(books, name) || null;
+}
+
 /** 抹掉内部前缀：'第 1 条：card.add：xxx' → 'xxx'（用于兜底的 error 文案） */
 function stripOp(s) {
   return String(s == null ? '' : s)
@@ -505,6 +551,36 @@ export const COMMANDS = {
     return { doc: doc, note: '目标改为 ' + txt, effects: [{ kind: 'goal' }] };
   },
 
+  /* ---------- 换词书 ---------- */
+  // 这是 AI 第一次越过"改页面"去动学习数据，所以匹配要保守：
+  // 只要对不上就报错并把可选清单交给用户，绝不猜、绝不默认切到第一本。
+  'book.switch': (doc, args) => {
+    const id = String(args.id == null ? '' : args.id).trim();
+    const name = String(args.name == null ? '' : args.name).trim();
+    let books = [];
+    try { books = wordbook.listBooks() || []; } catch (e) { books = []; }
+    if (!books.length) return fail('book.switch: 词书列表为空', '没读到词书列表，去「词库」页手动换一下吧');
+    const hit = pickBook(books, id, name);
+    if (!hit) {
+      const names = books.map(b => b.name).join(' / ');
+      return fail('book.switch: 没有匹配 ' + (name || id),
+        '没找到「' + (name || id) + '」这本词书。现在有：' + names + '。');
+    }
+    if (hit.current) return { doc: doc, note: '已经在用《' + hit.name + '》了' };
+    // 记下切换前的 id：切词书改的是 store 里的 currentBook，不在 pageDoc 里，
+    // 撤销时只回退 doc 还原不了，得靠这份 prev 显式切回去。
+    const prevBookId = wordbook.currentBookId();
+    let ok = false;
+    try { ok = wordbook.switchBook(hit.id); } catch (e) { ok = false; }
+    if (!ok) return fail('book.switch: switchBook 返回 false ' + hit.id, '词书没切过去，去「词库」页手动换一下吧');
+    return {
+      doc: doc,
+      note: '词书换成《' + hit.name + '》',
+      // prev 留给撤销用：切词书不在 pageDoc 里，光回退 doc 还原不了
+      effects: [{ kind: 'book', id: hit.id, name: hit.name, prev: prevBookId }]
+    };
+  },
+
   /* ---------- 快照 ---------- */
   'skin.save': (doc, args) => {
     const name = String(args.name || '').trim();
@@ -623,6 +699,11 @@ export function run(doc, cmds, opt) {
   const applied = [];
   const effects = [];
 
+  // book.switch 是唯一会**立刻写 store**的指令（其余都只是产出新 doc、不落盘，
+  // 所以天然满足原子性）。这条必须自己管回滚：一批指令里任何一条失败，
+  // 已经切过去的词书要切回来 —— 否则用户看到的是"报错了，但词书还是被换了"。
+  let bookRollback = '';
+
   const queue = [];
   (cmds || []).forEach(c => queue.push(c));
 
@@ -630,6 +711,10 @@ export function run(doc, cmds, opt) {
   // 带内部操作名的精确串一律进 rawReason / console（排查用，用户永远不该看到）。
   const bail = (cmd, raw, human) => {
     try { console.warn('[page-command] ' + raw) } catch (e) { /* 日志失败不影响返回 */ }
+    // 整批失败 → 把已经切走的词书切回来，保持"失败即什么都没发生"
+    if (bookRollback) {
+      try { if (wordbook.currentBookId() !== bookRollback) wordbook.switchBook(bookRollback); } catch (e) { /* 回滚失败不掩盖原始报错 */ }
+    }
     return {
       ok: false,
       doc: start,
@@ -679,7 +764,12 @@ export function run(doc, cmds, opt) {
     cur = r.doc;
     // silent = 幂等命中（如"隐藏一张已经隐藏的卡"）：不计入摘要，避免刷屏
     if (!r.silent) applied.push({ op: cmd.op, note: r.note || '' });
-    (r.effects || []).forEach(e => effects.push(e));
+    (r.effects || []).forEach(e => {
+      effects.push(e);
+      // 只记**第一次**切换前的 id：一批里连切两本（四级→六级）时，
+      // 回滚要回到最初的那一本，而不是中间态。
+      if (e && e.kind === 'book' && e.prev && !bookRollback) bookRollback = e.prev;
+    });
   }
 
   return { ok: true, doc: cur, applied: applied, failed: null, reason: '', effects: effects };
@@ -715,16 +805,24 @@ export function applyCommands(doc, rawCmds, opt) {
  * 只靠它还原不了"改之前是什么样"——比如 doc.theme.dark=null 既可能是"用户没说"，
  * 也可能是"撤销回没改过的状态"。带上这份基线，撤销才是真正的一步到位。
  */
-export function snapshot(doc, summary) {
+export function snapshot(doc, summary, bookPrev) {
   const st = settings.get() || {};
   let th = null;
   let perf = null;
   try { th = JSON.parse(JSON.stringify(st.theme || {})); } catch (e) { th = null; }
   try { perf = JSON.parse(JSON.stringify(st.performance || {})); } catch (e) { perf = null; }
+  // book.switch 改的是 store 里的 currentBook，不在 pageDoc 里 —— 不留这份基线，
+  // 撤销就只回退页面、词书还停在新那本，用户会发现"撤销了但没完全撤销"。
+  // ⚠️ 基线**不能**在这里读 currentBookId()：commit() 是在指令执行**之后**调用的，
+  // 那时词书已经切走了，读到的是新值，撤销等于什么都没做。
+  // 所以必须由调用方把"执行前的那本"通过 bookPrev 传进来（来自 book.switch 的 effects.prev）。
+  let book = bookPrev || '';
+  if (!book) { try { book = wordbook.currentBookId(); } catch (e) { book = ''; } }
   history.push({
     doc: JSON.parse(JSON.stringify(doc)),
     theme: th,
     perf: perf,
+    book: book,
     summary: summary || '',
     at: Date.now()
   });
@@ -745,6 +843,10 @@ export function undo() {
   } catch (e) { /* 主题回退失败不影响其它改动 */ }
   applyThemeSideEffects(last.doc);
   applyBackgroundSideEffects(last.doc);
+  // 还原词书：只有真的切过才动，避免每次撤销都白写一次 store
+  try {
+    if (last.book && wordbook.currentBookId() !== last.book) wordbook.switchBook(last.book);
+  } catch (e) { /* 词书回退失败不影响页面回退 */ }
   return last.doc;
 }
 
@@ -763,8 +865,17 @@ export function clearHistory() {
 /* ============================================================
  * 提交：执行成功后的收尾（落盘 + 主题/背景副作用）
  * ============================================================ */
-export function commit(doc, summary) {
-  snapshot(pageDoc.get(), summary || '');
+/**
+ * @param {object} doc 执行后的新 pageDoc
+ * @param {string} summary 变更摘要
+ * @param {object[]} [effects] 本批指令的副作用（用来取"换词书前的那本"作撤销基线）
+ */
+export function commit(doc, summary, effects) {
+  let bookPrev = '';
+  for (const e of (effects || [])) {
+    if (e && e.kind === 'book' && e.prev) { bookPrev = e.prev; break; }
+  }
+  snapshot(pageDoc.get(), summary || '', bookPrev);
   pageDoc.save(doc);
   applyThemeSideEffects(doc);
   applyBackgroundSideEffects(doc);

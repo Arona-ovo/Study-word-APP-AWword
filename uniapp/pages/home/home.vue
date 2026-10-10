@@ -1191,6 +1191,16 @@ export default {
       try {
         const r = await pageAgent.plan(input, base, { live: this.live })
         if (!r.ok || !r.commands.length) {
+          // 模型只回答、没改页面（问学习数据 / 指路去别的页面）：这是正常问答，
+          // 不是执行失败 —— 走普通气泡，别甩红条。
+          // ⚠️ 必须把 cmdCanUndo 清掉：不清的话这里会挂着上一条指令的撤销键，
+          // 用户点一下撤的是上一步的改动，跟眼前这句回答毫无关系。
+          if (r.answered && r.say) {
+            this.cmdState = 'done'
+            this.cmdSay = r.say
+            this.cmdCanUndo = false
+            return
+          }
           this.cmdState = 'error'
           this.cmdError = r.error || r.say || t('这个我还改不了')
           return
@@ -1212,7 +1222,10 @@ export default {
           return
         }
         const summary = r.say || pageCommand.summaryOf(res.applied)
-        this.doc = pageCommand.commit(res.doc, summary)
+        // 第三个参数把 effects 传进去：commit 靠里面 book.switch 的 prev
+        // 记下"换词书前的那一本"，撤销才能把词书一起还原。
+        // ⚠️ 不传的话 commit 只能读执行后的 currentBookId —— 撤销会变成空操作。
+        this.doc = pageCommand.commit(res.doc, summary, res.effects)
         this.cmdState = 'done'
         this.cmdSay = summary
         this.cmdSummary = pageCommand.summaryOf(res.applied)
@@ -1240,6 +1253,13 @@ export default {
       for (const ef of list) {
         if (ef.kind === 'theme' || ef.kind === 'bg' || ef.kind === 'resetTheme') needTheme = true
         if (ef.kind === 'goal') this.sessionSize = this.loadSessionSize()
+        // 换词书：目标（每本词书各自一套）、词书名、词数、批次进度全变了。
+        // 只刷 sessionSize 不够 —— 卡片上的 {{live.*}} 绑定读的是 this.live，
+        // 不重取的话首页会一直显示上一本词书的数据，看起来像"切了但没生效"。
+        if (ef.kind === 'book') {
+          this.sessionSize = this.loadSessionSize()
+          this.refreshDoc()
+        }
         if (ef.kind === 'speak' && ef.text) {
           try { speakAny(ef.text) } catch (e) { /* 朗读失败不影响其它 */ }
         }
@@ -1270,7 +1290,10 @@ export default {
       const d = pageCommand.undo()
       if (!d) { this.cmdCanUndo = false; return }
       this.doc = d
-      this.layout = this.builtinIds()
+      // 用 refreshDoc 而不是只刷 layout：撤销会把 book.switch 一起回退
+      // （page-command 的 undo 还原了 currentBook），不重取 live 的话
+      // 卡片上还挂着新词书的书名和词数，用户会以为"撤销了但没完全撤销"。
+      this.refreshDoc()
       this.sessionSize = this.loadSessionSize()
       try { this.refreshAppTheme() } catch (e) { /* ignore */ }
       this.cmdState = 'done'

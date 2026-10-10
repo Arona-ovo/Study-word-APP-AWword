@@ -12,6 +12,7 @@ import { isAIUsable, aiGateReason } from './config.js';
 import * as schema from '../utils/page-schema.js';
 import * as pageDoc from '../utils/page-doc.js';
 import * as imageGen from './image-gen.js';
+import * as wordbook from '../utils/wordbook.js';
 import { featureOn } from './ai-gate.js';
 
 const MAX_ATTEMPTS = 3;
@@ -75,8 +76,24 @@ export function docDigest(doc, live) {
       '，今日练习=' + lv.practiceDone + '/' + lv.practiceTarget +
       '，词书=' + (lv.bookName || '（未选）') + '，当前批次=' + (lv.batchName || '—') +
       ' ' + lv.batchDone + '/' + lv.batchTotal +
-      '，今日停留=' + lv.usageToday + ' 分钟，日均=' + lv.usageAvg + ' 分钟'
+      '，今日停留=' + lv.usageToday + ' 分钟，日均=' + lv.usageAvg + ' 分钟',
+    '',
+    '【可选词书】（book.switch 只能从这里面挑，不要编书名）：' + (bookOptions() || '（读不到词书列表）')
   ].join('\n');
+}
+
+/**
+ * 可选词书清单（喂给模型）。
+ * 没有它，模型只能靠训练数据里的印象猜书名 —— "换成四级词书" 会被编成
+ * 「CET-4 Vocabulary」之类我们这儿不存在的名字，book.switch 匹配不上就报错。
+ */
+function bookOptions() {
+  try {
+    const list = wordbook.listBooks() || [];
+    return list.map(b => b.name + (b.current ? '（当前）' : '')).join('、');
+  } catch (e) {
+    return '';
+  }
 }
 
 /* ============================================================
@@ -99,7 +116,12 @@ const ROUTE_RULES = [
   { keys: ['删除', '删掉', '删了', '删去', '去掉', '移除', '不要', '隐藏', '显示', '藏起来', '收纳', '收起来', '收掉', '移动', '换到', '顺序', '位置', '调到', '恢复', '默认', '还原', '重置'], ops: ['card.remove', 'card.hide', 'card.show', 'card.move', 'card.restore', 'card.reset'] },
   { keys: ['文案', '文字', '标题', '改成', '写成', '换句', '语气', '改写', '幽默', '正式', '活泼', '温柔', '鼓励', '简洁', '那句话'], ops: ['text.set', 'text.rewrite', 'style.text'] },
   { keys: ['样式', '字号', '字大', '字小', '颜色', '圆角', '透明', '边距', '对齐', '居中', '加粗', '描边', '投影'], ops: ['style.card', 'style.text'] },
+  // ⚠️ '每天' 必须和 intent.js 同步（那边 DOMAIN_WORDS 刚补了它）。
+  // 不同步的后果老样子：判成指令，但手册里没给 goal.set → 模型只能瞎猜或空手而归。
   { keys: ['目标', '每日', '每天', '计划', '任务量'], ops: ['goal.set'] },
+  // 词书类：book.switch 是 2026-10-10 才有的指令，关键词必须和 intent.js 的
+  // LEARN_WORDS 同步（那边收了 '词汇' / '词书'），否则又会出现"判成指令但手册没给 op"。
+  { keys: ['词书', '词汇', '换本', '换一本', '考研', '四级', '六级', '专升本', '高考', '中考'], ops: ['book.switch'] },
   { keys: ['快照', '存成', '保存', '应用', '换回', '方案'], ops: ['skin.save', 'skin.apply'] },
   { keys: ['考试', '通勤', '睡前', '专注', '场景', '模式'], ops: ['macro.run'] },
   { keys: ['朗读', '读出来', '念', '播报', '说一句'], ops: ['page.announce'] },
@@ -156,7 +178,25 @@ export function systemPrompt(doc, live, extraRule, ops) {
     '8. 想造一张"排版讲究"的卡片（多栏、卡片内分区、有底色、带交互）时，优先用 card.design，',
     '   它比 card.add 自由得多；简单的一两句话小卡才用 card.add。',
     '9. card.design 新建卡片时省略 target（不要写 target:"" 或 null）；要改造某张现有卡片才给 target。',
-    extraRule ? ('10. ' + extraRule) : '',
+    '',
+    // 下面这几条专门治"很多问题回答不了"。
+    // 实测 66 条真实口语里有 29 条压根没有 op 能表达（问学习数据、出练习题、换词书、
+    // 设提醒、换语言、导出数据…）。以前模型只会回"这个我还改不了"，
+    // 用户看到的就是一句冰冷的拒绝 —— 但它手里其实握着【真实学习数据】，
+    // 也知道别的页面能干什么。把这两件事写进规则，回答率能救回一大半。
+    '面对问句（不是"帮我改点什么"）时的处理：',
+    '10. 用户问学习数据（今天学了多少 / 掌握多少 / 连续几天 / 还有多少没背 / 最近状态如何），',
+    '    commands 必须是空数组，把答案写进 say。数字只准取自下面【真实学习数据】，一个都不许编。',
+    '    答不上来的字段就说"这个我没有数据"，别猜。',
+    '11. 用户想做的事这里没有对应指令（出题 / 加生词本 / 定时提醒 / 换界面语言 / 导出数据 / 讲某个单词），',
+    '    commands 必须是空数组，在 say 里直接告诉他去哪儿做：',
+    '    出题练习→练习页；刷单词→刷单词页；查词 / 生词本→词库页；学习总结 / 曲线→统计页；',
+    '    定时提醒 / 界面语言 / 数据导出导入→设置页；用英文聊天 / 问单词怎么用→对话陪练页；错题→复习列表页。',
+    '12. 硬凑一条不相关的指令比空指令糟糕得多 —— 那会把首页改成用户根本没要的样子。',
+    '    拿不准就 commands 为空，用 say 说清"能做的是什么 / 该去哪儿"。',
+    // 出图相关的临时规则放最后：它只在 wantsImage() 命中时才出现，
+    // 编号跟着上面走，不要跟 10/11/12 撞号（撞号会让模型不知道该听哪条）。
+    extraRule ? ('13. ' + extraRule) : '',
     '',
     (ops && ops.length) ? '本次只列出与这个请求相关的指令（不见的指令本次用不到）。' : '',
     schema.promptManual(ops),
@@ -328,9 +368,19 @@ export async function plan(text, doc, opt) {
       continue;
     }
     if (!rawCmds.length) {
-      // 模型明确表示做不了：这不是错误，把它的说明带给用户
+      // 模型明确"只回答、不改页面"：这不是错误。
+      // answered=true 让界面走普通气泡而不是红色报错条 —— 用户问「我今天学了多少」
+      // 拿到一句回答，跟"指令执行失败"是两回事，不该共用同一套红字。
       const say = pickSay(env);
-      return { ok: false, commands: [], say: say, error: say || '这个我还改不了', attempts: attempts, image: image };
+      return {
+        ok: false,
+        commands: [],
+        say: say,
+        error: say || '这个我还改不了',
+        answered: !!say,
+        attempts: attempts,
+        image: image
+      };
     }
     const n = schema.normalizeCommands(rawCmds);
     if (!n.ok) {

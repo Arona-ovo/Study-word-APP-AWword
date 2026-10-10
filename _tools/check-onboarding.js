@@ -17,7 +17,11 @@ let fail = 0;
 const ok = (m) => console.log('  ✓ ' + m);
 const bad = (m) => { fail++; console.error('  ✗ ' + m); };
 const assert = (c, m) => (c ? ok(m) : bad(m));
-const R = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+// ⚠️ 一律归一化换行符再匹配：home.vue 在 Windows 工作区里可能被存成 CRLF
+// （编辑器 / 工具写入时会转），而下面的断言里有 `</view>\n\n    <!-- …` 这种
+// 跨行字面量 —— CRLF 下 `\n` 后面总跟着 `\r`，字面量永远匹配不到，
+// 表现为"明明代码是对的，脚本却报红"。跟 check-version-egg.js 同一个坑。
+const R = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
 
 /* ---------------- mock 环境 ---------------- */
 const mem = {};
