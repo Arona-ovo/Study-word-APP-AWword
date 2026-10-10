@@ -60,7 +60,9 @@ const api = load('utils/sentence-api.js', {
 });
 const dict = load('utils/dict.js', {
   WORDS: words.WORDS, COMMON_RAW: common.COMMON_RAW, store,
-  lemmaCandidates: lemma.lemmaCandidates, lemma: lemma.lemma
+  lemmaCandidates: lemma.lemmaCandidates, lemma: lemma.lemma,
+  // ownerLabel 用到的两个（本脚本暂时不测它，但依赖袋不能空着 —— 少一个要等调用期才炸）
+  wordbook, getBook: wb.getBook
 });
 const importer = load('utils/importer.js', {
   WORDS: words.WORDS, WORDBOOKS: wb.WORDBOOKS, getBook: wb.getBook,
@@ -91,6 +93,24 @@ eq(byZh.some(x => x.w === first.w), true, '命中结果含该词');
 console.log('== 4. 结果上限 20 条 ==');
 const broad = search.localSearch(CORE, 'a');
 eq(broad.length <= 20, true, '宽泛查询返回条数 ≤ 20');
+
+console.log('== 4.5 短查询：包含命中再多，也不能把真正的那个词挤掉 ==');
+// 回归点（用户实测）：搜 "in" 时词书里有 268 条"含 in"的词（insurance / engine /
+// criminal / institute…）。以前 localSearch **只在零命中时**才回落词典，
+// 于是词典里那条真 "in"（常用词，在……里）被整块跳过 —— 用户看到一堆都不是他要的，
+// 想查的 "in" 一条都没有，回车也没反应，还没法把它加进词书。
+const inRows = search.localSearch(CORE, 'in');
+assert(inRows.length > 0, '搜 "in" 有本地结果：' + inRows.length + ' 条');
+eq(inRows[0].w.toLowerCase(), 'in', '第一条必须就是 "in" 本身');
+eq(inRows[0].fromText, '常用词', '"in" 不在当前词书里 → 标成词典来源（常用词）');
+assert(/在/.test(inRows[0].m || ''), '带上真实释义：' + inRows[0].m);
+assert(inRows.filter(r => r.w.toLowerCase() === 'in').length === 1, '同一个词只出现一条（不重复）');
+// 排序：以查询开头的（institute / initial）排在"中间含 in"的（engine / criminal / chain）之前。
+// 只看前 5 条：名额有限的时候，先给最可能是他要的那些。
+const in5 = search.localSearch(CORE, 'in', 5);
+eq(in5.length, 5, '按 limit 截断：' + in5.map(r => r.w).join(' / '));
+assert(in5.slice(1).every(r => /^in/i.test(r.w)),
+  '第 2 条起都是"以 in 开头"的词，而不是中间含 in 的：' + in5.slice(1).map(r => r.w).join(' / '));
 
 console.log('== 5. 词书无命中 → 回落 dict（常用词典/词形还原） ==');
 const fallback = search.localSearch(CORE, 'Serendipity');
@@ -286,7 +306,12 @@ assert(!/v-else-if="(cached|aiLoading|aiResult)"/.test(homeSrc2), '三块结果�
   assert(!!homePage && typeof homePage.data === 'function', '首页脚本可加载（导出 default）');
   const vm = Object.assign({}, homePage.data(), homePage.methods);
   vm.aiEnabled = true;   // 由 aiGateReason() 在 onLoad 里写入，这里直接给
-  const titleOf = () => homePage.computed.searchTitle.call(vm);
+  // computed 也挂上：searchTitle / exactHits / nearHits 都是 computed，
+  // 只给 data + methods 的话 this.exactHits 是 undefined，一读就 TypeError
+  Object.keys(homePage.computed || {}).forEach((k) => {
+    Object.defineProperty(vm, k, { get: () => homePage.computed[k].call(vm), configurable: true });
+  });
+  const titleOf = () => vm.searchTitle;
   const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
   /* --- 1) 完全命中：不该再花这一份 token --- */

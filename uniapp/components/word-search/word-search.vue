@@ -12,7 +12,7 @@
       :value="keyword"
       :placeholder="$t('搜索单词或中文释义')"
       @input="onInput"
-      @search="onInput"
+      @search="onSubmit"
       @clear="close"
       @focus="onFocus"
       @blur="onBlur"
@@ -32,21 +32,22 @@
       </view>
 
       <block v-else>
-        <!-- 本地命中（当前词书优先，含"相近的"：搜 run 会出 running / runs） -->
-        <block v-if="results.length">
-          <view v-for="(it, i) in results" :key="i" class="ws-item" @tap="openWord(it)">
-            <view class="ws-line">
-              <text class="ws-word">{{ it.w }}</text>
-              <text v-if="it.pos" class="ws-pos">{{ it.pos }}</text>
-              <text class="tag ws-src">{{ it.fromText }}</text>
-            </view>
-            <text class="ws-mean">{{ it.m }}</text>
+        <!-- ① 一模一样的那条。
+             搜 "in" 时这里出的就是 "in" 本身 —— 词书里没有、但词典里有也算
+             （utils/search.js 的词典兜底，不再以"词书零命中"为前提）。
+             以前没有这一步：书里"含 in"的词有两百多条，真正的 "in" 一条都没有，
+             用户只能在一堆 insurance / engine / criminal 里挑（实测反馈）。 -->
+        <view v-for="(it, i) in exactHits" :key="'e' + i" class="ws-item" @tap="openWord(it)">
+          <view class="ws-line">
+            <text class="ws-word">{{ it.w }}</text>
+            <text v-if="it.pos" class="ws-pos">{{ it.pos }}</text>
+            <text class="tag ws-src">{{ it.fromText }}</text>
           </view>
-          <text class="ws-tip">{{ $t('点击任意词条查看详情') }}</text>
-        </block>
+          <text class="ws-mean">{{ it.m }}</text>
+        </view>
 
-        <!-- 本机缓存命中：以前生成过，离线也能看，不花额度、不发请求 -->
-        <view v-if="cached" class="ws-item" @tap="openWord({ w: cached.word })">
+        <!-- ② 本机缓存命中：以前生成过，离线也能看，不花额度、不发请求 -->
+        <view v-if="cached" class="ws-item" @tap="openCached">
           <view class="ws-line">
             <text class="ws-word">{{ cached.word }}</text>
             <text v-if="cached.pos" class="ws-pos">{{ cached.pos }}</text>
@@ -59,12 +60,13 @@
           <text class="ws-tip">{{ $t('来自本机缓存，不消耗 AI 额度') }}</text>
         </view>
 
+        <!-- ③ AI 补充：转圈与结果 -->
         <view v-if="aiLoading" class="ws-state">
           <view class="ws-spinner"></view>
           <text class="ws-state-text">{{ $t('正在让 AI 补充这个词…') }}</text>
         </view>
 
-        <view v-if="aiResult" class="ws-item" @tap="openWord({ w: aiResult.word })">
+        <view v-if="aiResult" class="ws-item" @tap="openAi">
           <view class="ws-line">
             <text class="ws-word">{{ aiResult.word }}</text>
             <text v-if="aiResult.pos" class="ws-pos">{{ aiResult.pos }}</text>
@@ -77,11 +79,37 @@
           <text class="ws-tip">{{ $t('点开词条可加入词书') }}</text>
         </view>
 
-        <!-- 本地一条都没有、缓存和 AI 也给不出东西 -->
-        <view v-if="emptyState" class="ws-state">
+        <!-- ④ 一条精确命中都没有：先把"没有"说清楚，再给两条能走下去的路。
+             以前这里什么都没有 —— 没配 AI 的话连转圈都不会出现，
+             用户既不知道 "in" 到底有没有，也没有任何办法把它加进来（实测反馈）。 -->
+        <view v-if="noExact" class="ws-state">
           <text class="ws-state-text">{{ $t('本地词库没有「{q}」', { q: lastQuery }) }}</text>
           <text class="ws-state-hint">{{ aiEnabled ? $t('AI 也未能补充这个词，换个拼写试试') : $t('接入 AI 后，搜不到的词会自动补充到本机缓存') }}</text>
+          <view class="ws-actions">
+            <text v-if="aiEnabled" class="ws-act" @tap="retryAi">{{ $t('AI 查一下') }}</text>
+            <text class="ws-act" @tap="openQuery">{{ $t('手动添加「{q}」', { q: lastQuery }) }}</text>
+          </view>
         </view>
+
+        <!-- ⑤ 相近的词一律排在最后：用户先看到"有没有一模一样的"，
+             再从近似里挑 —— 反过来（先铺一堆近似）就是这次反馈的问题 -->
+        <block v-if="nearHits.length">
+          <view class="ws-sub">{{ $t('当前词书里相近的词') }}</view>
+          <view v-for="(it, i) in visibleNear" :key="'n' + i" class="ws-item" @tap="openWord(it)">
+            <view class="ws-line">
+              <text class="ws-word">{{ it.w }}</text>
+              <text v-if="it.pos" class="ws-pos">{{ it.pos }}</text>
+              <text class="tag ws-src">{{ it.fromText }}</text>
+            </view>
+            <text class="ws-mean">{{ it.m }}</text>
+          </view>
+          <!-- 近似命中可能几十上百条（搜 "in" 有 268 条）：先只列几条，
+               要看全再点开，别一屏全是"含 in 的词" -->
+          <text v-if="nearHits.length > visibleNear.length" class="ws-more" @tap="showAllNear">
+            {{ $t('再显示 {n} 个', { n: nearHits.length - visibleNear.length }) }}
+          </text>
+          <text v-else class="ws-tip">{{ $t('点击任意词条查看详情') }}</text>
+        </block>
       </block>
     </view>
   </view>
@@ -97,8 +125,11 @@ import FloatNavbar from '../float-navbar/float-navbar.vue'
 
 // 打字停下来多久去问 AI（与首页同一节奏；本机缓存命中就不会问）
 const AI_DELAY = 700
-// 本地最多列几条：这是"做题中间抬头查一眼"，不是词库检索页，列太长会把题目挤没
-const LOCAL_LIMIT = 8
+// 本地最多取几条：这是"做题中间抬头查一眼"，不是词库检索页，取太长会把题目挤没。
+// 精确命中永远排第一，后面的都算"相近的"（默认只露 NEAR_SHOW 条）。
+const LOCAL_LIMIT = 12
+// 「相近的词」默认露几条：搜 "in" 能出两百多条，一屏铺满等于把"没有 in"这个结论淹掉
+const NEAR_SHOW = 4
 // 同一个词的上一个请求还没回来就别再发一次
 const AI_INFLIGHT = new Set()
 
@@ -137,17 +168,47 @@ export default {
       aiLoading: false,
       autofocus: false,       // 打开搜索时把输入框抢过来（弹键盘）
       aiEnabled: false,
+      nearAll: false,         // 「相近的词」是否已展开全部
       timer: 0
     }
   },
   computed: {
+    // 顶栏标题：有精确命中就说"搜索结果"；只有相近的必须讲明白，
+    // 否则用户会以为"这几条里就有我要查的词"（与首页 searchTitle 同一口径）
     panelTitle() {
-      return this.lastQuery ? t('搜索结果') : t('查词')
+      if (!this.lastQuery) return t('查词')
+      if (this.exactHits.length) return t('搜索结果')
+      if (this.nearHits.length) return t('没有完全匹配 · 下面 {n} 条是相近的', { n: this.nearHits.length })
+      return t('搜索结果')
     },
-    // 「什么都没找到」只在真的全空时出现，别把 AI 的转圈/结果吞掉
-    emptyState() {
-      return !!this.lastQuery && !this.results.length &&
-        !this.cached && !this.aiLoading && !this.aiResult
+
+    // 和查询词**一模一样**的那条（大小写不敏感）。
+    // localSearch 是包含匹配（搜 run 会出 running / runs），
+    // 只有这里为空才算"没查到" —— 该继续看缓存 / 问 AI / 让人手动加。
+    exactHits() {
+      const q = String(this.lastQuery || '').trim().toLowerCase()
+      if (!q) return []
+      return (this.results || []).filter(function (r) {
+        return String(r.w || '').trim().toLowerCase() === q
+      })
+    },
+    nearHits() {
+      const q = String(this.lastQuery || '').trim().toLowerCase()
+      if (!q) return []
+      return (this.results || []).filter(function (r) {
+        return String(r.w || '').trim().toLowerCase() !== q
+      })
+    },
+    visibleNear() {
+      return this.nearAll ? this.nearHits : this.nearHits.slice(0, NEAR_SHOW)
+    },
+    // 一条精确命中都没有、缓存和 AI 也没给东西 → 显示"没有"+ 两条出路。
+    // 别把 AI 的转圈/结果吞掉：那两样都在的时候用户马上就有答案了。
+    // timer 也算"在路上"：打字后要等 700ms 才发请求，这段空窗期说"AI 也未能补充"
+    // 是在撒谎（还没问呢），而且会先闪一句"没有"再被结果顶掉。
+    noExact() {
+      return !!this.lastQuery && !this.exactHits.length &&
+        !this.cached && !this.aiLoading && !this.aiResult && !this.timer
     }
   },
   created() {
@@ -186,6 +247,7 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiLoading = false
+      this.nearAll = false
       if (!kw) {
         this.lastQuery = ''
         this.results = []
@@ -193,15 +255,33 @@ export default {
       }
       this.lastQuery = kw
       this.results = search.localSearch(this.bookId, kw, LOCAL_LIMIT)
-      // 本地命中里有没有**一模一样**的那个词？localSearch 是包含匹配（搜 run 会出
-      // running / runs），只有近似命中时不能认为"查到了"，得继续看缓存 / 问 AI。
-      const exact = this.results.some(function (r) {
-        return String(r.w || '').trim().toLowerCase() === kw.toLowerCase()
-      })
-      this.cached = exact ? null : this.cacheHitFor(kw)
-      if (!exact && !this.cached && this.aiEnabled) {
+      // 本地命中里有没有**一模一样**的那个词？（exactHits 就是这件事）
+      // 只有近似命中时不能认为"查到了"，得继续看缓存 / 问 AI。
+      this.cached = this.exactHits.length ? null : this.cacheHitFor(kw)
+      if (!this.exactHits.length && !this.cached && this.aiEnabled) {
         this.timer = setTimeout(() => { this.aiLookup(kw) }, AI_DELAY)
       }
+    },
+
+    /**
+     * 回车（顶栏 confirm）。
+     * 以前直接挂在 onInput 上 —— 按回车等于把同样的检索再跑一遍，
+     * 界面一点变化都没有，用户只会觉得"回车是坏的"（实测反馈）。
+     * 现在给一个明确动作：有那个词就进词条页，没有就立刻去问 AI（不等 700ms），
+     * AI 也没接就直说 —— 反正不让这一下白按。
+     */
+    onSubmit(v) {
+      const kw = String(v == null || v === '' ? this.keyword : v).trim()
+      if (!kw) return
+      // 端上 confirm 事件有时不带 value：值还没同步过来的话先按输入走一遍
+      if (kw !== this.keyword) { this.onInput(kw); return }
+      if (this.timer) { clearTimeout(this.timer); this.timer = 0 }
+      const hit = this.exactHits[0]
+      if (hit) { this.openWord(hit); return }
+      if (this.aiResult) { this.openWord({ w: this.aiResult.word }); return }
+      if (this.cached) { this.openWord({ w: this.cached.word }); return }
+      if (this.aiEnabled) { this.aiLookup(kw); return }
+      uni.showToast({ title: t('未接入 AI，可在词条页自己填释义'), icon: 'none' })
     },
 
     // 本机缓存命中：把以前生成过的释义原样翻出来，不联网
@@ -270,11 +350,41 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiLoading = false
+      this.nearAll = false
     },
 
     /** 页面 onShow 调它：从词条页回来的话，别让搜索面板还挂在那儿 */
     collapse() {
       if (this.active) this.close()
+    },
+
+    /**
+     * 「AI 查一下」：按钮上直接传 lastQuery 是模板里的函数调用，
+     * 端上编译不稳（见项目约定 9：模板里一律别写表达式）→ 收到方法里来。
+     */
+    retryAi() {
+      if (!this.lastQuery) return
+      this.aiLookup(this.lastQuery)
+    },
+
+    /** 铺开全部"相近的词"（默认只露 4 条，免得一屏全是"含 in 的词"） */
+    showAllNear() {
+      this.nearAll = true
+    },
+
+    /** 「没有这个词」时的出路：带着当前查的词进词条页，自己填释义后加入词书 */
+    openQuery() {
+      this.openWord({ w: this.lastQuery })
+    },
+
+    // 缓存 / AI 那两张卡也能点开进词条页。
+    // 模板里写成 openWord({ w: cached.word }) 这种对象字面量在端上编译不稳
+    // （项目约定 9：模板里别放表达式）→ 一律收进方法。
+    openCached() {
+      if (this.cached) this.openWord({ w: this.cached.word })
+    },
+    openAi() {
+      if (this.aiResult) this.openWord({ w: this.aiResult.word })
     },
 
     // 结果 → 单词详情（与首页 openWord 同一个页面、同一套参数）
@@ -402,6 +512,42 @@ export default {
   color: var(--ink-3, #98a19b);
   text-align: center;
 }
+
+/* 「当前词书里相近的词」小标题：把"这些只是相近的"写在列表头上，
+   否则用户会以为里面就有他要查的那个词 */
+.ws-sub {
+  margin-top: 20rpx;
+  font-size: 22rpx;
+  color: #98a19b;
+  color: var(--ink-3, #98a19b);
+}
+
+/* 相近命中一屏放不下时的展开入口 */
+.ws-more {
+  display: block;
+  margin-top: 16rpx;
+  font-size: 24rpx;
+  color: #1d4fd8;
+  color: var(--brand-strong, #1d4fd8);
+}
+
+/* 「没有这个词」下面的两条出路：AI 查一下 / 手动添加 */
+.ws-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 12rpx;
+}
+
+.ws-act {
+  margin: 0 12rpx;
+  padding: 8rpx 14rpx;
+  font-size: 24rpx;
+  color: #1d4fd8;
+  color: var(--brand-strong, #1d4fd8);
+}
+
+.ws-act:active { opacity: 0.55; }
 
 .ws-spinner {
   width: 32rpx;

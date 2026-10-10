@@ -58,7 +58,27 @@
            原有的词也可以从这儿加进别的词书 -->
       <view class="card add-card">
         <view class="card-title">{{ $t('加入词书') }}</view>
-        <view v-if="!found" class="add-tip">{{ $t('这个词还没有释义，先查到释义再加入') }}</view>
+        <!-- 词典和 AI 都没收录：给一个自己填释义的入口。
+             以前这里只有一句"先查到释义再加入"，可词典里没有、又没接 AI 的词
+             就永远加不进去 —— 用户搜到的词等于白搜（实测反馈）。 -->
+        <block v-if="!found">
+          <view class="add-tip">{{ $t('词典和 AI 都没收录这个词：自己填个释义就能收进词书') }}</view>
+          <view class="mn-row">
+            <input
+              class="mn-pos"
+              v-model="manualPos"
+              :placeholder="$t('词性')"
+              placeholder-class="mn-ph"
+            />
+            <input
+              class="mn-mean"
+              v-model="manualMean"
+              :placeholder="$t('释义')"
+              placeholder-class="mn-ph"
+            />
+          </view>
+          <button class="btn-primary add-btn" @tap="addManual">{{ $t('加入当前词书') }}</button>
+        </block>
         <block v-else>
           <button
             v-if="!inBook"
@@ -197,6 +217,9 @@ export default {
       allBooks: [],
       examples: [],
       ownExample: null, // 这个词自带的例句（导入词自带 / AI 缓存），加入词书时一并带过去
+      // 词典与 AI 都没有释义时，由用户自己填（不填就没有释义，加进词书也没法做题）
+      manualPos: '',
+      manualMean: '',
       info: {
         pos: '',
         meaning: '',
@@ -406,6 +429,39 @@ export default {
     // 归属权交给用户 —— 搜过什么不会自动塞进任何词书。
     addToCurrent() {
       this.doAdd(this.bookId || wordbook.currentBookId())
+    },
+
+    /**
+     * 词典和 AI 都没收录时，用用户自己填的词性 / 释义入库。
+     * 入库走的是同一条管道（search.addWordToBook → importer 校验去重），
+     * 加完之后再 load() 一次：lookup 会从本词书的导入词里把这条读回来（src=custom），
+     * 于是"暂未收录"变成正经词条，掌握度 / 例句那些区块也跟着出来。
+     */
+    addManual() {
+      const mean = String(this.manualMean || '').trim()
+      if (!mean) {
+        uni.showToast({ title: t('先填个释义'), icon: 'none' })
+        return
+      }
+      const bid = this.bookId || wordbook.currentBookId()
+      const payload = {
+        word: this.word,
+        pos: String(this.manualPos || '').trim(),
+        meaning: mean,
+        example: this.ownExample || null
+      }
+      const r = search.addWordToBook(bid, payload, { allowKnown: true })
+      if (!r || !r.added) {
+        uni.showToast({ title: (r && r.reason) || t('没能加入词书'), icon: 'none' })
+        return
+      }
+      const hit = (this.allBooks || []).filter(b => b.id === bid)[0]
+      // 整句进字典（词书名用占位符）：拼接出来的英文句子语序是错的
+      uni.showToast({ title: t('已加入「{name}」', { name: (hit && hit.name) || t('词书') }), icon: 'none' })
+      this.manualPos = ''
+      this.manualMean = ''
+      this.load()
+      try { uni.$emit('home:refresh') } catch (e) { /* 首页不在时忽略 */ }
     },
 
     // 选词书：多选弹窗 —— 已收录的词书预勾选，
@@ -739,6 +795,47 @@ export default {
   color: #98a19b;
   color: var(--ink-3, #98a19b);
 }
+
+/* 自己填释义：词性窄、释义宽，一行放下；输入框用中性底色，
+   和下面的主按钮拉开层次（这一块只在"词典 & AI 都没收录"时出现） */
+.mn-row {
+  display: flex;
+  align-items: center;
+  margin-top: 16rpx;
+}
+
+.mn-pos {
+  width: 150rpx;
+  height: 76rpx;
+  padding: 0 20rpx;
+  margin-right: 16rpx;
+  font-size: 26rpx;
+  border-radius: 16rpx;
+  background: rgba(23, 32, 26, 0.05);
+  background: rgba(var(--neutral-rgb, 23, 32, 26), 0.05);
+  color: #17201a;
+  color: var(--ink-1, #17201a);
+}
+
+.mn-mean {
+  flex: 1;
+  min-width: 0;
+  height: 76rpx;
+  padding: 0 20rpx;
+  font-size: 26rpx;
+  border-radius: 16rpx;
+  background: rgba(23, 32, 26, 0.05);
+  background: rgba(var(--neutral-rgb, 23, 32, 26), 0.05);
+  color: #17201a;
+  color: var(--ink-1, #17201a);
+}
+
+.mn-ph {
+  color: #98a19b;
+  color: var(--ink-3, #98a19b);
+}
+
+.mn-row + .add-btn { margin-top: 20rpx; }
 
 /* ---------- 所属词库 ---------- */
 .book-card { margin-bottom: 24rpx; }

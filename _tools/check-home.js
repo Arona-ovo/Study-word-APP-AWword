@@ -361,9 +361,13 @@ function eq(a, b, label) {
       return {
         log: log,
         inputMode: mode, keyword: '', modeLocked: false, lastCmdText: '',
+        // results / openWord 是 onSubmit 新增用到的：回车时本地已有**一模一样**的
+        // 那条就直接进词条页（data 里本来就有这两个，桩要跟上，否则是桩不全而不是逻辑错）
+        results: [],
         pickText: (v) => (typeof v === 'string' ? v : String(v == null ? '' : v)),
         runSearch: (v) => log.push('search:' + v),
-        runCommand: (v) => log.push('command:' + v)
+        runCommand: (v) => log.push('command:' + v),
+        openWord: (it) => log.push('open:' + ((it && it.w) || ''))
       };
     };
     let c = mk('search');
@@ -381,6 +385,16 @@ function eq(a, b, label) {
     c = mk('search');
     onSubmit.call(c, 'apple');
     eq(c.log, ['search:apple'], '有内容时照常查词');
+    // 回车要有一个"看得见"的动作：本地已经有**一模一样**的那条就直接进词条页。
+    // 以前一律 runSearch（把同样的检索再跑一遍、界面纹丝不动），用户只会觉得回车坏了。
+    c = mk('search');
+    c.results = [{ w: 'apple', pos: 'n.', m: '苹果' }, { w: 'applesauce', pos: '', m: '苹果酱' }];
+    onSubmit.call(c, 'Apple');
+    eq(c.log, ['open:apple'], '本地已有这个词 → 回车直接进词条页（不是把检索再跑一遍）');
+    c = mk('search');
+    c.results = [{ w: 'applesauce', pos: '', m: '苹果酱' }];
+    onSubmit.call(c, 'apple');
+    eq(c.log, ['search:apple'], '只有相近的 → 回车照旧去检索（精确命中才直达）');
     c = mk('command');
     onSubmit.call(c, '把背景换成安静的蓝色渐变');
     eq(c.log, ['command:把背景换成安静的蓝色渐变'], '指令模式下照常执行');

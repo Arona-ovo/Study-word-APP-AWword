@@ -162,7 +162,15 @@ assert(/已在当前词书中/.test(tpl), '已收录时给出明确状态文案'
 // 2026-10-09：词书弹窗改多选 —— 列出全部词书（已收录的预勾选），不再只列"还没收录的"
 assert(/v-if="allBooks\.length"/.test(tpl), '有任何词书就显示「加入 / 移出词书」入口');
 assert(/加入 \/ 移出词书/.test(tpl), '按钮文案点明可移出（不只是加入）');
-assert(/v-if="!found"/.test(tpl) && /还没有释义/.test(tpl), '没有释义时只提示、不给按钮');
+// 2026-10-11：词典 + AI 都没收录的词，以前这里只有一句"先查到释义再加入" ——
+// 可这样的词永远查不到释义，也就永远加不进词书（用户："我也无法添加新词"）。
+// 现在给一个自己填释义的入口：两个输入框 + 同一颗「加入当前词书」。
+assert(/v-if="!found"/.test(tpl), '没有释义时走另一条分支');
+assert(/词典和 AI 都没收录这个词/.test(tpl), '说清楚是"词典和 AI 都没收录"（不是"先查到再加入"）');
+assert(/v-model="manualPos"[\s\S]{0,400}?v-model="manualMean"/.test(tpl), '给出词性 / 释义两个输入框');
+assert(/@tap="addManual"/.test(tpl), '「加入当前词书」在没有释义时改绑 addManual');
+assert(/addManual\(\)\s*\{[\s\S]{0,600}?addWordToBook\(/.test(sc), 'addManual 走同一条入库管道');
+assert(/addManual\(\)\s*\{[\s\S]{0,900}?this\.load\(\)/.test(sc), '加完重新 load（"暂未收录"变成正经词条）');
 
 assert(/components\/app-dialog/.test(sc), '选词书用全 App 统一的 app-dialog（不用系统弹窗）');
 assert(/<app-dialog/.test(tpl) && /@confirm="onDlgConfirm"/.test(tpl), '模板挂载 app-dialog 并接住 confirm');

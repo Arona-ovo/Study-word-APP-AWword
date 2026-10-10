@@ -50,24 +50,23 @@
         <text class="sr-close" @tap="clearSearch">{{ $t('收起') }}</text>
       </view>
 
-      <!-- 本地命中（可能只是"相近的"：搜 run 会出 running / runs） -->
-      <block v-if="results.length">
-        <view v-for="(it, i) in results" :key="i" class="sr-item" @tap="openWord(it)">
-          <view class="sr-line">
-            <text class="sr-word">{{ it.w }}</text>
-            <text v-if="it.pos" class="sr-pos">{{ it.pos }}</text>
-            <text class="tag sr-src">{{ it.fromText }}</text>
-          </view>
-          <text class="sr-mean">{{ it.m }}</text>
+      <!-- 本地命中里**一模一样**的那条，永远放最前。
+           搜 "in" 时下面会带回两百多条"含 in"的词（insurance / engine / criminal…），
+           真正的 "in" 必须单独置顶，否则它被埋在噪音里，用户只能一条条翻（实测反馈）。 -->
+      <view v-for="(it, i) in exactHits" :key="'e' + i" class="sr-item" @tap="openWord(it)">
+        <view class="sr-line">
+          <text class="sr-word">{{ it.w }}</text>
+          <text v-if="it.pos" class="sr-pos">{{ it.pos }}</text>
+          <text class="tag sr-src">{{ it.fromText }}</text>
         </view>
-        <text class="sr-tip">{{ $t('点击任意词条查看详情') }}</text>
-      </block>
+        <text class="sr-mean">{{ it.m }}</text>
+      </view>
 
-      <!-- 下面这一块**不再和上面互斥**（原来是 v-else-if 链）：
+      <!-- 下面这一块**不和上面互斥**（原来是 v-else-if 链）：
            本地只命中"相近的"时，AI 那一栏会被整块吞掉 ——
            用户要查的词一条都没有，AI 也不出手，于是两边都不显示。
-           现在两块可以同时出现：上面是"你可能想找的"，下面是 AI / 缓存给出的这个词。 -->
-      <view v-if="results.length && (cached || aiLoading || aiResult)" class="sr-split"></view>
+           现在"精确命中 / 缓存 / AI"这三块各用独立 v-if：先说清"有没有你要的那个词"，
+           再让 AI / 缓存补一条，最后才轮到"相近的词"。 -->
 
       <!-- 底层缓存命中：之前生成过，离线也能直接看 -->
       <block v-if="cached">
@@ -114,8 +113,32 @@
         <text class="sr-tip">{{ $t('点开词条可加入词书') }}</text>
       </view>
 
-      <!-- 没有结果：本地一条都没有、缓存和 AI 也没给东西 -->
-      <view v-if="!results.length && !cached && !aiLoading && !aiResult" class="sr-state">
+      <!-- 相近的词一律排在最后（可能只是"相近的"：搜 run 会出 running / runs）：
+           用户先看到"有没有一模一样的"，再从近似里挑 —— 反过来（先铺一堆近似）
+           就会出现"弹出来一大堆，但没有我要的"（实测反馈）。 -->
+      <block v-if="nearHits.length">
+        <!-- 有 AI / 缓存那条在上面时加一道细线：两块别糊在一起，
+             用户得分得清哪条是词库里的、哪条是 AI 给的 -->
+        <view v-if="cached || aiResult" class="sr-split"></view>
+        <view class="sr-sub">{{ $t('当前词书里相近的词') }}</view>
+        <view v-for="(it, i) in visibleNear" :key="'n' + i" class="sr-item" @tap="openWord(it)">
+          <view class="sr-line">
+            <text class="sr-word">{{ it.w }}</text>
+            <text v-if="it.pos" class="sr-pos">{{ it.pos }}</text>
+            <text class="tag sr-src">{{ it.fromText }}</text>
+          </view>
+          <text class="sr-mean">{{ it.m }}</text>
+        </view>
+        <text v-if="nearHits.length > visibleNear.length" class="sr-more" @tap="showAllNear">
+          {{ $t('再显示 {n} 个', { n: nearHits.length - visibleNear.length }) }}
+        </text>
+        <text v-else class="sr-tip">{{ $t('点击任意词条查看详情') }}</text>
+      </block>
+
+      <!-- 没有结果：本地一条都没有、缓存和 AI 也没给东西。
+           searchTimer 也算"在路上"：打字后要等 700ms 才发请求，这段空窗期说
+           "AI 也未能补充"是在撒谎（还没问呢），而且会先闪一句"没有"再被结果顶掉。 -->
+      <view v-if="!results.length && !cached && !aiLoading && !aiResult && !searchTimer" class="sr-state">
         <text class="sr-state-text">{{ $t('本地词库没有「{q}」', { q: lastQuery }) }}</text>
         <text class="sr-state-hint">{{ aiEnabled ? $t('AI 也未能补充这个词，换个拼写试试') : $t('接入 AI 后，搜不到的词会自动补充到本机缓存') }}</text>
         <view class="sr-actions">
@@ -404,6 +427,8 @@ const WORDISH = /^[A-Za-z0-9_\u00C0-\u024F\u0400-\u04FF\u4E00-\u9FFF][A-Za-z0-9_
 const LATIN_WORD = /^[A-Za-z\u00C0-\u024F\u0400-\u04FF][A-Za-z\u00C0-\u024F\u0400-\u04FF\s'’\-·]{0,39}$/
 const AI_NEAR_DELAY = 1100
 const AI_NEAR_MIN_LEN = 3
+// 「相近的词」默认露几条：搜 "in" 能带回两百多条，一屏铺满等于把"没有 in"这个结论淹掉
+const NEAR_SHOW = 4
 
 // tabBar 页：只能用 switchTab 打开（AI 卡的按钮动作也要遵守）
 const TAB_PAGES = ['/pages/home/home', '/pages/library/library', '/pages/review/review', '/pages/profile/profile']
@@ -457,6 +482,8 @@ export default {
       aiResult: null,
       aiLoading: false,
       searchTimer: 0,
+      // 「相近的词」是否已展开全部（搜 "in" 能出两百多条，一屏铺满等于把结论淹掉）
+      nearAll: false,
       // ---------- 首页布局（顺序 / 编辑态 / 拖拽） ----------
       layout: [],
       editing: false,
@@ -530,16 +557,33 @@ export default {
     aiSheetList() {
       return ((this.doc && this.doc.cards) || []).filter(c => !c.builtin && c.visible === false)
     },
+    // 和查询词**一模一样**的那条（大小写不敏感）。
+    // localSearch 是包含匹配：搜 "in" 会带回两百多条"含 in"的词，
+    // 真正要的 "in" 必须单独拎出来置顶 —— 否则它被埋在噪音里（实测反馈）。
+    exactHits() {
+      const q = String(this.lastQuery || '').trim().toLowerCase()
+      if (!q) return []
+      return (this.results || []).filter(r => String(r.w || '').trim().toLowerCase() === q)
+    },
+    nearHits() {
+      const q = String(this.lastQuery || '').trim().toLowerCase()
+      if (!q) return []
+      return (this.results || []).filter(r => String(r.w || '').trim().toLowerCase() !== q)
+    },
+    visibleNear() {
+      return this.nearAll ? this.nearHits : this.nearHits.slice(0, NEAR_SHOW)
+    },
     searchTitle() {
       void this.__lang
       // 整句 + 占位符：英文里数量要放在中间（"{n} matches"），拼接会把语序搞反
-      if (this.results.length) {
-        // 下面还有 AI / 缓存那一块 → 说明本地只是"相近的"，标题必须讲清楚，
-        // 否则用户会以为这几条里就有他要查的词
-        if (this.cached || this.aiLoading || this.aiResult) {
-          return t('没有完全匹配 · 下面 {n} 条是相近的', { n: this.results.length })
-        }
+      if (this.exactHits.length) {
         return t('本地词库 · 命中 {n} 条', { n: this.results.length })
+      }
+      // 只有**相近的**：标题必须讲清楚，否则用户会以为这几条里就有他要查的词。
+      // 判断依据从"有没有缓存/AI 那一块"改成"有没有一模一样的" ——
+      // 后者才是用户关心的口径（相近命中可能有几十上百条）。
+      if (this.nearHits.length) {
+        return t('没有完全匹配 · 下面 {n} 条是相近的', { n: this.nearHits.length })
       }
       if (this.cached) return t('缓存结果')
       if (this.aiLoading) return t('AI 补充中')
@@ -1147,9 +1191,15 @@ export default {
       if (mode === 'command') {
         this.lastCmdText = text
         this.runCommand(text)
-      } else {
-        this.runSearch(text)
+        return
       }
+      // 回车要给一个明确动作：已经有**一模一样**的那条就直接进词条页。
+      // 以前一律 runSearch（把同样的检索再跑一遍，界面纹丝不动），
+      // 用户只会觉得"按回车是坏的"。
+      const q = String(text).trim().toLowerCase()
+      const hit = this.results.filter(r => String(r.w || '').trim().toLowerCase() === q)[0]
+      if (hit) { this.openWord(hit); return }
+      this.runSearch(text)
     },
     useSuggestion(s) {
       this.keyword = s
@@ -1488,6 +1538,7 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiLoading = false
+      this.nearAll = false   // 换了词就收回折叠：上一轮展开的"相近的词"不该带过来
       this.results = search.localSearch(this.bookId, kw)
       // 本地命中里有没有**一模一样**的那个词？
       // localSearch 是包含匹配：搜 run 会出 running / runs，词典还可能回落到词形
@@ -1511,6 +1562,10 @@ export default {
      * 本地结果里有没有和查询词**一模一样**的那条（大小写不敏感）。
      * 近似命中不算 —— 那正是"看着有、其实没有"的情况。
      */
+    /** 铺开全部"相近的词"（默认只露 4 条，免得一屏全是"含 in 的词"） */
+    showAllNear() {
+      this.nearAll = true
+    },
     hasExactHit(kw) {
       const q = String(kw || '').trim().toLowerCase()
       if (!q) return false
@@ -1531,6 +1586,7 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiLoading = false
+      this.nearAll = false
       // 清空即解锁：下一次输入重新交给自动判定
       this.inputMode = 'search'
       this.modeLocked = false
@@ -1809,6 +1865,23 @@ export default {
   font-size: 22rpx;
   color: #98a19b;
   color: var(--ink-3, #98a19b);
+}
+
+/* 「当前词书里相近的词」小标题：把"这些只是相近的"写在列表头上 */
+.sr-sub {
+  padding: 14rpx 0 4rpx;
+  font-size: 22rpx;
+  color: #98a19b;
+  color: var(--ink-3, #98a19b);
+}
+
+/* 相近命中一屏放不下时的展开入口 */
+.sr-more {
+  display: block;
+  padding-top: 16rpx;
+  font-size: 24rpx;
+  color: #1d4fd8;
+  color: var(--brand-strong, #1d4fd8);
 }
 
 /* 本地"相近命中"与下面 AI / 缓存那块之间的分隔。

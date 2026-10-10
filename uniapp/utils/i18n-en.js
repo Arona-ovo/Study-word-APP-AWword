@@ -210,6 +210,11 @@ export default {
   '朗读单词': 'Pronounce word',
   '加入词书': 'Add to wordbook',
   '这个词还没有释义，先查到释义再加入': 'This word has no definition yet; look it up first',
+  // 词典 + AI 都没收录 → 让用户自己填释义加入词书（否则这样的词永远加不进来）
+  '词典和 AI 都没收录这个词：自己填个释义就能收进词书':
+    'Neither the dictionary nor AI has this word — type a definition to add it',
+  '词性': 'Part of speech',
+  '先填个释义': 'Type a definition first',
   '这个词还没有释义': 'This word has no definition yet',
   '加入当前词书': 'Add to current book',
   '已在当前词书中': 'Already in the current book',
@@ -289,6 +294,12 @@ export default {
   '来自本机缓存，不消耗 AI 额度': 'From local cache, no AI usage',
   '查看词条': 'Open entry',
   '答完这题就能查词': 'Finish this question first — then you can look words up',
+  // 「没有一模一样的那个词」时的口径：相近的排后面、讲清楚，并给一条出路
+  '当前词书里相近的词': 'Close matches in the current wordbook',
+  '再显示 {n} 个': 'Show {n} more',
+  'AI 查一下': 'Ask AI',
+  '手动添加「{q}」': 'Add "{q}" manually',
+  '未接入 AI，可在词条页自己填释义': 'AI is off — fill in the definition on the word page',
   '发音': 'Pronounce',
   '当成查词': 'Treat as lookup',
   '当成指令试试': 'Try as a command',
