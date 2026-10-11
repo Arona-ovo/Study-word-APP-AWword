@@ -404,57 +404,99 @@ export function tutorSystemPrompt(learnedWords) {
 }
 
 /**
- * 抽测模式的 system 提示词。
+ * 抽测（**句子翻译**）的 system 提示词。
  *
- * 分工：**出题顺序由页面（本地）定**，模型只做两件事 —— 把这一题问出来、点评上一题。
- * 全交给模型自由发挥的话，它会翻来覆去考同一个词、还会顺手编释义；
- * 而本地手里有当前词书的原词与原释义，正好把这两件事钉死。
+ * 用户原话：「不要只做单词随机抽认（那样和直接背单词没有区别），而是用今天已背的单词、
+ * 或当前正在背的词书中的单词，尽可能多地组合成一句语义通顺、贴近真实语境的句子，
+ * 让用户进行翻译。」
  *
- * 判定标记：让模型在**判分**时以「【对】/【错】」开头。自然语言里"对了""答错啦"
- * 混在点评中间，正则判不准；固定标记还能让页面把"对 x 错 y"直接数出来（状态条上可见）。
- * 第一题还没人回答，所以明确要求那一轮**不许**输出标记 —— 否则会白加一次"答对"。
+ * 分工没变，只是内容从"一个词"变成"一句话"：
+ *   · **用哪几个词、句子该多长，由本地（`utils/quiz-plan.js`）定** —— 它手里有今日已背词、
+ *     掌握度和"谁错得多"，模型看不到这些。指令作为隐藏 system 挂在 payload 末尾。
+ *   · 模型负责：把这一组词**尽可能多地**塞进一句通顺的英文（凑不成就拆句/取子集）、
+ *     判上一句的中文翻译、给参考译文与简短讲解。
+ *
+ * 三个机器标记（页面靠它们记账，别改名）：
+ *   1. 开头 `【对】/【错】`  —— 上一句的整体翻译达不达意（页面数"对 x 错 y"、调复现频率）
+ *   2. 末尾 `【用词】a, b`   —— 这一题**实际用进了句子的词**（没凑进去的退回队列，不白考）
+ *   3. 第一轮还没人回答 → **不许**输出任何标记（否则白加一次"答对"）
+ *
+ * 标记按转义写：它们是**模型回复的解析约定**，不是界面文案（不归 i18n 管），
+ * 但 check-i18n 会扫"没套 $t 的中文字面量"，直写会让它误报。
  */
 export function quizSystemPrompt(pool) {
   const list = (pool || [])
     .filter(w => w && w.w)
-    .slice(0, 30)
+    .slice(0, 60)
     .map(w => w.w + (w.pos ? ' (' + w.pos + ')' : '') + ' = ' + w.m)
     .join('; ')
   return [
-    'You are a vocabulary quiz coach for a Chinese student.',
-    'Ask about exactly ONE word per reply, then wait for the student to answer.',
-    'The student may answer in Chinese or English; accept either.',
-    'Grading rule: if you are grading the student\'s answer to your previous question,'
-      + ' start your reply with the exact marker 【对】 or 【错】 (nothing before it, no space).',
-    'If there is no student answer to grade yet (this is the first question),'
-      + ' do NOT output any marker — just ask the question.',
-    'After the marker, give ONE short sentence of feedback, then immediately ask the next question.',
-    'Never reveal the answer before the student answers. Keep everything short (1-3 sentences). Reply in English.',
-    'Only quiz words from this pool; their meanings below are authoritative — do not invent meanings: ' + list
+    'You are a bilingual translation coach for a Chinese student who is memorising English vocabulary.',
+    'Every round has TWO parts, in this order:',
+    '(1) FIRST grade the Chinese translation the student just wrote for the English sentence you gave last time.',
+    '(2) THEN immediately give ONE new English sentence for the student to translate into Chinese.',
+    'A hidden instruction (QUIZ STEP) appears at the very end of the conversation; it names the target words for that new sentence and the target length. Follow it exactly.',
+
+    'BUILDING THE SENTENCE:',
+    'Use as many of the given target words as you naturally can in ONE sentence — but NEVER force it.',
+    'If they cannot all fit naturally, use only the subset that fits, or split them into two short sentences;'
+      + ' it is much better to test fewer words than to write an unnatural sentence.',
+    'Keep it a real, everyday sentence (a person, an action, a situation) — not a grammar exercise.',
+    'Match the target length given in the QUIZ STEP; prefer common, high-frequency other words.',
+    'Do not give the Chinese translation of the new sentence, and do not explain the new sentence yet.',
+    'At the very end of every reply, add one machine-readable line listing ONLY the target words you actually'
+      + ' used in that new sentence, comma-separated, in this exact format: \u3010\u7528\u8bcd\u3011word1, word2'
+      + ' (the page strips this line before showing your reply to the student).',
+
+    'GRADING THE TRANSLATION:',
+    'If you are grading a translation, start your reply with the exact marker \u3010\u5bf9\u3011 or \u3010\u9519\u3011'
+      + ' (nothing before it, no space): \u3010\u5bf9\u3011 = the translation is basically faithful,'
+      + ' \u3010\u9519\u3011 = it misses or distorts the meaning.',
+    'If there is no translation to grade yet (this is the very first round), output NO marker at all.',
+    'Then grade in this order, briefly: (a) one sentence on whether the student got the overall meaning;'
+      + ' (b) a short list of what was missed (漏译), mistranslated (误译), or shows a wrong understanding of a target word;'
+      + ' (c) the reference translation, prefixed with "Reference: ";'
+      + ' (d) one or two lines explaining a key collocation or grammar point from the sentence.',
+    'Be encouraging and concise — 4 to 8 short lines in total, then give the next sentence.',
+
+    'Only use words from this pool; their meanings below are authoritative — do not invent meanings: ' + list
   ].join(' ')
 }
 
 /**
- * 抽测：把"这一轮要考哪个词"作为一条 system 指令挂在 payload 末尾。
+ * 抽测：把"这一轮用哪几个词、句子该多长"作为一条 system 指令挂在 payload 末尾。
  * 它**只在发给模型的那份 payload 里**（页面不往 messages 里存、也不显示），
  * 所以既不会污染界面，也不会写进对话存档。
+ *
+ * batch = { words: [{w,pos,m}], limit, level, step }（见 utils/quiz-plan.js）
  */
-export function quizNextHint(w) {
-  if (!w || !w.w) return ''
+export function quizNextHint(batch) {
+  const words = (batch && batch.words) || []
+  if (!words.length) return ''
+  const list = words
+    .map(w => '"' + w.w + '"' + (w.pos ? ' (' + w.pos + ')' : '') + ' = ' + w.m)
+    .join('; ')
+  const limit = Number(batch.limit) || 10
   return [
-    'QUIZ STEP: ask the student about exactly this word: "' + w.w + '"'
-      + (w.pos ? ' (' + w.pos + ')' : '') + ' — ' + w.m + '.',
-    'Ask ONE question about it (its Chinese meaning, or a fill-in-the-blank sentence) in English, 1-2 sentences.',
-    'Do not ask about any other word, and do not give the answer.'
+    'QUIZ STEP: give the student ONE new English sentence to translate into Chinese.',
+    'Target words for it: ' + list + '.',
+    'Fit as many of them as the sentence allows; if some cannot fit naturally, use the subset that does'
+      + ' or split into two short sentences. Never write a forced or unnatural sentence.',
+    'Length: about ' + limit + ' words or fewer (student level ' + (Number(batch.level) || 1) + '/5).',
+    'At the very end of your reply, add one machine-readable line listing ONLY the target words you actually'
+      + ' used in that sentence, comma-separated, in this format: \u3010\u7528\u8bcd\u3011word1, word2',
+    'Do not give the translation, and do not explain the new sentence yet.'
   ].join(' ')
 }
 
-/** 词考完了：让模型收尾（这一轮之后页面会自动结束抽测） */
+/** 题出完了：让模型收尾（这一轮之后页面会自动结束抽测） */
 export function quizWrapHint() {
   return [
-    'QUIZ STEP: every word in the pool has been asked.',
-    'Do not ask any new question; use 2-3 sentences to wrap up:'
-      + ' praise what the student did well, and list the words that were answered wrong.'
+    'QUIZ STEP: every planned sentence has been practised already.',
+    'Do not ask any new question and do not output any target-word line;'
+      + ' finish with 2-3 short sentences:'
+      + ' praise what the student did well today, then list the words that were translated wrongly'
+      + ' (the ones marked \u3010\u9519\u3011) so the student knows what to review.'
   ].join(' ')
 }
 

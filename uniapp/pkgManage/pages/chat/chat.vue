@@ -48,7 +48,7 @@
            光靠"用户自己想到这么说"不够，所以给一颗一键开始的引导条。 -->
       <view v-else class="quiz-start">
         <text class="qs-chip" @tap="startQuizQuick">{{ $t('抽测我') }}</text>
-        <text class="qs-hint">{{ $t('也可以直接说「考我今天背的词」') }}</text>
+        <text class="qs-hint">{{ $t('用今天背的词出一句翻译题') }}</text>
       </view>
 
       <view class="input-bar">
@@ -104,17 +104,14 @@ import { isAIEnabled } from '../../../services/config.js'
 import { featureOn } from '../../../services/ai-gate.js'
 import { tutorSystemPrompt, quizSystemPrompt, quizNextHint, quizWrapHint, chat as chatTutor, explainWord } from '../../../services/ai-content.js'
 import * as wordbook from '../../../utils/wordbook'
+import * as quizPlan from '../../../utils/quiz-plan.js'
+import * as srs from '../../../utils/srs.js'
 import * as chatStore from '../../../utils/chat-store.js'
 import * as tts from '../../../services/voice'
 import FloatNavbar from '../../../components/float-navbar/float-navbar.vue'
 
 const GREETING = "Hi! I'm your English partner. Let's chat — how are you today?";
 
-// 抽测：一次考几个词（用户没在话里说数量时用这个）
-const QUIZ_N = 10;
-// 抽测：一场最多几个词 —— 太多了一轮跑不完，状态条的"第 n/N 题"也没意义
-const QUIZ_MAX = 30;
-const QUIZ_MIN = 3;
 // 「考我今天背的词」这类目标句：出现了这些词才算要开局。
 // 不写宽一点（比如光一个"测试"）：正常聊天里也会出现"测试"，误开局会把对话带跑偏。
 const QUIZ_WORDS = /抽测|抽背|抽考|考考我|考我|来考|考一下|出题|小测|quiz\s*me|test\s*me/i;
@@ -122,6 +119,9 @@ const QUIZ_WORDS = /抽测|抽背|抽考|考考我|考我|来考|考一下|出�
 // 判定标记里的「对」。写成转义不是故弄玄虚：这不是界面文案（不归 i18n 管，是模型
 // 回复的解析结果），但 check-i18n 会扫"没套 $t 的中文字面量"，直接写会让它误报一处。
 const MARK_RIGHT = '\u5bf9';
+// 「用词」：模型在回复末尾回报"这一题实际用进了哪些目标词"（没凑进去的退回队列）。
+// 和 MARK_RIGHT 同理写成转义，别让 i18n 的"漏网中文"计数白涨。
+const MARK_USED = '\u3010\u7528\u8bcd\u3011';
 
 export default {
   components: { FloatNavbar },
@@ -140,15 +140,16 @@ export default {
       streamTick: 0,      // 流式每来一段就 +1：viewMessages 是计算属性，靠它失效重算
       listShow: false,
       sessions: [],
-      // 抽测（AI 抽考单词）：出题顺序与进度在**本地**，模型只负责出题语言与点评。
+      // 抽测（**句子翻译**，不是单词抽认）：出题与进度在**本地**，模型负责造句子与点评。
       // on      这局开着没有
-      // pool    考哪些词（[{w, pos, m}]，开局时从当前词书取好，之后不再变）
-      // idx     下一个要考的词在 pool 里的下标
-      // cur     正在等用户回答的那个词（用来在用户答完后把答案摆出来）
+      // plan    出题计划（utils/quiz-plan.js）：这一题用哪几个词、句长、错词复现频率都在它里面
+      // base    词池（[{w,pos,m}]，开局时从今日已背词 + 当前词书取好）—— 给 system 提示词当"权威词义表"
+      // cur     正在等用户翻译的那一组目标词（用它把「本句目标词：…」摆出来）
+      // prev    刚判完的那一组（模型给的【用词】要跟它对账）
       // right/wrong 依据模型回复开头的【对】/【错】计数
-      // judge   这一轮回复里"有没有要判的答案"（第一题没得判，不能白加一次对）
-      // wrap    这一轮回复是收尾话（词考完了）→ 拿到回复就关局
-      quiz: { on: false, pool: [], idx: 0, cur: null, right: 0, wrong: 0, judge: false, wrap: false }
+      // judge   这一轮回复里"有没有要判的翻译"（第一题没得判，不能白加一次对）
+      // wrap    这一轮回复是收尾话（题出完了）→ 拿到回复就关局
+      quiz: { on: false, plan: null, base: [], cur: null, prev: null, right: 0, wrong: 0, judge: false, wrap: false }
     }
   },
   computed: {
@@ -164,13 +165,14 @@ export default {
     },
     inputPlaceholder() {
       void this.__lang
-      return this.quiz.on ? t('写它的意思或拼写…') : t('用英语和 AI 聊点什么…')
+      return this.quiz.on ? t('把这句话翻译成中文…') : t('用英语和 AI 聊点什么…')
     },
     quizBarText() {
       void this.__lang
       const q = this.quiz
+      const s = quizPlan.planStats(q.plan)
       return t('抽测中 · 第 {a}/{b} 题 · 对 {c} 错 {d}', {
-        a: Math.min(q.idx, q.pool.length), b: q.pool.length, c: q.right, d: q.wrong
+        a: Math.min(s.step, s.total), b: s.total, c: q.right, d: q.wrong
       })
     },
     // 展示用：去掉 system（它每次都按当前词书重新生成，不该出现在屏幕上），
@@ -223,7 +225,7 @@ export default {
     // system 提示词不落盘：每次按当前词书重新生成，存下来只会越来越旧
     systemMsg() {
       const content = this.quiz.on
-        ? quizSystemPrompt(this.quiz.pool)
+        ? quizSystemPrompt(this.quiz.base)
         : tutorSystemPrompt(this.learnedWords())
       return { role: 'system', content }
     },
@@ -352,46 +354,52 @@ export default {
       if (key === 'sentences') { this.goSentences(); return }
     },
 
-    // ---------- 抽测（AI 抽考单词） ----------
+    // ---------- 抽测（AI 用一组词造一句，用户翻译） ----------
     /**
-     * 抽测用词池：从**当前词书**里取（用户在哪本书里就考哪本书），
-     * 掌握度低的排前面 —— 会的最少的最该被考。
-     * 词义一并带上：一是模型手里有权威释义就不会瞎编，二是页面能在用户答完后
-     * 立刻把答案摆出来（不依赖模型有没有说）。
+     * 抽测用词池：**今天背过的词最优先**（mastery.fs === 今天），
+     * 其次是当前词书里掌握度低、到期待巩固的词（用户在哪本书里就考哪本书）。
+     * 词义一并带上：模型手里有权威释义就不瞎编，判"目标词理解偏差"时也有据可依。
+     * 排序与加权都在 utils/quiz-plan.js 里（纯函数，好测）。
      */
     quizWordPool(count) {
       try {
         const bid = wordbook.currentBookId()
-        const m = wordbook.masteryMap(bid)
-        const all = wordbook.bookWords(bid) || []
-        const lv = (w) => ((m[w.id] || {}).m || 0)
-        const weak = all.filter(w => lv(w) < 3)
-        const rest = all.filter(w => lv(w) >= 3)
-        return weak.concat(rest).slice(0, count).map(w => ({
-          w: String(w.w || '').trim(),
-          pos: String(w.pos || '').trim(),
-          m: String(w.m || '').trim()
-        })).filter(x => x.w && x.m)
+        return quizPlan.buildPool(
+          wordbook.bookWords(bid) || [],
+          wordbook.masteryMap(bid),
+          srs.dateStr(),
+          count
+        )
       } catch (e) { return [] }
     },
-    /** 目标句里能读出的题量（「抽测 20 个」），读不出来用默认值，夹在 3~30 */
+    /** 目标句里能读出的题数（「抽测 5 题」），读不出来用默认值，夹在 3~12 */
     quizCount(goal) {
       const hit = String(goal || '').match(/\d+/)
-      const n = hit ? parseInt(hit[0], 10) : QUIZ_N
-      if (!(n > 0)) return QUIZ_N
-      return Math.max(QUIZ_MIN, Math.min(QUIZ_MAX, n))
+      return quizPlan.planSize(hit ? hit[0] : 0)
     },
     /**
      * 开局。返回是否真的开起来了（词书里一个词都没有时开不了，
      * 这时候要给一句人话，而不是让用户对着空气说"考我"）。
      */
     startQuiz(goal) {
-      const pool = this.quizWordPool(this.quizCount(goal))
-      if (!pool.length) {
+      const total = this.quizCount(goal)
+      // 一题最多 BATCH_MAX 个词 → 池子按倍数备着；出不完没关系（step 到 total 就收尾）
+      const pool = this.quizWordPool(total * quizPlan.BATCH_MAX)
+      if (pool.length < quizPlan.BATCH_MIN) {
         uni.showToast({ title: t('当前词书里没有可抽测的词'), icon: 'none' })
         return false
       }
-      this.quiz = { on: true, pool: pool, idx: 0, cur: null, right: 0, wrong: 0, judge: false, wrap: false }
+      this.quiz = {
+        on: true,
+        plan: quizPlan.createPlan(pool, { total: total }),
+        base: pool,
+        cur: null,
+        prev: null,
+        right: 0,
+        wrong: 0,
+        judge: false,
+        wrap: false
+      }
       // 换上抽测专用的 system 提示词（下一句就会带上）。messages[0] 就是 system。
       this.messages[0] = this.systemMsg()
       return true
@@ -413,22 +421,27 @@ export default {
       return QUIZ_WORDS.test(String(text || ''))
     },
     /**
-     * 下一个要考的词。词用完返回 null（这一轮就该收尾了）。
-     * 顺序由本地定：一轮跑完不重复、进度可数 —— 全交给模型自由发挥的话，
-     * 它会翻来覆去考同一个词。
+     * 下一题：用哪几个目标词、句子该多长，全部由本地定（见 utils/quiz-plan.js）。
+     * 题出完了返回 null（这一轮就该收尾了）。
+     * 顺序交给模型自由发挥的话，它会翻来覆去考同一批词 —— 这是上一次就踩过的坑。
      */
-    nextQuizWord() {
+    nextQuizBatch() {
       const q = this.quiz
-      if (!q.on || q.idx >= q.pool.length) return null
-      const w = q.pool[q.idx]
-      q.idx++
-      q.cur = w
-      return w
+      if (!q.on || !q.plan) return null
+      const b = quizPlan.nextBatch(q.plan)
+      q.cur = b
+      return b
     },
-    /** 用户答完后，本地把这一题的正确答案摆出来（100% 有，不靠模型复述） */
-    answerFor(cur) {
-      if (!cur) return ''
-      return t('答案：{a}{b}', { a: cur.pos ? cur.pos + ' ' : '', b: cur.m })
+    /**
+     * 用户翻译完，本地把"这一句要考哪几个词"摆出来。
+     * 为什么不靠模型提：模型可能忘了；
+     * 而且上一轮的隐藏出题指令**不会重发**（payload 只挂末尾那一条），
+     * 这条气泡正好把目标词重新喂给它，判"目标词理解偏差"才有参照。
+     */
+    targetsFor(batch) {
+      const list = ((batch && batch.words) || []).map(w => w.w).filter(Boolean)
+      if (!list.length) return ''
+      return t('本句目标词：{a}', { a: list.join(' · ') })
     },
     /**
      * 解析模型回复开头的判定标记【对】/【错】。
@@ -442,6 +455,19 @@ export default {
       return { hit: true, right: m[1] === MARK_RIGHT, text: s.replace(/^\s*【[\u5bf9\u9519]】\s*/, '') }
     },
     /**
+     * 解析回复末尾的「【用词】a, b」—— 这一题**实际用进句子的**目标词。
+     * 没凑进去的词会被退回队列（下次优先考），所以这一行是机器话，必须从气泡里拿掉。
+     * 找不到标记就返回空数组，由 quiz-plan 按"全用上了"兜底（否则同一道题会反复出）。
+     */
+    readUsed(text) {
+      const s = String(text || '')
+      const i = s.indexOf(MARK_USED)
+      if (i < 0) return { words: [], text: s }
+      const line = s.slice(i + MARK_USED.length).split(/[\n\r]/)[0]
+      const words = line.split(/[,\u3001;\/\s]+/).map(x => x.trim()).filter(Boolean)
+      return { words: words, text: s.slice(0, i).replace(/\s+$/, '') }
+    },
+    /**
      * 结束抽测。quiet = 静默（换会话 / 开新对话时用，别往别人的历史里塞消息）。
      * 状态条与输入框占位文案都跟着 quiz.on 走，所以这里只需把 on 关掉。
      */
@@ -451,6 +477,7 @@ export default {
       const w = this.quiz.wrong
       this.quiz.on = false
       this.quiz.cur = null
+      this.quiz.prev = null
       this.quiz.judge = false
       if (quiet) return
       this.messages.push({ role: 'assistant', content: t('抽测结束：共 {a} 题，对 {b} 错 {c}。', { a: r + w, b: r, c: w }) })
@@ -468,11 +495,13 @@ export default {
       this.messages.push({ role: 'user', content: text })
       this.draft = ''
       this.thinking = true
-      // 刚才是"在答题"：本地先把这一题的正确答案摆出来。
-      // 为什么不等模型说：模型可能忘了说、也可能说错；正确释义本地本来就有。
-      // 这条气泡同时会进 payload，模型据此判对错（手里有权威答案，判得准）。
+      // 刚才是"在翻译上一句"：本地先把那道题的目标词摆出来。
+      // 为什么不等模型说：模型可能忘了提；而"这题要考哪几个词"本地本来就知道。
+      // 这条气泡同时会进 payload —— 上一轮的隐藏出题指令不会重发，
+      // 有了它模型才知道该拿哪几个词去比学生有没有理解偏。
       if (this.quiz.on && this.quiz.cur) {
-        this.messages.push({ role: 'assistant', content: this.answerFor(this.quiz.cur) })
+        this.quiz.prev = this.quiz.cur
+        this.messages.push({ role: 'assistant', content: this.targetsFor(this.quiz.cur) })
         this.quiz.cur = null
         this.quiz.judge = true
         this.savedSig++
@@ -485,7 +514,7 @@ export default {
       // 抽测：把"这一轮考哪个词"作为隐藏指令挂在 payload 末尾。
       // 它不写进 messages —— 既不显示在界面上，也不落进对话存档。
       if (this.quiz.on) {
-        const next = this.nextQuizWord()
+        const next = this.nextQuizBatch()
         if (next) {
           payload.push({ role: 'system', content: quizNextHint(next) })
         } else {
@@ -514,19 +543,29 @@ export default {
           }
         })
         const reply = (r && r.content) ? r.content.trim() : ''
-        // 抽测：读开头的【对】/【错】。只在"这一轮真的有答案要判"时计数 ——
-        // 第一题没人回答过，白加一次"答对"会让状态条的数字从一开始就是错的。
+        // 抽测：读开头的【对】/【错】（判**上一句**的翻译）与末尾的【用词】
+        //（报**本轮新出的那道题**实际用上了哪些目标词）—— 两者针对的不是同一道题：
+        //   · 判定标记 → 上一题的词，立刻按"达意/不达意"调复现频率
+        //   · 用词标记 → 这一轮刚出的那道题，先把没凑进句子的词退回队列
+        const v = this.quiz.judge ? this.readVerdict(reply) : { hit: false, right: false, text: reply }
+        const u = this.readUsed(v.text)
         if (this.quiz.judge) {
-          const v = this.readVerdict(reply)
           if (v.hit) {
             if (v.right) this.quiz.right++
             else this.quiz.wrong++
           }
+          // 只在"这一轮真的有翻译要判"时记账 —— 第一题没人答过，
+          // 白记一次会让状态条从一开始就是错的。
+          if (this.quiz.prev && this.quiz.plan) {
+            quizPlan.noteResult(this.quiz.plan, this.quiz.prev, v.hit ? v.right : false)
+          }
+          this.quiz.prev = null
           this.quiz.judge = false
-          bubble.content = v.hit ? (v.text || t('（AI 没有返回内容）')) : (reply || t('（AI 没有返回内容）'))
-        } else {
-          bubble.content = reply || t('（AI 没有返回内容）')
         }
+        if (this.quiz.cur && this.quiz.plan) {
+          quizPlan.noteUsed(this.quiz.plan, this.quiz.cur, u.words)
+        }
+        bubble.content = u.text || t('（AI 没有返回内容）')
         bump()
       } catch (e) {
         bubble.content = t('抱歉，我暂时无法回应（请检查 AI 服务设置或网络）。')

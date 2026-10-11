@@ -74,6 +74,9 @@ const settings = load('utils/settings.js', {});
 const tokenizeMod = load('utils/tokenize.js', {});
 const tokenize = (tokenizeMod && tokenizeMod.tokenize) || tokenizeMod;
 const chatStore = load('utils/chat-store.js', { settings });
+// 抽测的"出题计划"（本地纯函数：分组、句长档位、错词复现频率）
+const quizPlan = load('utils/quiz-plan.js');
+const srs = load('utils/srs.js');
 
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const homeSrc = read('pages/home/home.vue');
@@ -335,8 +338,11 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
     tutorSystemPrompt: () => 'SYS',
     // 抽测用的三个提示词构造器（真身见 services/ai-content.js，这里只要形状）
     quizSystemPrompt: (pool) => 'QUIZSYS:' + (pool || []).map(w => w.w).join(','),
-    quizNextHint: (w) => (w && w.w ? 'NEXT:' + w.w : ''),
+    quizNextHint: (b) => ((b && b.words && b.words.length) ? 'NEXT:' + b.words.map(w => w.w).join(',') : ''),
     quizWrapHint: () => 'WRAP',
+    // 出题计划用真模块（本地纯函数，测的就是它）：题数/分组/复现频率都归它管
+    quizPlan: quizPlan,
+    srs: srs,
     chatTutor: async (msgs, opts) => {
       payloads.push(msgs);
       if (fakeMode === 'stream' && opts && opts.onDelta) {
@@ -471,71 +477,99 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
    *   · 用户答完，页面**本地**把答案摆出来（模型忘了说也不会漏）
    *   · 模型用开头标记【对】/【错】判分，页面据此计数（状态条上看得见）
    * ============================================================ */
-  console.log('== 11. 抽测：本地定题序，模型只出题/点评 ==');
+  console.log('== 11. 抽测（句子翻译）：本地定题与频率，模型只造句子/点评 ==');
   assert(/<float-navbar[\s\S]{0,200}actions/.test(chatSrc), '抽测引导条在输入框上方（不会跟着内容滚）');
   assert(/v-if="quiz\.on"[\s\S]{0,200}quizBarText/.test(chatSrc), '抽测中显示进度条');
   assert(/v-else[\s\S]{0,200}startQuizQuick/.test(chatSrc), '没抽测时给一键开局');
   assert(/\/抽测\|抽背\|抽考\|考考我\|考我/.test(chatSrc), '有"目标句"识别（说一句"考我…"就能开局）');
-  assert(/bookWords\(/.test(chatSrc) && /currentBookId\(/.test(chatSrc), '词池取当前词书（在哪本书就考哪本）');
+  assert(/quizPlan\.buildPool\(/.test(chatSrc) && /currentBookId\(/.test(chatSrc),
+    '词池取当前词书（在哪本书就考哪本）');
+  assert(/srs\.dateStr\(\)/.test(chatSrc), '拿今天日期 → "今天背过的词优先"（fs === today）');
   assert(/当前词书里没有可抽测的词/.test(chatSrc), '词书没词时给人话，不是干等');
+  assert(/quizPlan\.noteUsed\(/.test(chatSrc) && /quizPlan\.noteResult\(/.test(chatSrc),
+    '页面把"用词"和"达不达意"两笔账交给本地计划（复现频率靠它们调）');
 
   payloads.length = 0;
-  const q = boot('block', '\u3010\u5bf9\u3011Nice. Next one?');
-  const started = q.vm.startQuiz('考我 3 个词');
+  const q = boot('block', 'Here is your first sentence.');
+  const started = q.vm.startQuiz('考我 3 题');
   eq(started, true, '开局成功（词书里有词）');
   eq(q.vm.quiz.on, true, 'quiz.on');
-  eq(q.vm.quiz.pool.length, 3, '题量按目标句里的数字（"考我 3 个词"）');
-  assert(q.vm.quiz.pool.every(w => w.w && w.m), '词池里每个词都带词形 + 释义（答案本地就有）');
+  eq(q.vm.quiz.plan.total, 3, '题数按目标句里的数字（"考我 3 题"）');
+  assert(q.vm.quiz.base.length >= 4, '词池按"每题最多 4 个词"备着：' + q.vm.quiz.base.length);
+  assert(q.vm.quiz.base.every(w => w.w && w.m), '词池里每个词都带词形 + 释义（判"目标词理解偏差"要用）');
   assert(/QUIZSYS:/.test(q.vm.messages[0].content), 'system 换成抽测提示词');
-  // 开局时不该有"待判的答案"
-  eq(q.vm.quiz.judge, false, '开局还没有答案要判（否则状态条一开始就多算一次"对"）');
+  eq(q.vm.quiz.judge, false, '开局还没有译文要判（否则状态条一开始就多算一次"对"）');
 
-  q.vm.draft = '考我 3 个词';
+  q.vm.draft = '考我 3 题';
   await q.vm.send();
-  eq(q.vm.quiz.idx, 1, '第一条消息就出了第一题');
-  eq(q.vm.quiz.cur.w, q.vm.quiz.pool[0].w, '正在等回答的就是第 1 个词');
+  const b1 = q.vm.quiz.cur;
+  eq(q.vm.quiz.plan.step, 1, '第一条消息就出了第一题');
+  assert(!!b1 && b1.words.length >= 2, '第一题是**一组词**（不是单个词）：'
+    + JSON.stringify(b1 && b1.words.map(w => w.w)));
+  assert(b1.words.length <= 4, '一组不超过 4 个词（再多一定凑不出通顺的句子）');
+  assert(b1.limit > 0 && b1.level > 0, '这一题带上了目标句长与水平档位（模型据此控难度）');
   const p1 = payloads[payloads.length - 1];
-  eq(p1[p1.length - 1].content, 'NEXT:' + q.vm.quiz.pool[0].w, 'payload 末尾挂上"这一轮考哪个词"');
+  eq(p1[p1.length - 1].content, 'NEXT:' + b1.words.map(w => w.w).join(','),
+    'payload 末尾挂上"这一题用哪几个词"');
   assert(p1[p1.length - 1].role === 'system', '出题指令是 system（不显示、不落盘）');
   assert(!/NEXT:/.test(chatSrc.match(/this\.messages\.push\(\{ role: 'user'[\s\S]{0,200}/)[0]),
     '指令只进 payload，不塞进 messages');
 
-  // 用户答一句：本地先摆答案，再让模型点评 + 出下一题
-  const answered = q.vm.quiz.cur;
-  q.vm.draft = '放弃';
+  // 用户翻译这一句：本地先摆「本句目标词」，再让模型点评 + 出下一题
+  fakeReply = '\u3010\u5bf9\u3011基本达意。\n\u3010\u7528\u8bcd\u3011' + b1.words.map(w => w.w).join(', ');
+  q.vm.draft = '听收音机，保持稳定节奏。';
   await q.vm.send();
+  const b2 = q.vm.quiz.cur;
   const msgs = q.vm.messages;
   // 用"找内容"而不是下标：中间还夹着 system / 欢迎语 / 上一轮的点评，
   // 按下标数很容易把断言写成"其实是别的气泡"（错一次就得再数一遍）
-  const answerMsg = msgs.filter(m => /^答案：/.test(m.content)).pop();
-  assert(!!answerMsg && answerMsg.content.indexOf(answered.m) >= 0,
-    '答完立刻把正确答案摆出来（本地出，不靠模型复述）：' + (answerMsg && answerMsg.content));
-  eq(answerMsg && answerMsg.role, 'assistant', '答案是一条正常气泡');
-  eq(q.vm.quiz.right, 1, '模型开头是【对】→ 记一次答对');
-  eq(q.vm.quiz.wrong, 0, '答错不涨');
+  const targetMsg = msgs.filter(m => /^本句目标词：/.test(m.content)).pop();
+  assert(!!targetMsg && targetMsg.content.indexOf(b1.words[0].w) >= 0,
+    '翻译前先把这一句的目标词摆出来（上一轮出题指令不会重发，模型靠它判偏差）：'
+    + (targetMsg && targetMsg.content));
+  eq(targetMsg && targetMsg.role, 'assistant', '目标词是一条正常气泡');
+  eq(q.vm.quiz.right, 1, '模型开头是【对】→ 记一次达意');
+  eq(q.vm.quiz.wrong, 0, '不达意的不涨');
   eq(lastOf(q.view()).content.indexOf('\u3010'), -1, '判定标记从气泡里去掉（用户看到干净的点评）');
-  eq(q.vm.quiz.idx, 2, '接着出下一题');
+  eq(lastOf(q.view()).content.indexOf('\u7528\u8bcd'), -1, '【用词】那行机器话也不给用户看');
+  eq(q.vm.quiz.plan.step, 2, '接着出下一题');
+  assert(!!b2 && b2.words.length >= 2, '第二题还是一组词');
 
-  // 答错 → 计数分开
-  q.vm.draft = '不知道';
-  fakeReply = '\u3010\u9519\u3011It means "question". Keep going.';
+  // 记账：达意 → 这一题用上的词 hit+1、水平档位升一档（下一句更长）
+  const plan = q.vm.quiz.plan;
+  const s1 = plan.seen[String(b1.words[0].w).toLowerCase()];
+  assert(!!s1 && s1.hit === 1, '达意 → 用上的词 hit+1（复现频率降下来）：' + JSON.stringify(s1));
+  eq(plan.tier, 1, '答对一题 → 水平档位 +1（下一句会加长）');
+
+  // 答错 → 分开计数 + 错词马上回来 + 档位降回来
+  fakeReply = '\u3010\u9519\u3011漏译了 "steady"。\n\u3010\u7528\u8bcd\u3011whatever';
+  q.vm.draft = '随便翻一下。';
   await q.vm.send();
-  eq(q.vm.quiz.wrong, 1, '模型开头是【错】→ 记一次答错');
-  eq(q.vm.quiz.right, 1, '答对/答错分开记');
+  const b3 = q.vm.quiz.cur;
+  eq(q.vm.quiz.wrong, 1, '模型开头是【错】→ 记一次不达意');
+  eq(q.vm.quiz.right, 1, '达意/不达意分开记');
+  const s2 = plan.seen[String(b2.words[0].w).toLowerCase()];
+  assert(!!s2 && s2.miss === 1, '写错的词 miss+1（提高复现频率）：' + JSON.stringify(s2));
+  eq(plan.tier, 0, '答错一题 → 水平档位降回来（下一句会缩短）');
+  // 模型这一轮一个目标词都没凑进句子（报了个不相干的词）→ 全部退回队列
+  const dropped = b3.words.filter(w => {
+    const st = plan.seen[String(w.w).toLowerCase()] || {};
+    return !st.asked;
+  }).map(w => w.w);
+  eq(dropped.length, b3.words.length, '没凑进句子的词全部退回队列（不算考过、下次优先）：' + dropped.join(','));
 
-  // 最后一题答完 → 收尾指令 + 自动关局
-  q.vm.draft = 'apple';
-  fakeReply = '\u3010\u5bf9\u3011Great job today.';
+  // 3 题出完 → 收尾指令 + 自动关局
+  q.vm.draft = '最后一次翻译。';
+  fakeReply = 'Great job today!';
   await q.vm.send();
   const pw = payloads[payloads.length - 1];
-  eq(pw[pw.length - 1].content, 'WRAP', '词考完了发收尾指令（不是没头没尾地停住）');
+  eq(pw[pw.length - 1].content, 'WRAP', '题出完了发收尾指令（不是没头没尾地停住）');
   eq(q.vm.quiz.on, false, '这一轮回复拿到后自动关局（状态条收起）');
-  eq(q.vm.quiz.right, 2, '最后一题也计进对/错');
 
   // 用户自己点「结束抽测」
   const q2 = boot('block', '\u3010\u5bf9\u3011ok');
   q2.vm.startQuiz('');
-  eq(q2.vm.quiz.pool.length, 10, '不给数字时用默认题量');
+  eq(q2.vm.quiz.plan.total, 6, '不给数字时用默认题数');
   q2.vm.quiz.right = 2;
   q2.vm.quiz.wrong = 1;
   q2.vm.stopQuiz();
@@ -552,7 +586,7 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
     '一键开局替用户说了一句（就是点的那颗）');
   const p1b = payloads[payloads.length - 1];
   assert(/^NEXT:/.test(p1b[p1b.length - 1].content), '一键开局立刻出第一题（不是点了没反应）');
-  eq(q2b.vm.quiz.idx, 1, '第一题已出');
+  eq(q2b.vm.quiz.plan.step, 1, '第一题已出');
   // 静默结束：换会话 / 开新对话时不该往历史里塞小结
   const q3 = boot('block', 'ok');
   q3.vm.startQuiz('');

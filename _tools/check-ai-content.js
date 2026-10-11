@@ -282,34 +282,69 @@ const importer = load('utils/importer.js', {
   if (sp.indexOf('abandon') >= 0 && sp.indexOf('conversation partner') >= 0) ok('陪练系统提示词正确');
   else bad('tutorSystemPrompt 异常：' + sp);
 
-  console.log('== 7b. 抽测提示词（quizSystemPrompt / quizNextHint / quizWrapHint） ==');
-  // 分工：出题顺序在页面（本地），提示词只负责"出题语言 + 点评规则"。
-  // 这三条是那个分工能成立的前提，缺哪条抽测都会退化成"模型自由发挥"。
+  console.log('== 7b. 抽测提示词（句子翻译版）==');
+  // 用户改的口径：「不要只做单词随机抽认（那样和直接背单词没有区别），
+  // 而是用今天已背的词尽可能多地组合成一句语义通顺的句子，让用户翻译。」
+  // 分工没变：用哪几个词、句子多长在**本地**（utils/quiz-plan.js），模型只造句子 + 点评。
   const zsp = aiContent.quizSystemPrompt([
     { w: 'abandon', pos: 'v.', m: '放弃' },
     { w: 'novel', pos: 'n.', m: '小说' }
   ]);
   if (zsp.indexOf('abandon') >= 0 && zsp.indexOf('小说') >= 0) ok('词池连词义一起进系统提示词（模型不瞎编释义）');
   else bad('quizSystemPrompt 没带上词池：' + zsp);
-  if (/ONLY|only quiz words|Only quiz words/i.test(zsp)) ok('明确"只考这些词"');
-  else bad('quizSystemPrompt 没说只考词池里的词');
+  if (/Only use words from this pool/i.test(zsp)) ok('明确"只用这些词"');
+  else bad('quizSystemPrompt 没说只用词池里的词');
+  if (/ONE new English sentence/i.test(zsp) && /translate into Chinese/i.test(zsp)) ok('一次只出一道题，且是"英译中"');
+  else bad('quizSystemPrompt 没交代"一次一道英译中"：' + zsp);
   if (zsp.indexOf('\u3010\u5bf9\u3011') >= 0 && zsp.indexOf('\u3010\u9519\u3011') >= 0) ok('判分标记写清楚了（页面靠它计数）');
   else bad('quizSystemPrompt 缺判分标记约定：' + zsp);
-  if (/do NOT output any marker/i.test(zsp)) ok('第一题明确不许输出标记（否则白加一次"答对"）');
+  if (/output NO marker/i.test(zsp)) ok('第一题明确不许输出标记（否则白加一次"答对"）');
   else bad('quizSystemPrompt 没交代"第一题不出标记"');
-  if (/ONE word per reply|exactly ONE word/i.test(zsp)) ok('一次只问一个词');
-  else bad('quizSystemPrompt 没说一次问几个');
+  // 容错（用户要求 2）：凑不成就取子集或拆句，宁可少考几个词
+  if (/subset that fits/i.test(zsp) && /split .{0,20}two short sentences/i.test(zsp)) ok('凑不成就取子集 / 拆成两句');
+  else bad('quizSystemPrompt 没交代"凑不成一句话怎么办"');
+  if (/NEVER force it/i.test(zsp)) ok('明确禁止硬凑不通顺的句子');
+  else bad('quizSystemPrompt 没禁止硬凑');
+  // 评判（用户要求 3）：整体达意 → 漏译/误译/目标词偏差 → 参考译文 → 搭配或语法讲解
+  if (/overall meaning/i.test(zsp)) ok('先判整体是否达意');
+  else bad('quizSystemPrompt 没要求先判整体达意');
+  if (/漏译/.test(zsp) && /误译/.test(zsp)) ok('逐条指出漏译/误译');
+  else bad('quizSystemPrompt 没要求逐条指出漏译/误译：' + zsp);
+  if (/Reference:/i.test(zsp)) ok('要给参考译文');
+  else bad('quizSystemPrompt 没要求参考译文');
+  if (/collocation or grammar/i.test(zsp)) ok('要点出关键搭配或语法');
+  else bad('quizSystemPrompt 没要求讲解搭配/语法');
+  if (/encouraging/i.test(zsp)) ok('语气要求：鼓励、简洁');
+  else bad('quizSystemPrompt 没提语气');
+  if (zsp.indexOf('\u3010\u7528\u8bcd\u3011') >= 0) ok('要求回报"实际用进句子的词"（没用上的词要退回队列）');
+  else bad('quizSystemPrompt 缺【用词】标记约定：' + zsp);
+  if (/do not give the Chinese translation|Do not give the Chinese translation/i.test(zsp)) ok('出题时不许先给译文');
+  else bad('quizSystemPrompt 没拦住"先把译文说了"');
 
-  const hint = aiContent.quizNextHint({ w: 'banana', pos: 'n.', m: '香蕉' });
-  if (hint.indexOf('banana') >= 0 && hint.indexOf('香蕉') >= 0) ok('出题指令带上这一轮的字与义');
-  else bad('quizNextHint 异常：' + hint);
-  if (/do not give the answer/i.test(hint)) ok('出题时不许先给答案');
-  else bad('quizNextHint 没拦住"先把答案说了"');
-  if (aiContent.quizNextHint(null) === '') ok('没有词时返回空串（页面据此判"考完了"）');
-  else bad('quizNextHint 空输入没兜底');
+  const batch = {
+    words: [{ w: 'banana', pos: 'n.', m: '香蕉' }, { w: 'eat', pos: 'v.', m: '吃' }],
+    limit: 9,
+    level: 2,
+    step: 1
+  };
+  const hint = aiContent.quizNextHint(batch);
+  if (hint.indexOf('banana') >= 0 && hint.indexOf('香蕉') >= 0 && hint.indexOf('eat') >= 0) {
+    ok('出题指令带上一组词的形与义');
+  } else bad('quizNextHint 异常：' + hint);
+  if (/9 words or fewer/.test(hint) && /level 2\/5/.test(hint)) ok('出题指令带上目标句长与水平档位（难度贴合）');
+  else bad('quizNextHint 没带句长/档位：' + hint);
+  if (hint.indexOf('\u3010\u7528\u8bcd\u3011') >= 0) ok('出题指令要求回报实际用词');
+  else bad('quizNextHint 没要求回报用词：' + hint);
+  if (/do not give the translation|Do not give the translation/i.test(hint)) ok('出题时不许先给译文');
+  else bad('quizNextHint 没拦住"先把译文说了"');
+  if (aiContent.quizNextHint(null) === '' && aiContent.quizNextHint({ words: [] }) === '') {
+    ok('没有词时返回空串（页面据此判"考完了"）');
+  } else bad('quizNextHint 空输入没兜底');
   const wh = aiContent.quizWrapHint();
-  if (/wrap up|no new question|Do not ask/i.test(wh)) ok('收尾指令：不再出题、做小结');
+  if (/Do not ask any new question/i.test(wh)) ok('收尾指令：不再出题、做小结');
   else bad('quizWrapHint 异常：' + wh);
+  if (/translated wrongly/i.test(wh)) ok('收尾要列出写错的词（用户要求 4/5：让他知道该复习什么）');
+  else bad('quizWrapHint 没要求列出错词：' + wh);
 
   console.log('== 8. validateKeyFormat 格式校验（纯本地） ==');
   const cases = [
