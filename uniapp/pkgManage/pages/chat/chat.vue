@@ -37,36 +37,41 @@
         <view id="mb-b"></view>
       </scroll-view>
 
-      <!-- 抽测状态条：这不是"工具栏"（工具栏会随内容被推上去），
-           而是这一局的进度 —— 贴在输入框正上方，一眼看到"第几题、对了几个" -->
-      <view v-if="quiz.on" class="quiz-bar">
-        <text class="qb-txt">{{ quizBarText }}</text>
-        <text class="qb-stop" @tap="stopQuiz">{{ $t('结束抽测') }}</text>
-      </view>
+      <!-- 底部一组（抽测状态条 / 引导条 + 输入框）。
+           包在一起是因为**键盘弹出时要整组往上顶**：真机上键盘常常是个浮层，
+           只把输入框盖住 —— 用户根本看不见自己打了什么（见 onKbChange）。 -->
+      <view class="chat-bottom" :style="bottomStyle">
+        <!-- 抽测状态条：这不是"工具栏"（工具栏会随内容被推上去），
+             而是这一局的进度 —— 贴在输入框正上方，一眼看到"第几题、对了几个" -->
+        <view v-if="quiz.on" class="quiz-bar">
+          <text class="qb-txt">{{ quizBarText }}</text>
+          <text class="qb-stop" @tap="stopQuiz">{{ $t('结束抽测') }}</text>
+        </view>
 
-      <!-- 抽测入口：说一句目标就能开始（「考我今天背的词」「抽测 20 个」）。
-           光靠"用户自己想到这么说"不够，所以给一颗一键开始的引导条。 -->
-      <view v-else class="quiz-start">
-        <text class="qs-chip" @tap="startQuizQuick">{{ $t('抽测我') }}</text>
-        <text class="qs-hint">{{ $t('用今天背的词出一句翻译题') }}</text>
-      </view>
+        <!-- 抽测入口：说一句目标就能开始（「考我今天背的词」「抽测 20 个」）。
+             光靠"用户自己想到这么说"不够，所以给一颗一键开始的引导条。 -->
+        <view v-else class="quiz-start">
+          <text class="qs-chip" @tap="startQuizQuick">{{ $t('抽测我') }}</text>
+          <text class="qs-hint">{{ $t('用今天背的词出一句翻译题') }}</text>
+        </view>
 
-      <view class="input-bar">
-        <input
-          class="chat-input"
-          :value="draft"
-          @input="e => draft = e.detail.value"
-          :focus="inputFocus"
-          :hold-keyboard="true"
-          @focus="kbOn = true"
-          @blur="kbOn = false"
-          :placeholder="inputPlaceholder"
-          confirm-type="send"
-          @confirm="send"
-        />
-        <button class="send-btn" @tap="send" :disabled="!draft.trim() || thinking">
-          {{ thinking ? '…' : $t('发送') }}
-        </button>
+        <view class="input-bar">
+          <input
+            class="chat-input"
+            :value="draft"
+            @input="e => draft = e.detail.value"
+            :focus="inputFocus"
+            :hold-keyboard="true"
+            @focus="kbOn = true"
+            @blur="kbOn = false"
+            :placeholder="inputPlaceholder"
+            confirm-type="send"
+            @confirm="send"
+          />
+          <button class="send-btn" @tap="send" :disabled="!draft.trim() || thinking">
+            {{ thinking ? '…' : $t('发送') }}
+          </button>
+        </view>
       </view>
     </block>
 
@@ -112,6 +117,24 @@ import FloatNavbar from '../../../components/float-navbar/float-navbar.vue'
 
 const GREETING = "Hi! I'm your English partner. Let's chat — how are you today?";
 
+/**
+ * 当前可视区高度（px）。两个来源都试一遍：
+ *   ① 页面层的 `window.innerHeight`（H5 一定有）
+ *   ② uni 的 `getSystemInfoSync().windowHeight`（App 端 adjustResize 生效时它会变矮）
+ * 都取不到就返回 0 —— 调用方按"系统没帮我们压过"处理，宁可自己顶一下让输入框可见，
+ * 也不要因为取不到高度而把它留在键盘底下。
+ */
+function viewportH() {
+  try {
+    if (typeof window !== 'undefined' && window.innerHeight > 0) return window.innerHeight;
+  } catch (e) { /* 逻辑层没有 window，正常 */ }
+  try {
+    const info = uni.getSystemInfoSync();
+    if (info && info.windowHeight > 0) return info.windowHeight;
+  } catch (e) { /* 取不到就算了 */ }
+  return 0;
+}
+
 // 「考我今天背的词」这类目标句：出现了这些词才算要开局。
 // 不写宽一点（比如光一个"测试"）：正常聊天里也会出现"测试"，误开局会把对话带跑偏。
 const QUIZ_WORDS = /抽测|抽背|抽考|考考我|考我|来考|考一下|出题|小测|quiz\s*me|test\s*me/i;
@@ -136,6 +159,8 @@ export default {
       lastScrollAt: 0,    // 滚到底的节流（流式逐字来，别一个字滚一次）
       inputFocus: false,  // 发完一句后把焦点抢回来（键盘不收，聊天是连续的）
       kbOn: false,        // input 当前有没有焦点：没丢就别做多余的 false→true（会闪）
+      kbHeight: 0,        // 当前键盘高度（0 = 收起）
+      kbPad: 0,           // 真正要顶起来的像素：系统已经压过可视区时它保持 0
       savedSig: 0,        // 收藏状态变了要重算 viewMessages
       streamTick: 0,      // 流式每来一段就 +1：viewMessages 是计算属性，靠它失效重算
       listShow: false,
@@ -162,6 +187,14 @@ export default {
         { key: 'new', text: t('新对话') },
         { key: 'sentences', text: t('我的句子') }
       ]
+    },
+    /**
+     * 底部一组要不要往上顶。kbPad 由 onKbChange 算出来（0 = 不用顶）。
+     * 模板里不能写函数调用，所以在这里先算成 style 对象。
+     */
+    bottomStyle() {
+      const p = Number(this.kbPad) || 0
+      return p > 0 ? { paddingBottom: p + 'px' } : {}
     },
     inputPlaceholder() {
       void this.__lang
@@ -191,17 +224,31 @@ export default {
         }))
     }
   },
+  created() {
+    // 记下"键盘没弹出来时的可视高度"，onKbChange 靠它判断系统有没有帮我们压过可视区。
+    // 非响应式字段不进 data（按项目约定，但必须在 created 里先挂到实例上）。
+    this._winH = viewportH()
+  },
   onLoad(opt) {
     this.aiEnabled = !!isAIEnabled() && featureOn('chat')
     if (!this.aiEnabled) return
     this.loadSession(chatStore.active())
     if (opt && opt.list === '1') this.openList()
+    // 键盘高度监听：只在这个页面活着时挂（onUnload 会摘掉）
+    if (typeof uni.onKeyboardHeightChange === 'function') {
+      this._kbCb = (res) => { this.onKbChange(res) }
+      uni.onKeyboardHeightChange(this._kbCb)
+    }
   },
   onUnload() {
     // 关页面前一定落盘：写盘是 800ms 合并的，直接退出可能丢最后一句
     this.persist()
     chatStore.flush()
     tts.stop()
+    if (this._kbCb && typeof uni.offKeyboardHeightChange === 'function') {
+      uni.offKeyboardHeightChange(this._kbCb)
+      this._kbCb = null
+    }
   },
   onBackPress() {
     // 历史面板开着 → 返回键先关它，而不是直接离开页面
@@ -209,6 +256,45 @@ export default {
     return false
   },
   methods: {
+    // ---------- 软键盘 ----------
+    /**
+     * 键盘高度变化 → 把底部那一组（输入框 + 抽测状态条）顶到键盘上方。
+     *
+     * 真机症状：「点击对话框以后，手机小键盘完全挡住输入框，根本看不到自己输入了什么」。
+     * 虽然 pages.json 里已经写了 `softinputMode: adjustResize`（理论上 webview 可视区会
+     * 被压短、fixed 四边贴 0 的容器跟着缩），但它属于 manifest 级配置 ——
+     * 要重新运行 / 自定义基座 / 云打包才生效，而且部分 ROM 上键盘干脆就是个浮层，
+     * 两种情况都会让输入框被盖住。所以这里做一层**不依赖系统行为**的兜底。
+     *
+     * ⚠️ 不能无脑顶：系统如果真的压过可视区了，再顶一次会把输入框推到屏幕中间。
+     * 判据是"可视高度有没有真的变矮"（`window.innerHeight` 对比进入页面时的值）：
+     *   变矮了 = 系统已经缩过 → 自己不再顶（kbPad = 0）
+     *   没变   = 键盘浮在上面 → 键盘多高就顶多高
+     */
+    onKbChange(res) {
+      const h = Math.max(0, Number((res || {}).height) || 0)
+      this.kbHeight = h
+      if (!h) {
+        // 键盘收起：撤掉位移，并把最新一条滚回可视区
+        this.kbPad = 0
+        this.scrollToEnd(true)
+        return
+      }
+      const apply = () => {
+        // 120ms 那次复查时键盘可能已经收了，别再把输入框顶上去
+        if (!this.kbHeight) return
+        const now = viewportH()
+        // 可视区真的矮了 60px 以上 = 系统已经帮我们压过了 → 自己不再顶
+        const shrunk = this._winH > 0 && now > 0 && now < this._winH - 60
+        this.kbPad = shrunk ? 0 : h
+        this.scrollToEnd(true)
+      }
+      apply()
+      // 部分机型窗口高度更新慢一拍，等一下按真实情况再判一次
+      // （即使第一次判早了，也只是输入框多顶/少顶一下，不会卡死）
+      setTimeout(apply, 120)
+    },
+
     // ---------- 会话 ----------
     learnedWords() {
       try {
@@ -639,6 +725,13 @@ export default {
 .guide-sub { font-size: 26rpx; color: var(--ink-2, #5a6560); line-height: 1.7; margin: 18rpx 0 40rpx; }
 
 .guide-btn { width: 60%; }
+
+/* 底部一组（抽测状态条 / 引导条 + 输入框）：键盘弹出时整组一起被顶起来。
+   加 padding-bottom 而不是改 height —— 容器是 flex 列，多出来的高度会自动
+   从上面 `flex: 1` 的消息列表里扣，列表跟着变矮，输入框始终留在可视区底部。 */
+.chat-bottom {
+  flex-shrink: 0;
+}
 
 /* ---------- 抽测：进度条 + 一键开局（会话工具条已搬进顶栏胶囊） ---------- */
 .quiz-bar {

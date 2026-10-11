@@ -439,6 +439,42 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
   d.jumps.forEach(j => { if (j[1]) used[j[1]] = true });
   assert(used['mb-a'] && used['mb-b'], '两个锚点都用上了：' + JSON.stringify(d.jumps));
 
+  /* --- 9b. 键盘把输入框盖住了（真机反馈：看不见自己打了什么）---
+     `softinputMode: adjustResize` 是 manifest 级配置（要重新运行 / 云打包才生效），
+     而且部分 ROM 上键盘干脆就是个浮层 —— 两种情况都会让输入框被盖住。
+     所以这里有一层**不依赖系统行为**的兜底：按键盘高度把底部一组顶上去，
+     但系统如果已经压短过可视区就不要重复顶（否则输入框会被推到屏幕中间）。 */
+  assert(/class="chat-bottom"[^>]*:style="bottomStyle"/.test(chatSrc), '底部一组整体绑定位移（状态条与输入框一起抬）');
+  const tplBottom = chatSrc.match(/<view class="chat-bottom"[\s\S]*?<\/view>\s*<\/block>/);
+  assert(!!tplBottom && /class="input-bar"/.test(tplBottom[0]), '输入框确实包在 .chat-bottom 里（不然抬的是别的元素）');
+  assert(/uni\.onKeyboardHeightChange\(/.test(chatSrc) && /uni\.offKeyboardHeightChange\(/.test(chatSrc),
+    '监听键盘高度，且页面卸载时摘掉（不然会留一个幽灵回调）');
+  assert(/\.chat-bottom \{[\s\S]{0,90}flex-shrink: 0/.test(chatSrc), '.chat-bottom 不参与收缩（高度由它和消息列表分）');
+
+  // 可视高度由 uni.getSystemInfoSync().windowHeight 提供（App 端 adjustResize 生效时它会变矮）
+  let fakeWinH = 800;
+  uni.getSystemInfoSync = () => ({ windowHeight: fakeWinH });
+  const kb = boot('block', 'ok');
+  kb.vm._winH = 800;
+  kb.vm.onKbChange({ height: 320 });
+  eq(kb.vm.kbPad, 320, '可视区没变矮（键盘是浮层）→ 按键盘高度自己顶');
+  fakeWinH = 460;                    // 系统这次真把可视区压短了
+  kb.vm.onKbChange({ height: 320 });
+  eq(kb.vm.kbPad, 0, '系统已经压短过可视区 → 不再自己顶（否则输入框会被推到屏幕中间）');
+  eq(JSON.stringify(ChatPage.computed.bottomStyle.call(kb.vm)), '{}', '不需要顶的时候不产生空 style');
+  fakeWinH = 800;
+  kb.vm.onKbChange({ height: 320 });
+  assert(/paddingBottom/.test(JSON.stringify(ChatPage.computed.bottomStyle.call(kb.vm))),
+    'bottomStyle 真的给出 padding-bottom：' + JSON.stringify(ChatPage.computed.bottomStyle.call(kb.vm)));
+  kb.vm.onKbChange({ height: 0 });
+  eq(kb.vm.kbPad, 0, '键盘收起 → 撤掉位移（输入框落回屏幕底部）');
+  // 高度一个都取不到时宁可自己顶 —— 不能让输入框留在键盘底下
+  uni.getSystemInfoSync = () => { throw new Error('no info') };
+  const kb2 = boot('block', 'ok');
+  kb2.vm._winH = 0;
+  kb2.vm.onKbChange({ height: 300 });
+  eq(kb2.vm.kbPad, 300, '量不到可视高度 → 保守地自己顶（看不见输入框比多顶一下糟得多）');
+
   /* ============================================================
    * 10. 三个动作搬进顶栏胶囊
    * ------------------------------------------------------------
