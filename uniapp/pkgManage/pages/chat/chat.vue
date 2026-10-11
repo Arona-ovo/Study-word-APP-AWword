@@ -562,7 +562,21 @@ export default {
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* ⚠️ 高度必须靠 fixed + 四边贴 0，不能写 `height: 100vh`：
+     1. 全局 softinputMode 是 adjustResize（见 pages.json），键盘弹出时压的是 webview
+        可视区高度，window 不动；而 `100vh` 在部分 Android WebView 上**不随可视区更新**，
+        键盘出来后高度还是旧值 → 底部被吃掉，看着像"被顶上去"。
+     2. fixed 四边贴 0 才跟着可视区实时收缩。`min-height: 0` 留给内部 flex 正常收缩。 */
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  /* 全局 `.container` 带 `min-height: 100vh`（给普通页面兜底用），而 min-height 会盖过
+     top/bottom 算出来的高度 → 这里必须显式压回 0；再加 max-height 兜一道：
+     fixed 元素的百分比相对**初始包含块**（= 可视区），键盘弹出时它会跟着更新。 */
+  min-height: 0;
+  max-height: 100%;
   box-sizing: border-box;
   /* 不要写死背景：根节点同时承担深色底 / 背景图（.app-dark 与 inline style） */
 }

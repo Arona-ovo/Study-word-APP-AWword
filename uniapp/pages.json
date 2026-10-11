@@ -115,6 +115,7 @@
     "navigationBarTitleText": "背单词",
     "backgroundColor": "#e4e9e4",
     "app-plus": {
+      "softinputMode": "adjustResize",
       "titleNView": {
         "backgroundColor": "#E4E9E4",
         "titleColor": "#17201A",

@@ -663,6 +663,35 @@ m 高不代表不用复习（不复习它就会掉回去），due 到了也不�
   面板里还没打字时（`!lastQuery`）显示，一条都没有时整块不渲染。做题页顶栏查词共用同一份
 - 校验：`_tools/check-home.js` 第 8 组、`_tools/check-word-search.js` 第 13 组
 
+#### 软键盘把顶栏顶飞了（`softinputMode` 与 `height: 100vh`）
+
+用户反馈：「打开输入法以后顶部的悬浮胶囊就被顶到上面去卡 bug 看不到了」。
+
+- **根因是软键盘模式**：uni-app App 端 `softinputMode` 默认是 **`adjustPan`** ——
+  键盘弹出时把**整个 window 往上推**，`position: fixed` 的顶栏 / 悬浮胶囊是相对 window 定位的，
+  于是跟着整窗一起上移，直接跑出屏幕（截图里就是被顶没了）。
+  注意它**不是被盖住**，是真的被推走了，所以调 z-index / 换定位一点用都没有
+- **改成 `adjustResize`**（`pages.json` → `globalStyle["app-plus"].softinputMode`）：
+  这个模式压的是 **webview 的可视区高度**，window 本身不动，fixed 元素就留在原地
+- **配套：整屏容器不许写 `height: 100vh`**。部分 Android WebView 上 `vh` 在键盘弹出时
+  **不随可视区更新**，高度还是键盘没出来时的那个值 → 底部被吃、布局看着像被顶。
+  要撑满一屏就写 `position: fixed; left: 0; right: 0; top: 0; bottom: 0;`
+  （`chat.vue` 的 `.chat-container` 就是这么改的）
+- **两个细节**：
+  - `min-height: 0` 必须显式写 —— 全局 `.container` 带 `min-height: 100vh`（给普通页面兜底），
+    而 min-height 会盖过 `top/bottom` 算出来的高度；再加 `max-height: 100%` 兜一道
+    （fixed 元素的百分比相对**初始包含块**，键盘弹出时它会跟着更新）
+  - `min-height: 0` 也留给内部 flex 正常收缩
+- **规矩**：
+  1. 全局只用 `adjustResize`，不要为了某个页面回退成 `adjustPan`
+  2. 需要"满屏"的容器一律 fixed 四边贴 0，**不写 `height: 100vh`**
+- 校验：`_tools/check-pages-json.js`（`softinputMode` 必须是 `adjustResize`）、
+  `_tools/check-app-compat.js` 第 1b 组（源码里不许出现 `height: 100vh`，
+  `min-height` / `max-height` 不挡；扫之前先剥注释，否则注释里的反例会自己抓自己）
+
+> ⚠️ `pages.json` 这类 manifest 级改动**要重新运行 / 重新云打包才生效**，
+> 标准基座真机上跑的是打进去的那份配置。
+
 #### 搜索结果：AI 补全多义 + 预判预取（`utils/word-polish-mixin.js`）
 
 用户反馈：「搜索出来的本地已缓存单词，有时候其他意思显示不全，有些一词多义显示不全」。

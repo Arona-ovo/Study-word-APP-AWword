@@ -78,6 +78,37 @@ RULES.forEach(rule => {
   }
 });
 
+console.log('== 1b. 整屏容器不许写 height: 100vh ==');
+// 回归点：chat.vue 的 .chat-container 原来写 `height: 100vh`。全局 softinputMode 改成
+// adjustResize 之后，键盘弹出压的是 webview 可视区，但部分 Android WebView 上 `vh`
+// **不随可视区更新**，高度还是键盘没出来时的旧值 → 底部被吃、布局看着像被顶飞。
+// 要撑满一屏就写 position: fixed + 四边贴 0。
+// 注意：注释里常写"不能写 height: 100vh"这类反例，不剥注释就会自己告自己。
+// 另外这里不能用 stripComments（第 1 组已有同名声明，函数声明提升会互相覆盖），
+// 必须用等长空白替换的版本以保住行号。
+function stripCommentsKeepLines(s) {
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:])\/\/[^\n]*/g, m => m.replace(/[^\n]/g, ' '));
+}
+
+const VH_HITS = [];
+files.forEach(f => {
+  let src;
+  try { src = fs.readFileSync(f, 'utf8'); } catch (e) { return; }
+  stripCommentsKeepLines(src).split('\n').forEach((line, i) => {
+    // 只挡 height:（由 height 声明），min-height / max-height 放行
+    if (/(^|[\s;{])(height)\s*:\s*[^;]*\b100vh\b/.test(line)) {
+      VH_HITS.push(path.relative(ROOT, f) + ':' + (i + 1) + '  ' + line.trim().slice(0, 90));
+    }
+  });
+});
+if (VH_HITS.length === 0) ok('没有 height: 100vh（整屏容器一律 fixed 四边贴 0）');
+else {
+  VH_HITS.forEach(h => bad('height: 100vh → ' + h));
+  console.error('       原因：键盘弹出时 vh 不随可视区更新 → 底部被吃。改 position:fixed; left/right/top/bottom:0');
+}
+
 console.log('== 2. 编译产物交叉验证（若已编译则顺带查一遍）==');
 // 产物是 uni-app 处理之后真正跑到手机上的 JS，扫它能捞到"源码看着没事、编译后出事"的情况
 const ART = path.join(ROOT, 'unpackage', 'dist', 'dev', 'app-plus', 'app-service.js');
