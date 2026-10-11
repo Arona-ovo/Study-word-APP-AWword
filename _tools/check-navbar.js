@@ -160,6 +160,30 @@ const noSwitch = mount({ search: true, switchable: false, value: '', mode: 'comm
 noSwitch.onModeTap();
 eq(noSwitch.emits.length, 0, 'switchable=false 的页面没有这颗键，点击不响应');
 
+console.log('== 11. 标题右侧的快捷动作（actions）：非搜索态的"常驻入口" ==');
+// 回归点（AI 对话页反馈）：「最顶上那三个功能，聊天记录多了就要翻到很上面才看得到」。
+// 原因是那三个按钮放在页面里的工具栏上，没有 fixed。现在胶囊接管：怎么滚都在。
+yes(/actions:\s*\{\s*type:\s*Array/.test(script), '组件声明了 actions 数组 prop');
+yes(/onActionTap\(key\)\s*\{[\s\S]{0,120}\$emit\('action', key\)/.test(script),
+  '点一下只发 action 事件（做什么由页面定，组件不猜）');
+yes(/v-if="hasActions"[\s\S]{0,300}v-for="a in actions"/.test(tpl), '模板按数组渲染快捷动作');
+yes(/hasActions\(\)\s*\{[\s\S]{0,200}!this\.search/.test(script),
+  '搜索态不给动作留位置（那条胶囊是给输入框用的）');
+yes(/flex-shrink:\s*0/.test(style.slice(style.indexOf('.fnb-acts'))), '动作区不被压缩');
+yes(/\.fnb-title\s*\{[^}]*min-width:\s*0/.test(style),
+  '标题可收缩（长标题不该把动作挤出屏幕外）');
+
+const noAct = mount({ title: 'X' });
+eq(noAct.hasActions, false, '没传 actions → 不出现');
+const withAct = mount({ title: 'X', actions: [{ key: 'new', text: '新对话' }] });
+eq(withAct.hasActions, true, '传了 actions → 出现');
+withAct.onActionTap('new');
+eq(withAct.emits.length, 1, '点一下有响应');
+eq(withAct.emits[0].n, 'action', '事件名');
+eq(withAct.emits[0].v, 'new', '事件带 key');
+const inSearch = mount({ search: true, title: '', actions: [{ key: 'new', text: '新对话' }] });
+eq(inSearch.hasActions, false, '搜索态隐藏（哪怕传了 actions）');
+
 console.log('');
 console.log(fail === 0 ? '顶栏搜索胶囊全部通过' : '失败 ' + fail + ' 项');
 process.exitCode = fail ? 1 : 0;

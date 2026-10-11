@@ -282,6 +282,35 @@ const importer = load('utils/importer.js', {
   if (sp.indexOf('abandon') >= 0 && sp.indexOf('conversation partner') >= 0) ok('陪练系统提示词正确');
   else bad('tutorSystemPrompt 异常：' + sp);
 
+  console.log('== 7b. 抽测提示词（quizSystemPrompt / quizNextHint / quizWrapHint） ==');
+  // 分工：出题顺序在页面（本地），提示词只负责"出题语言 + 点评规则"。
+  // 这三条是那个分工能成立的前提，缺哪条抽测都会退化成"模型自由发挥"。
+  const zsp = aiContent.quizSystemPrompt([
+    { w: 'abandon', pos: 'v.', m: '放弃' },
+    { w: 'novel', pos: 'n.', m: '小说' }
+  ]);
+  if (zsp.indexOf('abandon') >= 0 && zsp.indexOf('小说') >= 0) ok('词池连词义一起进系统提示词（模型不瞎编释义）');
+  else bad('quizSystemPrompt 没带上词池：' + zsp);
+  if (/ONLY|only quiz words|Only quiz words/i.test(zsp)) ok('明确"只考这些词"');
+  else bad('quizSystemPrompt 没说只考词池里的词');
+  if (zsp.indexOf('\u3010\u5bf9\u3011') >= 0 && zsp.indexOf('\u3010\u9519\u3011') >= 0) ok('判分标记写清楚了（页面靠它计数）');
+  else bad('quizSystemPrompt 缺判分标记约定：' + zsp);
+  if (/do NOT output any marker/i.test(zsp)) ok('第一题明确不许输出标记（否则白加一次"答对"）');
+  else bad('quizSystemPrompt 没交代"第一题不出标记"');
+  if (/ONE word per reply|exactly ONE word/i.test(zsp)) ok('一次只问一个词');
+  else bad('quizSystemPrompt 没说一次问几个');
+
+  const hint = aiContent.quizNextHint({ w: 'banana', pos: 'n.', m: '香蕉' });
+  if (hint.indexOf('banana') >= 0 && hint.indexOf('香蕉') >= 0) ok('出题指令带上这一轮的字与义');
+  else bad('quizNextHint 异常：' + hint);
+  if (/do not give the answer/i.test(hint)) ok('出题时不许先给答案');
+  else bad('quizNextHint 没拦住"先把答案说了"');
+  if (aiContent.quizNextHint(null) === '') ok('没有词时返回空串（页面据此判"考完了"）');
+  else bad('quizNextHint 空输入没兜底');
+  const wh = aiContent.quizWrapHint();
+  if (/wrap up|no new question|Do not ask/i.test(wh)) ok('收尾指令：不再出题、做小结');
+  else bad('quizWrapHint 异常：' + wh);
+
   console.log('== 8. validateKeyFormat 格式校验（纯本地） ==');
   const cases = [
     { c: {}, ok: false, tag: '全空' },

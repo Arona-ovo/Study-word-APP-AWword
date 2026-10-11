@@ -200,6 +200,61 @@ export function tutorSystemPrompt(learnedWords) {
   ].filter(Boolean).join(' ')
 }
 
+/**
+ * 抽测模式的 system 提示词。
+ *
+ * 分工：**出题顺序由页面（本地）定**，模型只做两件事 —— 把这一题问出来、点评上一题。
+ * 全交给模型自由发挥的话，它会翻来覆去考同一个词、还会顺手编释义；
+ * 而本地手里有当前词书的原词与原释义，正好把这两件事钉死。
+ *
+ * 判定标记：让模型在**判分**时以「【对】/【错】」开头。自然语言里"对了""答错啦"
+ * 混在点评中间，正则判不准；固定标记还能让页面把"对 x 错 y"直接数出来（状态条上可见）。
+ * 第一题还没人回答，所以明确要求那一轮**不许**输出标记 —— 否则会白加一次"答对"。
+ */
+export function quizSystemPrompt(pool) {
+  const list = (pool || [])
+    .filter(w => w && w.w)
+    .slice(0, 30)
+    .map(w => w.w + (w.pos ? ' (' + w.pos + ')' : '') + ' = ' + w.m)
+    .join('; ')
+  return [
+    'You are a vocabulary quiz coach for a Chinese student.',
+    'Ask about exactly ONE word per reply, then wait for the student to answer.',
+    'The student may answer in Chinese or English; accept either.',
+    'Grading rule: if you are grading the student\'s answer to your previous question,'
+      + ' start your reply with the exact marker 【对】 or 【错】 (nothing before it, no space).',
+    'If there is no student answer to grade yet (this is the first question),'
+      + ' do NOT output any marker — just ask the question.',
+    'After the marker, give ONE short sentence of feedback, then immediately ask the next question.',
+    'Never reveal the answer before the student answers. Keep everything short (1-3 sentences). Reply in English.',
+    'Only quiz words from this pool; their meanings below are authoritative — do not invent meanings: ' + list
+  ].join(' ')
+}
+
+/**
+ * 抽测：把"这一轮要考哪个词"作为一条 system 指令挂在 payload 末尾。
+ * 它**只在发给模型的那份 payload 里**（页面不往 messages 里存、也不显示），
+ * 所以既不会污染界面，也不会写进对话存档。
+ */
+export function quizNextHint(w) {
+  if (!w || !w.w) return ''
+  return [
+    'QUIZ STEP: ask the student about exactly this word: "' + w.w + '"'
+      + (w.pos ? ' (' + w.pos + ')' : '') + ' — ' + w.m + '.',
+    'Ask ONE question about it (its Chinese meaning, or a fill-in-the-blank sentence) in English, 1-2 sentences.',
+    'Do not ask about any other word, and do not give the answer.'
+  ].join(' ')
+}
+
+/** 词考完了：让模型收尾（这一轮之后页面会自动结束抽测） */
+export function quizWrapHint() {
+  return [
+    'QUIZ STEP: every word in the pool has been asked.',
+    'Do not ask any new question; use 2-3 sentences to wrap up:'
+      + ' praise what the student did well, and list the words that were answered wrong.'
+  ].join(' ')
+}
+
 export async function chat(messages, opts) {
   aiFeature('chat')
   ensureEnabled()

@@ -36,6 +36,19 @@
       <!-- 标题栏本身可点：点了就切到搜索态（不是搜索态的页面才需要） -->
       <text v-else class="fnb-title" :class="{ 'fnb-title-tappable': searchable }" @tap="onTitleTap">{{ title }}</text>
 
+      <!-- 标题右侧的快捷动作（非搜索态）。
+           为什么放胶囊里而不是页面里另起一条工具栏：工具栏一旦在滚动区域里，
+           内容一多就得先翻到顶才够得到（对话页实测反馈）；胶囊是 fixed 的，怎么滚都在。
+           用数组 prop 而不是 slot —— 本项目所有组件都是 props 驱动的，一路下来没用过 slot。 -->
+      <view v-if="hasActions" class="fnb-acts">
+        <text
+          v-for="a in actions"
+          :key="a.key"
+          class="fnb-act"
+          @tap="onActionTap(a.key)"
+        >{{ a.text }}</text>
+      </view>
+
       <view
         class="fnb-side"
         :class="{ 'fnb-side-flat': isFlat, 'fnb-side-dim': dimSearchEntry }"
@@ -104,7 +117,14 @@ export default {
     // 切到搜索态时把输入框抢过来（弹键盘）
     autofocus: { type: Boolean, default: false },
     // 点页面别处不主动收键盘（搜索结果在下方的页面用，滚结果时键盘不闪）
-    keepKeyboard: { type: Boolean, default: false }
+    keepKeyboard: { type: Boolean, default: false },
+    /**
+     * 标题右侧的快捷动作：[{ key, text }]。
+     * 给"这一页最常用的几件事"一个**常驻**入口 —— 页面里另起一条工具栏的话，
+     * 内容一多那条栏就被推到上面去了（AI 对话页的用户反馈就是这么来的）。
+     * 组件只负责渲染与发事件，点了要做什么由页面决定。
+     */
+    actions: { type: Array, default: () => [] }
   },
   data() {
     return { barH: 0, focused: false }
@@ -136,6 +156,11 @@ export default {
     // 搜索入口置灰：只在"非搜索态 + 可搜 + 当前还不能搜"时成立
     dimSearchEntry() {
       return !!(this.searchable && this.searchLocked && !this.search)
+    },
+    // 快捷动作只在非搜索态出现：搜索态整条胶囊是给输入框用的，
+    // 再塞几颗键会把输入区挤没（数组判空也在这里做，别在模板里写 .length）
+    hasActions() {
+      return !this.search && Array.isArray(this.actions) && this.actions.length > 0
     }
   },
   created() {
@@ -236,6 +261,10 @@ export default {
     onModeTap() {
       if (!this.search || !this.switchable) return
       this.$emit('mode-toggle', this.mode === 'command' ? 'search' : 'command')
+    },
+    // 快捷动作：同样只发事件（页面才知道 key 对应什么）
+    onActionTap(key) {
+      this.$emit('action', key)
     },
     onBack() {
       if (!this.showBack) return
@@ -458,6 +487,8 @@ export default {
 
 .fnb-title {
   flex: 1;
+  /* 快捷动作是固定宽度的，标题必须能先收缩（否则长标题会把动作挤出屏幕外） */
+  min-width: 0;
   text-align: center;
   font-size: 30rpx;
   font-weight: 500;
@@ -469,6 +500,29 @@ export default {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/* ===== 标题右侧的快捷动作（非搜索态）===== */
+.fnb-acts {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: 6rpx;
+}
+
+.fnb-act {
+  font-size: 22rpx;
+  line-height: 1;
+  color: #1d4fd8;
+  color: var(--brand-strong, #1d4fd8);
+  background: rgba(46, 107, 255, 0.08);
+  background: rgba(var(--brand-rgb, 46, 107, 255), 0.08);
+  border-radius: 999rpx;
+  padding: 10rpx 16rpx;
+  margin-left: 10rpx;
+}
+
+.fnb-act:active { background: rgba(46, 107, 255, 0.2); }
+.fnb-act:active { background: rgba(var(--brand-rgb, 46, 107, 255), 0.2); }
 
 /* 搜索模式：胶囊内嵌输入框（首页）
    - 上下：height 100%，始终与胶囊同高（收缩时只动左右，不动上下）

@@ -323,6 +323,9 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
 
   const tick = () => new Promise(r => setTimeout(r, 0));
   const chatScript = (/<script[^>]*>([\s\S]*?)<\/script>/.exec(chatSrc) || [])[1] || '';
+  // 每次请求的 payload 都留一份：抽测这一组的核心断言就是"发了什么给模型"
+  // （出题指令有没有挂上、答案气泡有没有带上、词用完了有没有收尾指令）
+  const payloads = [];
   let fakeMode = 'stream';
   let fakeReply = '';
   const ChatPage = loadCode(chatScript, {
@@ -330,7 +333,12 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
     isAIEnabled: () => true,
     featureOn: () => true,
     tutorSystemPrompt: () => 'SYS',
+    // 抽测用的三个提示词构造器（真身见 services/ai-content.js，这里只要形状）
+    quizSystemPrompt: (pool) => 'QUIZSYS:' + (pool || []).map(w => w.w).join(','),
+    quizNextHint: (w) => (w && w.w ? 'NEXT:' + w.w : ''),
+    quizWrapHint: () => 'WRAP',
     chatTutor: async (msgs, opts) => {
+      payloads.push(msgs);
       if (fakeMode === 'stream' && opts && opts.onDelta) {
         await tick(); opts.onDelta('Sure! ');
         await tick(); opts.onDelta('Let us practice.');
@@ -424,6 +432,141 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
   const used = {};
   d.jumps.forEach(j => { if (j[1]) used[j[1]] = true });
   assert(used['mb-a'] && used['mb-b'], '两个锚点都用上了：' + JSON.stringify(d.jumps));
+
+  /* ============================================================
+   * 10. 三个动作搬进顶栏胶囊
+   * ------------------------------------------------------------
+   * 用户反馈：「最顶上那三个功能，聊天记录多了就要翻到很上面才看得到」。
+   * 那三个按钮原本在页面里另起一条工具栏 —— 内容一多就被推上去了。
+   * 现在挂在胶囊的 actions 上（胶囊是 fixed，怎么滚都在）。
+   * ============================================================ */
+  console.log('== 10. 会话动作搬进顶栏胶囊 ==');
+  assert(!/class="chat-bar"/.test(chatSrc), '页面里那条工具栏已删（它就是"要翻上去才看得到"的那条）');
+  assert(/<float-navbar[^>]*:actions="navActions"[^>]*@action="onNavAction"/.test(chatSrc),
+    '三个动作挂到顶栏胶囊上');
+  assert(/navActions\(\)\s*\{[\s\S]{0,400}key: 'history'/.test(chatSrc)
+    && /key: 'new'/.test(chatSrc) && /key: 'sentences'/.test(chatSrc),
+    '历史 / 新对话 / 我的句子 三颗都还在（只是换了地方）');
+  assert(/void this\.__lang/.test(chatSrc), '动作文案建立语言依赖（切英文要跟着变）');
+  const nav = boot('block', 'ok');
+  const acts = ChatPage.computed.navActions.call(nav.vm);
+  eq(acts.length, 3, '三颗动作');
+  eq(acts.map(a => a.key).join(','), 'history,new,sentences', 'key 顺序');
+  nav.vm.onNavAction('history');
+  eq(nav.vm.listShow, true, '历史 → 打开历史面板');
+  const before = chatStore.sessions().length;
+  nav.vm.onNavAction('new');
+  eq(chatStore.sessions().length, before + 1, '新对话 → 真的开了一场新的');
+  eq(nav.vm.listShow, false, '开新对话顺带收起面板');
+  // 「我的句子」是跳页，交给 uni 记
+  assert(/favorites\/favorites\?tab=sentence/.test(chatSrc), '我的句子 → 收藏页例句档');
+
+  /* ============================================================
+   * 11. 抽测：出题顺序在本地，模型只负责出题与点评
+   * ------------------------------------------------------------
+   * 用户要的：「用户说完一个目标然后 AI 就根据要背的单词来反复抽测，
+   * 每次说出答案」。所以：
+   *   · 词池开局时从当前词书取好（一轮不重复、进度可数）
+   *   · 每轮把"这一轮考哪个词"作为 system 指令挂在 payload 末尾（不落盘、不显示）
+   *   · 用户答完，页面**本地**把答案摆出来（模型忘了说也不会漏）
+   *   · 模型用开头标记【对】/【错】判分，页面据此计数（状态条上看得见）
+   * ============================================================ */
+  console.log('== 11. 抽测：本地定题序，模型只出题/点评 ==');
+  assert(/<float-navbar[\s\S]{0,200}actions/.test(chatSrc), '抽测引导条在输入框上方（不会跟着内容滚）');
+  assert(/v-if="quiz\.on"[\s\S]{0,200}quizBarText/.test(chatSrc), '抽测中显示进度条');
+  assert(/v-else[\s\S]{0,200}startQuizQuick/.test(chatSrc), '没抽测时给一键开局');
+  assert(/\/抽测\|抽背\|抽考\|考考我\|考我/.test(chatSrc), '有"目标句"识别（说一句"考我…"就能开局）');
+  assert(/bookWords\(/.test(chatSrc) && /currentBookId\(/.test(chatSrc), '词池取当前词书（在哪本书就考哪本）');
+  assert(/当前词书里没有可抽测的词/.test(chatSrc), '词书没词时给人话，不是干等');
+
+  payloads.length = 0;
+  const q = boot('block', '\u3010\u5bf9\u3011Nice. Next one?');
+  const started = q.vm.startQuiz('考我 3 个词');
+  eq(started, true, '开局成功（词书里有词）');
+  eq(q.vm.quiz.on, true, 'quiz.on');
+  eq(q.vm.quiz.pool.length, 3, '题量按目标句里的数字（"考我 3 个词"）');
+  assert(q.vm.quiz.pool.every(w => w.w && w.m), '词池里每个词都带词形 + 释义（答案本地就有）');
+  assert(/QUIZSYS:/.test(q.vm.messages[0].content), 'system 换成抽测提示词');
+  // 开局时不该有"待判的答案"
+  eq(q.vm.quiz.judge, false, '开局还没有答案要判（否则状态条一开始就多算一次"对"）');
+
+  q.vm.draft = '考我 3 个词';
+  await q.vm.send();
+  eq(q.vm.quiz.idx, 1, '第一条消息就出了第一题');
+  eq(q.vm.quiz.cur.w, q.vm.quiz.pool[0].w, '正在等回答的就是第 1 个词');
+  const p1 = payloads[payloads.length - 1];
+  eq(p1[p1.length - 1].content, 'NEXT:' + q.vm.quiz.pool[0].w, 'payload 末尾挂上"这一轮考哪个词"');
+  assert(p1[p1.length - 1].role === 'system', '出题指令是 system（不显示、不落盘）');
+  assert(!/NEXT:/.test(chatSrc.match(/this\.messages\.push\(\{ role: 'user'[\s\S]{0,200}/)[0]),
+    '指令只进 payload，不塞进 messages');
+
+  // 用户答一句：本地先摆答案，再让模型点评 + 出下一题
+  const answered = q.vm.quiz.cur;
+  q.vm.draft = '放弃';
+  await q.vm.send();
+  const msgs = q.vm.messages;
+  // 用"找内容"而不是下标：中间还夹着 system / 欢迎语 / 上一轮的点评，
+  // 按下标数很容易把断言写成"其实是别的气泡"（错一次就得再数一遍）
+  const answerMsg = msgs.filter(m => /^答案：/.test(m.content)).pop();
+  assert(!!answerMsg && answerMsg.content.indexOf(answered.m) >= 0,
+    '答完立刻把正确答案摆出来（本地出，不靠模型复述）：' + (answerMsg && answerMsg.content));
+  eq(answerMsg && answerMsg.role, 'assistant', '答案是一条正常气泡');
+  eq(q.vm.quiz.right, 1, '模型开头是【对】→ 记一次答对');
+  eq(q.vm.quiz.wrong, 0, '答错不涨');
+  eq(lastOf(q.view()).content.indexOf('\u3010'), -1, '判定标记从气泡里去掉（用户看到干净的点评）');
+  eq(q.vm.quiz.idx, 2, '接着出下一题');
+
+  // 答错 → 计数分开
+  q.vm.draft = '不知道';
+  fakeReply = '\u3010\u9519\u3011It means "question". Keep going.';
+  await q.vm.send();
+  eq(q.vm.quiz.wrong, 1, '模型开头是【错】→ 记一次答错');
+  eq(q.vm.quiz.right, 1, '答对/答错分开记');
+
+  // 最后一题答完 → 收尾指令 + 自动关局
+  q.vm.draft = 'apple';
+  fakeReply = '\u3010\u5bf9\u3011Great job today.';
+  await q.vm.send();
+  const pw = payloads[payloads.length - 1];
+  eq(pw[pw.length - 1].content, 'WRAP', '词考完了发收尾指令（不是没头没尾地停住）');
+  eq(q.vm.quiz.on, false, '这一轮回复拿到后自动关局（状态条收起）');
+  eq(q.vm.quiz.right, 2, '最后一题也计进对/错');
+
+  // 用户自己点「结束抽测」
+  const q2 = boot('block', '\u3010\u5bf9\u3011ok');
+  q2.vm.startQuiz('');
+  eq(q2.vm.quiz.pool.length, 10, '不给数字时用默认题量');
+  q2.vm.quiz.right = 2;
+  q2.vm.quiz.wrong = 1;
+  q2.vm.stopQuiz();
+  eq(q2.vm.quiz.on, false, '点结束就关局');
+  assert(/抽测结束：共 3 题，对 2 错 1。/.test(lastOf(q2.view()).content),
+    '结束时给一句小结：' + lastOf(q2.view()).content);
+  // 一键开局：点了要**立刻**看到第一题（只把 on 立起来 = 点了没反应）
+  payloads.length = 0;
+  const q2b = boot('block', 'Question one: what does "improve" mean?');
+  q2b.vm.startQuizQuick();
+  await tick(); await tick();
+  eq(q2b.vm.quiz.on, true, '一键开局：局开起来了');
+  assert(q2b.vm.messages.some(m => m.role === 'user' && m.content === '抽测我'),
+    '一键开局替用户说了一句（就是点的那颗）');
+  const p1b = payloads[payloads.length - 1];
+  assert(/^NEXT:/.test(p1b[p1b.length - 1].content), '一键开局立刻出第一题（不是点了没反应）');
+  eq(q2b.vm.quiz.idx, 1, '第一题已出');
+  // 静默结束：换会话 / 开新对话时不该往历史里塞小结
+  const q3 = boot('block', 'ok');
+  q3.vm.startQuiz('');
+  const n0 = q3.vm.messages.length;
+  q3.vm.newChat();
+  eq(q3.vm.quiz.on, false, '开新对话 → 抽测作废（进度跟的是当前这场）');
+  assert(!/抽测结束/.test(q3.vm.messages.map(m => m.content).join('|')), '静默结束不塞小结进新会话');
+  eq(q3.vm.messages.length < n0 + 3, true, '新会话消息数正常（没多出一个残留气泡）');
+
+  // 目标句识别不能误伤正常聊天
+  const q4 = boot('block', 'ok');
+  q4.vm.draft = 'What does "abandon" mean?';
+  await q4.vm.send();
+  eq(q4.vm.quiz.on, false, '普通提问不会误开局');
 
   console.log('');
   console.log(fail === 0 ? '对话陪练 · 收藏句子 · 句子进词书 全部通过' : '失败 ' + fail + ' 项');
