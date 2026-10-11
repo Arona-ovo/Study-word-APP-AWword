@@ -287,6 +287,78 @@ export async function critiqueTranslation(p) {
   }
 }
 
+/**
+ * 「易混词辨析」—— 学生总把 A 写成/选成 B（rise ↔ rice、quite ↔ quiet…）时讲清两个词。
+ *
+ * 触发由 utils/confusion.js 本地算（错够几次才算"经常搞混"），这里**只负责讲**。
+ * 调用方（components/confusion-card）会先用 `confusion.teachOf()` 查本地缓存，
+ * 命中就不进这个函数 —— 同一个对讲一次就够，不反复烧 token。
+ *
+ * @param a 学生**本该**写 / 选的那个词
+ * @param b 学生**实际搞成**的那个词
+ * @param opts { meaningA, meaningB } 本地已有的释义（有的话一起给，免得模型把两个词的意思搞反）
+ * @returns { a:{word,pos,meaning}, b:{word,pos,meaning}, diff, tips, examples:[{en,zh,use}] }
+ */
+export async function explainConfusion(a, b, opts) {
+  aiFeature('confusion')
+  ensureEnabled()
+  const wa = String(a || '').trim()
+  const wb = String(b || '').trim()
+  if (!wa || !wb) throw new ServiceError('需要两个词才能辨析', { degradable: true })
+
+  const o = opts || {}
+  const sys = [
+    'You are an English teacher helping a Chinese student who keeps confusing two similar words.',
+    'Return ONLY strict JSON: ',
+    '{"a":{"word":"...","pos":"...","meaning":"中文释义"},',
+    '"b":{"word":"...","pos":"...","meaning":"中文释义"},',
+    '"diff":"中文：一句话点出核心区别（读音/词性/意思/用法），要具体到能区分",',
+    '"tips":"中文：一条记得住的技巧（词根、联想、谐音、搭配都行），一到两句",',
+    '"examples":[{"en":"...","zh":"中文翻译","use":"a 或 b"}]}.',
+    'Give exactly 2 examples: one using word a, one using word b. Mark each with "use":"a" or "use":"b".',
+    'Sentences must be short (CEFR A2-B1) and make the difference obvious in context.',
+    'All Chinese must be concise. No markdown, no code fences, no extra text.'
+  ].join(' ')
+  const user = [
+    'Word a (the one the student SHOULD have used): ' + wa + (o.meaningA ? '（已知释义：' + o.meaningA + '）' : ''),
+    'Word b (the one the student actually used): ' + wb + (o.meaningB ? '（已知释义：' + o.meaningB + '）' : ''),
+    '请输出 JSON 辨析。'
+  ].join('\n')
+
+  const r = await chatCompletion([
+    { role: 'system', content: sys },
+    { role: 'user', content: user }
+  ], { temperature: 0.4, timeout: 20000 })
+
+  const obj = extractJSON(r.content)
+  if (!obj) throw new ServiceError('辨析生成失败', { degradable: true })
+
+  const side = (v, fallback) => ({
+    word: String((v && v.word) || '').trim() || fallback,
+    pos: String((v && v.pos) || ''),
+    meaning: String((v && v.meaning) || '')
+  })
+  const out = {
+    a: side(obj.a, wa),
+    b: side(obj.b, wb),
+    diff: String(obj.diff || ''),
+    tips: String(obj.tips || ''),
+    examples: (Array.isArray(obj.examples) ? obj.examples : [])
+      .map(e => ({
+        en: String((e && e.en) || ''),
+        zh: String((e && e.zh) || ''),
+        use: String((e && e.use) || '').trim().toLowerCase() === 'b' ? 'b' : 'a'
+      }))
+      .filter(e => e.en)
+      .slice(0, 2)
+  }
+  // 两个词的释义都没拿到、区别也没讲出来 → 这次算失败（页面照旧能显示本地那两条释义）
+  if (!out.a.meaning && !out.b.meaning && !out.diff) {
+    throw new ServiceError('辨析内容为空', { degradable: true })
+  }
+  return out
+}
+
 // ---------- 3. AI 薄弱点专练（针对指定词生成练习句） ----------
 // words: [{ word, meaning }]；返回 { en, zh, targetWords, note, level }
 export async function generateDrill(words) {

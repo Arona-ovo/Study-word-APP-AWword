@@ -93,7 +93,11 @@ function defaults() {
       // 刷单词的作答方式：choice 选义 | spell 拼写 | self 自评
       drillMode: 'choice',
       // 翻译练习的作答方式：choice 选择题 | input 手动输入
-      practiceMode: 'choice'
+      practiceMode: 'choice',
+      // 易混词教学：同一个词反复搞混时，练习中自动弹一张对比讲解卡（rise / rice 这类）。
+      // 关掉只是**不打扰**，本机仍在记账 —— 哪天想开了，之前攒的数据还在。
+      // 真正的"讲"要调模型，由 AI 分项开关里的「易混词辨析」另行控制。
+      confusionTeach: true
     },
     // 朗读偏好
     voice: {

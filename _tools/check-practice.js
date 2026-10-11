@@ -127,7 +127,10 @@ const page = loadCode(pScript, {
   bookWordSet: () => ({}), targetWordSet: () => ({}),
   markTokens: () => [], countMarked: () => ({ book: 0 }),
   FloatNavbar: {},
-  WordSearch: {}
+  WordSearch: {},
+  // 易混词教学卡：这条断言只关心作答方式，卡片本身由 check-confusion.js 真跑
+  ConfusionCard: {},
+  confusion: { enabled: () => false, note: () => null }
 }, 'practice.vue').default;
 is(!!page && typeof page.data === 'function', '页面脚本可加载（导出 default）');
 const newVM = () => Object.assign({}, page.data(), page.methods);
@@ -268,7 +271,9 @@ const page2 = loadCode(pScript, {
   bookWordSet: () => ({}), targetWordSet: () => ({}),
   markTokens: () => [], countMarked: () => ({ book: 0 }),
   FloatNavbar: {},
-  WordSearch: {}
+  WordSearch: {},
+  ConfusionCard: {},
+  confusion: { enabled: () => false, note: () => null }
 }, 'practice.vue').default;
 // 本文件只有 is()，这里补一个"带实际值"的相等断言
 const eqv = (a, b, m) => is(a === b, m + ' = ' + a + (a === b ? '' : '（期望 ' + b + '）'));

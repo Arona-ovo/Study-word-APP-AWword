@@ -1208,5 +1208,31 @@ export default {
 
   // 刷单词：作答方式胶囊下的"本轮三关"预览（三个胶囊只决定第一关，光看胶囊看不出来）
   '本轮三关': '3 steps',
-  '第一关跟着上面切换，后两关自动换成别的题型': 'Step 1 follows the switch above; the other two rotate automatically'
+  '第一关跟着上面切换，后两关自动换成别的题型': 'Step 1 follows the switch above; the other two rotate automatically',
+
+  // ---------- 易混词辨析（设置页开关 + 练习中弹出的教学卡） ----------
+  // setting › AI › AI 功能 里那一项的 name / desc 也在这里（AI_FEATURES 是变量传给 $t 的）
+  '易混词辨析': 'Confusable-word coach',
+  '同一个词反复搞混时（rise / rice 这类），练习中弹出一张对比讲解卡。判断与计数都在本机，只有真触发了才会调一次模型':
+    'When you keep mixing up the same pair (rise / rice), a side-by-side explainer pops up mid-practice. Detection and counting are fully on-device; the model is called only when it actually triggers',
+  '学习': 'Study',
+  '易混词教学': 'Confusable-word coach',
+  '同一对词反复搞混时，练习中自动弹一张对比讲解卡（rise / rice 这类）':
+    'When the same pair keeps getting mixed up, auto-open a side-by-side explainer card (rise / rice and friends)',
+  '判断与计数都在本机、不联网，只有真的错够了次数才弹。讲解本身要调一次模型，由「AI › AI 功能 › 易混词辨析」单独控制 —— 没接 AI 就不会弹。':
+    'Detection and counting run on-device with no network. It only pops after enough real mistakes. The explanation itself costs one model call and is switched separately under AI › AI features › Confusable-word coach — with no AI configured it never appears.',
+  '本机已记录 {n} 对易混词': '{n} confusable pairs recorded on this device',
+  '易混词': 'Confusable pair',
+  '这两个词你又搞混了': 'You mixed these two up again',
+  '该用的': 'the right one',
+  '你写成的': 'what you wrote',
+  '正在讲清这两个词…': 'Working out the difference…',
+  '核心区别': 'The difference',
+  '怎么记住': 'How to remember',
+  '这里用 {w}': 'uses {w}',
+  '这一对你已经错了 {n} 次': 'You have mixed these up {n} times',
+  '（本地暂无释义）': '(no local meaning yet)',
+  '讲解没拿到，先记住上面两个释义': 'Could not fetch the explanation — start with the two meanings above',
+  'AI 没启用或这项被关了，先把两个词的释义看清 —— 打开后这里会讲清区别':
+    'AI is off or this feature is disabled — read the two meanings for now. Turn it on and the difference shows up here.'
 };

@@ -42,6 +42,13 @@ export const AI_FEATURES = [
     level: 'mid', levelLabel: '中'
   },
   {
+    key: 'confusion',
+    name: '易混词辨析',
+    desc: '同一个词反复搞混时（rise / rice 这类），练习中弹出一张对比讲解卡。'
+      + '判断与计数都在本机，只有真触发了才会调一次模型',
+    level: 'mid', levelLabel: '中'
+  },
+  {
     key: 'wordbook',
     name: 'AI 生成词书',
     desc: '按主题批量造词与释义，单次消耗最大的一项',

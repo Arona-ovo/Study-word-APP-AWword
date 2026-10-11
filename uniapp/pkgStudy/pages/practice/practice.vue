@@ -245,6 +245,22 @@
     </view>
   </view>
 
+  <!-- 易混词教学卡：只有本地判定"这一对真被反复搞混了"且 AI 可用时才出现
+       （判定与计数全在本机，见 maybeTeachConfusion）。放在容器外面，不受 v-if="!empty" 影响。 -->
+  <confusion-card
+    :show="confusionShow"
+    :seq="confusionSeq"
+    :a="confusionA"
+    :b="confusionB"
+    :pos-a="confusionPosA"
+    :pos-b="confusionPosB"
+    :meaning-a="confusionMeaningA"
+    :meaning-b="confusionMeaningB"
+    :times="confusionTimes"
+    @close="closeConfusion"
+    @next="nextAfterConfusion"
+  />
+
   <!-- 空状态 -->
   <view v-else class="empty page-nav" :class="appTheme" :style="appBgStyle">
     <float-navbar :title="$t('翻译练习')" />
@@ -273,6 +289,8 @@ import { bookWordSet, targetWordSet, markTokens, countMarked } from '../../../ut
 import * as sfx from '../../../utils/sfx.js'
 import FloatNavbar from '../../../components/float-navbar/float-navbar.vue'
 import WordSearch from '../../../components/word-search/word-search.vue'
+import ConfusionCard from '../../../components/confusion-card/confusion-card.vue'
+import * as confusion from '../../../utils/confusion.js'
 
 /* ---------- 作答方式：选择题 / 手动输入 ----------
    和刷单词页同一条规矩（见 word-drill.vue）：选了就一直固定着 ——
@@ -282,10 +300,20 @@ import WordSearch from '../../../components/word-search/word-search.vue'
 const PRACTICE_MODES = ['choice', 'input']
 
 export default {
-  components: { FloatNavbar, WordSearch },
+  components: { FloatNavbar, WordSearch, ConfusionCard },
   data() {
     return {
       labels: ['A', 'B', 'C', 'D'],
+      // 易混词教学卡：默认不弹，由 maybeTeachConfusion 填好两个词再打开
+      confusionShow: false,
+      confusionSeq: 0,
+      confusionA: '',
+      confusionB: '',
+      confusionPosA: '',
+      confusionPosB: '',
+      confusionMeaningA: '',
+      confusionMeaningB: '',
+      confusionTimes: 0,
       source: 'daily',
       questions: [],
       idx: 0,
@@ -789,12 +817,70 @@ export default {
         userAnswer: userAnswer || '',
         reference: q.answer || ''
       })
-      // 作答后朗读参考答案，强化记忆（定时器由 clearAnswerTimer 统一清理）
+      // 答错了：是不是又把两个长得像的词搞混了（rise ↔ rice）？
+      // 判定与计数全在本机、不联网；只有真触发了才弹卡 —— 弹的那一次才去调模型。
+      let taught = false
+      if (status === 'fail') {
+        const w0 = q.words && q.words[0]
+        if (w0 && w0.w) taught = this.maybeTeachConfusion(w0.w, userAnswer)
+      }
+      // 作答后朗读参考答案，强化记忆（定时器由 clearAnswerTimer 统一清理）。
+      // 弹了教学卡就不念了：讲解和朗读叠在一起，两个都听不清。
       this.clearAnswerTimer()
-      this.answerTimer = setTimeout(() => {
-        this.answerTimer = 0
-        tts.speakAuto(this.q.answer)
-      }, readDelay)
+      if (!taught) {
+        this.answerTimer = setTimeout(() => {
+          this.answerTimer = 0
+          tts.speakAuto(this.q.answer)
+        }, readDelay)
+      }
+    },
+
+    /**
+     * 本地判定"这一对是不是真被反复搞混了"，是就弹教学卡。
+     * 三条同时成立才弹：错够次数（本机账）+ 设置里的开关 + AI 真的可用。
+     * @returns 是否弹了卡（false = 什么都不做，练习流程原样继续）
+     */
+    maybeTeachConfusion(target, userAnswer) {
+      try {
+        if (!confusion.enabled()) return false
+        const bid = this.bookId || (this.q && this.q.bookId) || ''
+        const hit = confusion.note(target, userAnswer, bid)
+        if (!hit || !hit.should) return false
+        const sa = this.localSide(hit.a, bid)
+        const sb = this.localSide(hit.b, bid)
+        this.confusionA = hit.a
+        this.confusionB = hit.b
+        this.confusionPosA = sa.pos
+        this.confusionPosB = sb.pos
+        this.confusionMeaningA = sa.meaning
+        this.confusionMeaningB = sb.meaning
+        this.confusionTimes = hit.n
+        this.confusionSeq++
+        this.confusionShow = true
+        return true
+      } catch (e) {
+        console.error('[practice confusion]', e)
+        return false
+      }
+    },
+
+    /** 本地词性 + 释义：教学卡先把这两条摆出来，AI 讲回来了会被它覆盖 */
+    localSide(word, bid) {
+      try {
+        const r = dict.lookup(word)
+        if (r && r.meaning) return { pos: String(r.pos || ''), meaning: String(r.meaning || '') }
+      } catch (e) { /* 词典取不到就只显示词形，不影响弹卡 */ }
+      return { pos: '', meaning: '' }
+    },
+
+    closeConfusion() {
+      this.confusionShow = false
+    },
+
+    // 卡上的「下一个」：关掉卡片并真的进下一题（讲完点一下就继续背，不用再点一次）
+    nextAfterConfusion() {
+      this.confusionShow = false
+      this.next()
     },
 
     /**

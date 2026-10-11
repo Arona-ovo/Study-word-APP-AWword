@@ -445,7 +445,8 @@ function mount(props) {
     const p = fs.readFileSync(path.join(ROOT, pair[1]), 'utf8').replace(/\r\n/g, '\n');
     assert(/import WordSearch from '\.\.\/\.\.\/\.\.\/components\/word-search\/word-search\.vue'/.test(p),
       name + ' 引入 word-search 组件');
-    assert(/components:\s*\{\s*FloatNavbar,\s*WordSearch\s*\}/.test(p), name + ' 注册组件');
+    // 顺序不固定（后面还会挂 confusion-card），只断言两个都在注册列表里
+    assert(/components:\s*\{[^}]*\bFloatNavbar\b[^}]*\bWordSearch\b[^}]*\}/.test(p), name + ' 注册组件');
     assert(/<word-search[\s\S]{0,220}?ref="search"/.test(p), name + ' 主分支顶栏用 word-search');
     assert(/:locked="!canSearch"/.test(p), name + ' 锁定态挂在 canSearch 上');
     assert(/:book-id="bookId"/.test(p), name + ' 搜索范围 = 当前词书');

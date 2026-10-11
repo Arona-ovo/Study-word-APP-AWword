@@ -612,6 +612,30 @@
       </view>
     </view>
 
+    <!-- ===== 学习（易混词教学） ===== -->
+    <view class="sec" :class="{ open: openSec === 'study' }">
+      <view class="sec-head" data-k="study" @tap="toggleSec">
+        <text class="sec-name">{{ $t('学习') }}</text>
+        <text v-if="openSec !== 'study'" class="sec-hint">{{ secHint('study') }}</text>
+        <text class="sec-arrow">›</text>
+      </view>
+      <view class="sec-body" v-if="openSec === 'study'">
+        <view class="row">
+          <view class="row-main">
+            <text class="row-title">{{ $t('易混词教学') }}</text>
+            <text class="row-desc">{{ $t('同一对词反复搞混时，练习中自动弹一张对比讲解卡（rise / rice 这类）') }}</text>
+          </view>
+          <switch :checked="studyTeachOn" :color="brandMain" @change="e => setStudy('confusionTeach', e.detail.value)" />
+        </view>
+        <view class="field-note">
+          {{ $t('判断与计数都在本机、不联网，只有真的错够了次数才弹。讲解本身要调一次模型，由「AI › AI 功能 › 易混词辨析」单独控制 —— 没接 AI 就不会弹。') }}
+        </view>
+        <view class="field-note" v-if="confusionPairs">
+          {{ $t('本机已记录 {n} 对易混词', { n: confusionPairs }) }}
+        </view>
+      </view>
+    </view>
+
     <!-- ===== AI 缓存（整体清除，不做逐条删除） ===== -->
     <view class="sec" :class="{ open: openSec === 'cache' }">
       <view class="sec-head" data-k="cache" @tap="toggleSec">
@@ -811,6 +835,7 @@ import { resetBreaker } from '../../../services/http.js'
 import * as aiCache from '../../../utils/ai-cache.js'
 import * as apiUsage from '../../../utils/api-usage.js'
 import * as onboarding from '../../../utils/onboarding.js'
+import * as confusion from '../../../utils/confusion.js'
 import { speakSentence as aiSpeak } from '../../../services/voice.js'
 import * as sfx from '../../../utils/sfx.js'
 import * as backup from '../../../utils/backup.js'
@@ -923,6 +948,10 @@ export default {
       engineStatus: null,
       notifications: {},
       privacy: {},
+      // 学习偏好（易混词教学的本地开关等）
+      study: {},
+      // 本机记了多少对易混词（只报条数，不做逐条管理）
+      confusionPairs: 0,
       // AI 缓存：只暴露条数，内容按类别整体清除
       cacheStats: { words: 0, sentences: 0, updatedAt: 0 },
       apiUsageText: '',
@@ -1019,6 +1048,11 @@ export default {
     aiFnOff() {
       void this.aiTick;
       return offCount();
+    },
+    // 学习 › 易混词教学：默认开（undefined 当开）。
+    // 关掉只是"不再弹卡片"，本机记账照旧 —— 以后打开能立刻看到历史。
+    studyTeachOn() {
+      return (this.study || {}).confusionTeach !== false;
     },
     // 彩蛋台词：存的是中文 key，译文在这里取 —— 弹窗开着时切语言也能跟着变
     eggLine() {
@@ -1176,6 +1210,7 @@ export default {
       if (k === 'ai') return this.ai.enabled ? (this.aiReady ? t('已开启') : t('待配置')) : t('未开启')
       if (k === 'voice') return this.voice.useAI && this.aiReady ? t('AI 朗读') : t('本地发音')
       if (k === 'notify') return this.notifications.daily ? this.notifications.time : t('已关闭')
+      if (k === 'study') return this.studyTeachOn ? t('已开启') : t('已关闭')
       if (k === 'about') return 'v' + this.version
       if (k === 'cache') return this.cacheHint
       if (k === 'perf') return this.smooth ? t('已开启') : t('已关闭')
@@ -1625,6 +1660,8 @@ export default {
       this.voice = Object.assign({}, s.voice)
       this.notifications = Object.assign({}, s.notifications)
       this.privacy = Object.assign({}, s.privacy)
+      this.study = Object.assign({}, s.study)
+      try { this.confusionPairs = confusion.stats().pairs } catch (e) { this.confusionPairs = 0 }
       this.cacheStats = aiCache.stats()
       this.apiUsageText = apiUsage.brief()
       this.smooth = currentSmooth()
@@ -1668,6 +1705,13 @@ export default {
       if (key === 'apiKey' && this.canTest) {
         this.runTest()
       }
+    },
+    // 学习 › 易混词教学等学习类开关。
+    // 注意 settings.set() 是深合并：关掉必须显式写 false，删 key 是删不掉的。
+    setStudy(key, value) {
+      const patch = { [key]: value }
+      settings.set({ study: patch })
+      this.refresh()
     },
     // 一键选择预设：自动填入该服务商的地址/模型（自定义除外，留给用户手填）
     selectProvider(value) {

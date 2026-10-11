@@ -378,7 +378,10 @@ function wipe() {
     markTokens: wordMark.markTokens,
     sfx: { play: () => {} },
     FloatNavbar: {},
-    WordSearch: {}
+    WordSearch: {},
+    // 易混词教学卡：这条断言只关心作答方式，卡片本身由 check-confusion.js 真跑
+    ConfusionCard: {},
+    confusion: { enabled: () => false, note: () => null }
   }, 'word-drill.vue').default;
   is(!!drillPage && typeof drillPage.data === 'function', '页面脚本可加载（导出 default）');
   const newVM = () => Object.assign({}, drillPage.data(), drillPage.methods);
@@ -688,6 +691,8 @@ function wipe() {
       targetWordSet: wordMark.targetWordSet,
       markTokens: wordMark.markTokens,
       sfx: { play: () => {} },
+      ConfusionCard: {},
+      confusion: { enabled: () => false, note: () => null },
       FloatNavbar: {},
     WordSearch: {}
     }, 'word-drill.vue').default;
