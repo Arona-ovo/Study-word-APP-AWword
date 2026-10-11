@@ -383,6 +383,43 @@ for (const b of BOOKS) {
 console.log(`[lexicon] 共享词条 ${keptRows.length}（被至少一本词书引用）`)
 BOOKS.forEach(b => console.log(`   最终 ${b.id}: ${bookIndex[b.id].length} 词`))
 
+// ---------------------------------------------------------------- 查词补充词库（extra-words）
+//
+// 用户实测反馈「本地查词完全搜不到某个词」的根因，其实不是"词太少"，而是
+// **上面这些候选里有一大批压根没被任何词书引用**：每本词书都有 size 上限，还剔了初中词，
+// 于是 ${all.size} 个候选里只有 ${keptRows.length} 个进了共享表。剩下那些同样是正经考试词、
+// 同样带中文释义，却因为"没被任何书挑中"而在 App 里查不到。
+//
+// 这里把它们单独导出成一份**只读查词表**：
+//   · 不进任何词书 → 不占共享表的行号 → 老用户已背进度一个字都不用动
+//     （行号就是学习进度索引，见 README「重生成后必须做的行序校验」）
+//   · 只给 utils/dict.js 当最后一层兜底，让查词 / 点读能翻到它
+// 清洗规则与共享表完全一致（复用同一个 buildEntry），所以不会出现只有一边有的脏释义。
+const keptWordSet = new Set(keptRows.map(r => r.w))
+// 常用词词典（data/common-words.js）里已有的也剔掉：
+// 反正那一层本来就能查到，再存一份只是重复占体积。
+const commonWordSet = new Set()
+fs.readFileSync(path.join(OUT, 'common-words.js'), 'utf8')
+  .replace(/\r\n/g, '\n')
+  .split('\n')
+  .forEach(function (line) {
+    const m = /^\s*'([^']+)'/.exec(line)
+    if (!m) return
+    const k = m[1].split('|')[0].trim().toLowerCase()
+    if (k) commonWordSet.add(k)
+  })
+
+const extraRows = []
+for (const [w, e] of all) {
+  if (keptWordSet.has(w) || commonWordSet.has(w)) continue
+  const built = buildEntry(e.glosses)
+  if (!built.m) continue            // 释义被清洗规则剔光了（多为音译人名 / 缩写），不收录
+  extraRows.push({ w, pos: built.pos, m: built.m, s: freqScore(w) })
+}
+// 按词频排：查词命中多条时，靠前的更可能是用户想查的那个（与共享表同一口径）
+extraRows.sort((a, b) => a.s - b.s || (a.w < b.w ? -1 : 1))
+console.log(`[extra] 查词补充词库 ${extraRows.length} 条（候选 ${all.size}，已剔共享表 ${keptWordSet.size} / 常用词 ${commonWordSet.size}）`)
+
 // lv 不落文件：运行时按「所在行 / 总行数」切四档即可（行已按词频排好序）
 const lvOf = (i, n) => {
   const r = i / n
@@ -435,12 +472,39 @@ ${idxParts.join(',\n')}
 }
 `
 
+// 查词补充词表：格式与 lexicon-data.js 完全一致（word|pos|释义，一行一条），
+// 区别只在于**它不属于任何词书** —— 没有行号 = 没有学习进度，纯查词兜底用。
+const extraRaw = '\n' + extraRows.map(r => `${r.w}|${r.pos}|${r.m}`).join('\n') + '\n'
+const extraKB = Buffer.byteLength(extraRaw) / 1024
+
+const extraJs = `// data/extra-words.js - 查词补充词表（**自动生成，请勿手改**）
+// 生成脚本：_vocab/build.js（node _vocab/build.js）
+//
+// 存在理由（用户实测反馈「本地查词完全搜不到」）：
+//   _vocab/src 的 5 张考试词表合计 ${all.size} 个候选词，但每本词书都有 size 上限、
+//   还剔了初中词，真正被某本词书引用的只有 ${keptRows.length} 个（= lexicon-data.js 的行）。
+//   剩下这 ${extraRows.length} 个同样是带中文释义的正经考试词，却因为"没被任何书挑中"而查不到。
+//
+// 为什么不直接塞进 lexicon-data.js：
+//   共享表的**行号就是用户的学习进度索引**（id = 行号 + LEX_START，掌握度按 id 存在本机）。
+//   往中间插一行，后面所有词的 id 全部位移，老用户已背记录会挂到别的词上且不报错。
+//   所以这份表独立成文件：只给查词 / 点读作兜底，不进任何词书，绝不产生新的词书 id。
+//
+// 消费方：utils/dict.js（把它并进"全量本地词典"索引），utils/search.js（跨全量词典检索）。
+//
+// 行格式：word|pos|释义（与共享表一致）
+// 词条来源与许可见 _vocab/README.md。
+export const EXTRA_COUNT = ${extraRows.length}
+
+export const EXTRA_RAW = \`${noShot(extraRaw)}\`
+`
+
 // ---------------------------------------------------------------- 规模快照
 // 设置页（在分包 pkgManage 里）的彩蛋要显示「本地装了多少东西」，
 // 但为了几个数字去 import 174KB 的语料，会把语料再复制一份进分包 —— 得不偿失。
 // 所以这里把数字预先算好，写成几百字节的小文件，设置页只引它。
 // 改版本号改这里（APP_VERSION），同时记得同步 uniapp/manifest.json 的 versionName。
-const APP_VERSION = '1.0 Beta'
+const APP_VERSION = '1.1 Beta'
 
 const sentenceJs = fs.readFileSync(path.join(OUT, 'sentences.js'), 'utf8')
 const sentenceCount = (sentenceJs.match(/\{ id: \d+,/g) || []).length
@@ -466,14 +530,17 @@ export const BUILD_INFO = {
 
 fs.writeFileSync(path.join(OUT, 'lexicon-data.js'), lexiconJs, 'utf8')
 fs.writeFileSync(path.join(OUT, 'bookdata.js'), bookdataJs, 'utf8')
+fs.writeFileSync(path.join(OUT, 'extra-words.js'), extraJs, 'utf8')
 fs.writeFileSync(path.join(OUT, 'build-info.js'), buildInfoJs, 'utf8')
 
 const s1 = Buffer.byteLength(lexiconJs) / 1024
 const s2 = Buffer.byteLength(bookdataJs) / 1024
 const s3 = Buffer.byteLength(buildInfoJs) / 1024
+const s4 = Buffer.byteLength(extraJs) / 1024
 console.log(`\n[out] lexicon-data.js ${s1.toFixed(1)}KB（${keptRows.length} 词条）`)
 console.log(`[out] bookdata.js ${s2.toFixed(1)}KB`)
 console.log(`[out] 合计 ${(s1 + s2).toFixed(1)}KB`)
+console.log(`[out] extra-words.js ${s4.toFixed(1)}KB（${extraRows.length} 条，只用于查词）`)
 console.log(`[out] build-info.js ${s3.toFixed(1)}KB（句库 ${sentenceCount} 条，版本 ${APP_VERSION}）`)
 
 console.log('\n[sample] 最常考前 8 个词条：')

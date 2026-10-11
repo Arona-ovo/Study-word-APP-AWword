@@ -82,7 +82,20 @@
           <text class="ws-tip">{{ $t('点开词条可加入词书') }}</text>
         </view>
 
-        <!-- ③b AI 补全的多义：词书里一个词只存一条释义，老缓存也只有一条
+        <!-- ③b 查询失败必须看得见（和下面"没找到"是两回事）。
+             以前 AI 请求挂了只是让 aiResult 保持 null —— 界面上跟"AI 查不到这个词"一模一样，
+             用户既不知道是网络还是配置问题，也不知道还能再点一次（实测反馈）。
+             「本地没找到」和「查询失败」是两回事，得分开说。 -->
+        <view v-if="aiError" class="ws-state">
+          <text class="ws-state-text">{{ aiError }}</text>
+          <text class="ws-state-hint">{{ $t('网络恢复后可以直接再试一次') }}</text>
+          <view class="ws-actions">
+            <text class="ws-act" @tap="retryAi">{{ $t('重试') }}</text>
+            <text class="ws-act" @tap="openQuery">{{ $t('手动添加「{q}」', { q: lastQuery }) }}</text>
+          </view>
+        </view>
+
+        <!-- ③c AI 补全的多义：词书里一个词只存一条释义，老缓存也只有一条
              —— 于是"一词多义显示不全"。补回来的义项逐条列出来，
              expandWord() 已经把它们写进本机缓存 —— 下次再查同一个词，离线也是完整的。 -->
         <view v-if="polishLoading" class="ws-state">
@@ -209,6 +222,7 @@ export default {
       aiLoading: false,
       autofocus: false,       // 打开搜索时把输入框抢过来（弹键盘）
       aiEnabled: false,
+      aiError: '',            // AI 查询失败的原因（给人看的那句；原始错误只进 console）
       nearAll: false,         // 「相近的词」是否已展开全部
       timer: 0
     }
@@ -247,8 +261,9 @@ export default {
     // 别把 AI 的转圈/结果吞掉：那两样都在的时候用户马上就有答案了。
     // timer 也算"在路上"：打字后要等 700ms 才发请求，这段空窗期说"AI 也未能补充"
     // 是在撒谎（还没问呢），而且会先闪一句"没有"再被结果顶掉。
+    // aiError 另算一种结局：那是"没查成"，不是"没查到"（单独的失败块已经说清楚了）。
     noExact() {
-      return !!this.lastQuery && !this.exactHits.length &&
+      return !!this.lastQuery && !this.exactHits.length && !this.aiError &&
         !this.cached && !this.aiLoading && !this.aiResult && !this.timer
     }
   },
@@ -314,6 +329,7 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiLoading = false
+      this.aiError = ''
       this.nearAll = false
       if (!kw) {
         this.lastQuery = ''
@@ -385,10 +401,16 @@ export default {
       AI_INFLIGHT.add(key)
       this.aiLoading = true
       this.aiResult = null
+      this.aiError = ''
       try {
         const r = await explainWord(q)
         const meaning = (r && r.meaningZh) || ''
-        if (!meaning) throw new Error('empty')
+        // 模型没给出释义 ≠ 查询失败：那是"AI 也不知道这个词"，该走"没找到"那条路。
+        // 以前这两种情况混在一起，网络一抖和"确实查无此词"长得一模一样。
+        if (!meaning) {
+          if (this.isCurrentQuery(q)) { this.aiResult = null; this.aiError = '' }
+          return
+        }
         // 回来时用户可能已经改了输入：这条结果不能贴到界面上
         if (!this.isCurrentQuery(q)) return
         this.aiResult = {
@@ -398,7 +420,14 @@ export default {
           examples: (r && r.examples) || []
         }
       } catch (e) {
-        if (this.isCurrentQuery(q)) this.aiResult = null
+        // 「没查到」和「没查成」必须分开：以前失败只把 aiResult 置空，
+        // 界面上和"AI 也不知道这个词"长得一样，用户连再试一次的入口都没有。
+        if (this.isCurrentQuery(q)) {
+          this.aiResult = null
+          this.aiError = t('AI 查询失败，检查一下网络')
+        }
+        // 原始错误（含接口细节）只进 console，不摆到用户面前
+        console.warn('[word-search] aiLookup failed:', e && e.message)
       } finally {
         AI_INFLIGHT.delete(key)
         if (this.isCurrentQuery(q)) this.aiLoading = false
@@ -422,6 +451,7 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiLoading = false
+      this.aiError = ''
       this.nearAll = false
       this.clearPolish()
     },

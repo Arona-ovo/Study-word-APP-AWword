@@ -234,7 +234,12 @@ eq(r9.added, false, 'allowKnown 也不重复塞回同一本书');
 const ub2 = wordbook.createUserBook('加入词书测试', '单测');
 const r10 = search.addWordToBook(ub2, { word: core0, pos: 'v.', meaning: '测试释义' }, { allowKnown: true });
 eq(r10.added, true, 'allowKnown：核心词可收进另一本书');
-eq(search.localSearch(ub2, core0).length, 1, '新书里能搜到这个词');
+// ⚠️ 口径更新（2026-10-11）：localSearch 现在跨「当前词书 + 全量本地词典」检索，
+// 所以这里不再只有孤零零 1 条 —— 排在第一位的必须是它自己，来源标签也必须是「当前词书」。
+const ub2Hit = search.localSearch(ub2, core0);
+assert(ub2Hit.length >= 1, 'allowKnown：新书里能搜到这个词（共 ' + ub2Hit.length + ' 条）');
+eq(ub2Hit[0].w, core0, '第一条就是它本人（相似词不能把它挤下去）');
+eq(ub2Hit[0].fromText, '当前词书', '来源标签跟着"这个词属于哪本书"走');
 const r11 = search.addWordToBook(ub2, { word: core0, pos: 'v.', meaning: '测试释义' }, { allowKnown: true });
 eq(r11.added, false, '同一本书不重复收录');
 eq(wordbook.bookVocab(ub2, 'all').total, 1, '新书词汇数仍为 1');
@@ -275,16 +280,135 @@ assert(!/v-else-if="(cached|aiLoading|aiResult)"/.test(homeSrc2), '三块结果�
 // 而 AI 那栏因为挂在 v-else-if 上被吞掉 → 要查的词一条没有、AI 也不显示。
 // 只扫源码挡不住（把 v-else-if 改对了也不代表真的去问了 AI），所以真跑一遍。
 (async () => {
-  console.log('== 17. 没有完全匹配 → 也要问 AI ==');
+  /* ---------------- 18. 本地词库有多大：能查到的词条必须是全量 ---------------- */
+// 用户实测反馈：「尽可能把全部单词都纳入本地词库，避免出现完全搜不到任何单词的情况」。
+// 以前 search.js 只扫当前词书，内置那几千个词条只有**拼完整了**才被 dict.lookup 捞得到，
+// 于是换个词书能搜到的东西就少一大截，打一半更是直接归零。现在扫的是全量平表。
+{
+  const rows = dict.searchRows();
+  const bySrc = rows.reduce((a, r) => { a[r.src] = (a[r.src] || 0) + 1; return a; }, {});
+  console.log('     全量索引 ' + rows.length + ' 条：' + JSON.stringify(bySrc));
+  assert(rows.length >= 7000, '全量本地词典 ≥ 7000 条（实际 ' + rows.length + '）');
+  assert(bySrc.core >= 600, '核心词书 ' + bySrc.core + ' 条进来了');
+  assert(bySrc.common >= 800, '常用词 ' + bySrc.common + ' 条进来了');
+  assert(bySrc.book >= 3000, '内置词书共享表 ' + bySrc.book + ' 条进来了');
+  assert(bySrc.extra >= 2000, '查词补充表 ' + bySrc.extra + ' 条进来了（这批以前压根搜不到）');
+
+  // 补充词表的存在意义：_vocab/src 的考试词表里，没被任何词书挑中的那批词
+  // （每本词书都有 size 上限 + 剔初中词）。它们全都不在 core / common / book 里，
+  // 也就是说**没有这张表的话，它们是彻底搜不到的**（不再是"换个词书就没有"的问题）。
+  const extra = load('data/extra-words.js');
+  const lexiconRows = load('data/lexicon.js', {}).lexWords();
+  const covered = Object.create(null);
+  words.WORDS.forEach(w => { covered[w.w.toLowerCase()] = 1; });
+  common.COMMON_RAW.forEach(line => { covered[line.split('|')[0].toLowerCase()] = 1; });
+  lexiconRows.forEach(w => { covered[String(w.w).toLowerCase()] = 1; });
+  const xe = extra.EXTRA_RAW.split('\n').filter(Boolean).map(l => l.split('|')[0].toLowerCase());
+  assert(xe.length >= 2000, 'extra-words 词条数 ≥ 2000（实际 ' + xe.length + '）');
+  const dupInExtra = xe.filter(w => covered[w]);
+  assert(dupInExtra.length === 0,
+    '补充表的每个词都不在 core/常用词/内置词书里（纯新增，不是重复占位）' +
+    (dupInExtra.length ? '（重复的：' + dupInExtra.slice(0, 5).join(', ') + '）' : ''));
+  assert(xe.every(w => /^[a-z][a-z'-]*$/.test(w)), '补充表词形全部合法');
+
+  // 抽样：这些词以前肯定查不到，现在必须能精确命中
+  const probeWords = [xe[0], xe[Math.floor(xe.length / 3)], xe[Math.floor(xe.length * 2 / 3)], xe[xe.length - 1]];
+  probeWords.forEach((w) => {
+    const r = search.localSearch(CORE, w, 5);
+    assert(r.length > 0 && r[0].w.toLowerCase() === w,
+      '以前查不到的词现在能查到：' + w + '（第一条 ' + (r[0] && r[0].w) + '）');
+  });
+
+  // 换到一本几乎空的词书，内置词照样能搜到 —— 以前这里是一条都不会有的
+  const emptyBook = wordbook.createUserBook('18 组·空书', '单测');
+  const cs = search.localSearch(emptyBook, 'computer', 5);
+  assert(cs.length > 0 && cs[0].w.toLowerCase() === 'computer',
+    '空词书里也能搜到内置词 computer（实际 ' + cs.map(r => r.w).join('/') + '）');
+  wordbook.deleteUserBook(emptyBook);
+}
+
+console.log('== 19. 分档排序：高度匹配的在前，相似词不许淹没它 ==');
+{
+  // 六档常量：UI 与后续断言都靠它说话，改语义必须改这里
+  eq(search.TIER.EXACT, 1, 'TIER.EXACT');
+  eq(search.TIER.LEMMA, 2, 'TIER.LEMMA（词形还原）');
+  eq(search.TIER.PREFIX, 3, 'TIER.PREFIX');
+  eq(search.TIER.TYPO, 4, 'TIER.TYPO（拼写最接近）');
+  eq(search.TIER.SUBSTR, 5, 'TIER.SUBSTR（词形里含）');
+  eq(search.TIER.MEANING, 6, 'TIER.MEANING（只在释义里含）');
+
+  // 编辑距离：必须支持相邻字符对调，否则 recieve → receive 距离是 2，会被别的词压下去
+  eq(search.boundedEdit('receive', 'recieve', 2), 1, 'ie/ei 打反只算 1 次编辑');
+  eq(search.boundedEdit('color', 'colour', 2), 1, '差一个字母 = 1');
+  eq(search.boundedEdit('cat', 'dog', 2), 3, '完全不同 = 3（>cap 时返回 cap+1）');
+  eq(search.boundedEdit('run', 'running', 2), 3, '长度差超过上限直接判不相关（返回 cap+1）');
+  eq(search.boundedEdit('improve', 'approve', 2), 2, '两处不同 = 2');
+
+  // ① 一模一样的那条永远第一
+  const imp = search.localSearch(CORE, 'improve', 8);
+  eq(imp[0].w, 'improve', '第一条 = 输入本身');
+  eq(imp[0].tier, search.TIER.EXACT, '档次 = EXACT');
+
+  // ② 词形还原：studies → study，排在"只是长得像"的前面
+  const st = search.localSearch(CORE, 'studies', 6);
+  assert(st[0] && st[0].w.toLowerCase() === 'study' && st[0].tier === search.TIER.LEMMA,
+    'studies → study，且落在 LEMMA 档（实际 ' + (st[0] && st[0].w) + '）');
+
+  // ③ 前缀排在"词形里含"之前
+  const ind = search.localSearch(CORE, 'in', 10);
+  const subs = ind.filter(r => r.w.toLowerCase().indexOf('in') > 0);
+  const pres = ind.filter(r => r.w.toLowerCase().indexOf('in') === 0);
+  assert(pres.length > 1 && (!subs.length || ind.indexOf(pres[pres.length - 1]) < ind.indexOf(subs[0])),
+    '"以 in 开头"的全部排在"中间含 in"的前面');
+
+  // ④ 拼错了也能找到正解，而且是第一条（Damerau 距离：recieve → receive = 1）
+  const rc = search.localSearch(CORE, 'recieve', 8);
+  assert(rc.length > 0 && rc[0].w.toLowerCase() === 'receive',
+    'recieve → receive 排第一（实际 ' + rc.slice(0, 3).map(r => r.w).join('/') + '）');
+
+  // ⑤ 已经打对了就别再列一堆"差一两个字母"的噪声 —— 那正是"相似词淹没目标词"
+  const imps = search.localSearch(CORE, 'improve', 20);
+  eq(imps.filter(r => r.tier === search.TIER.TYPO).length, 0, '有精确命中时不给拼写纠错（避免噪声）');
+  const comp = search.localSearch(CORE, 'comput', 20);
+  eq(comp.filter(r => r.tier === search.TIER.TYPO).length, 0, '已有前缀命中时同样不做纠错');
+
+  // ⑥ 短词不纠错：2 个字母时几乎所有词都"差一个字母"，放行等于把目标词淹掉
+  eq(search.localSearch(CORE, 'in', 20).filter(r => r.tier === search.TIER.TYPO).length, 0, '2 字母查询不做拼写纠错');
+
+  // ⑦ 同档内部按"接近程度"排：前缀档里短词在前
+  const pre = comp.filter(r => r.tier === search.TIER.PREFIX).map(r => r.w.toLowerCase());
+  eq(pre.length >= 2 && pre[0] === 'compute', true, '前缀档内词短的在前：' + pre.join(' / '));
+}
+
+/* ---------------- 20. 各层来源标签要说清楚 ---------------- */
+{
+  const rows = {};
+  dict.searchRows().forEach(r => { if (!rows[r.src]) rows[r.src] = r; });
+  Object.keys(rows).forEach(src => {
+    assert(!!dict.SRC_LABEL[src] && typeof dict.SRC_LABEL[src] === 'string',
+      '来源 src=' + src + ' 有中文标签：' + dict.SRC_LABEL[src]);
+  });
+  eq(dict.SRC_LABEL.extra, '补充词库', '补充词表自己的标签');
+  // 用户导入词**不进**全量索引：搜 A 书不该蹦出 B 书里你自己加的词
+  const own = dict.searchRows().filter(r => r.src === 'custom');
+  eq(own.length, 0, '全量索引里没有用户导入词（跨书不串味）');
+}
+
+console.log('== 17. 没有完全匹配 → 也要问 AI ==');
   const intentMod = load('utils/intent.js', {});
   const aiAsked = [];
+  // AI 的行为由这里驱动：ok = 正常出释义 / fail = 请求本身出错 / empty = 没给出释义
+  let aiMode = 'ok';
   const homeScript = (/<script[^>]*>([\s\S]*?)<\/script>/.exec(homeSrc2) || [])[1] || '';
   const homePage = loadCode(homeScript, {
     t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
     wordbook, dict, search, aiCache, intent: intentMod,
     // 假模型层：只记下"问了谁"，不联网。跟 check-ai-features.js 一个思路。
+    // 失败/空回复两种分支要用得上（上面刚声明的那个人身在这）
     explainWord: async (w) => {
       aiAsked.push(String(w));
+      if (aiMode === 'fail') throw new Error('network down');
+      if (aiMode === 'empty') return { word: w, pos: '', meaningZh: '', examples: [], kind: 'word' };
       return { word: w, pos: 'n.', meaningZh: '（测试释义 ' + w + '）', examples: [], kind: 'word' };
     },
     looksLikeSentence: () => false,
@@ -419,6 +543,48 @@ assert(!/v-else-if="(cached|aiLoading|aiResult)"/.test(homeSrc2), '三块结果�
   vm.openWord(vm.results[0]);
   eq(vm.__searchOpened, false, '跳转失败 → 撤回标记（不会下次白收一次）');
   global.uni.navigateTo = (o) => { navUrls.push(o && o.url) };
+
+  /* --- 7) 三种结局要有三种说法：本地命中 / AI 命中 / 没找到 / 查询失败 --- */
+  // 用户实测反馈：查词一路走到"屏幕上一句话都没有"就没了下文，分不清
+  // 「本地没有」「AI 也没有」「AI 请求挂了」。它们必须是三副不同的样子，各自还能往下走。
+  vm.onSearchInput(core0);
+  eq(vm.noExactHit, false, '本地精确命中 → 不算"没找到"');
+  eq(vm.showNotFound, false, '本地精确命中 → 不显示"没找到"那一块');
+  eq(vm.aiError, '', '本地精确命中 → 也没有失败提示');
+
+  aiMode = 'fail';
+  vm.onSearchInput('zzqqxx');
+  if (vm.searchTimer) { clearTimeout(vm.searchTimer); vm.searchTimer = 0 }
+  await vm.aiLookup('zzqqxx');
+  assert(!!vm.aiError, '★ 请求出错 → 失败原因亮出来：' + vm.aiError);
+  eq(vm.aiLoading, false, '出错也要把转圈收掉（不然一直卡在这）');
+  eq(vm.showNotFound, false, '★ 查询失败 ≠ 没找到，不叠一句"本地词库没有"');
+
+  aiMode = 'empty';
+  vm.onSearchInput('zzppww');
+  if (vm.searchTimer) { clearTimeout(vm.searchTimer); vm.searchTimer = 0 }
+  await vm.aiLookup('zzppww');
+  eq(vm.aiError, '', '★ AI 返回空 = "它也不知道"，不当成查询失败');
+  eq(vm.showNotFound, true, '本地 / 缓存 / AI 全空 → 这时才说"没找到"');
+
+  // 「本地给了一堆相似词、但没有用户要查的那个词」→ 这句"没找到"同样要出现，
+  // 否则用户盯着一屏相似词，既不知道查不到、也不知道下一步能干嘛
+  aiMode = 'empty';
+  vm.onSearchInput(String(core0).slice(0, 3));
+  if (vm.searchTimer) { clearTimeout(vm.searchTimer); vm.searchTimer = 0 }
+  await vm.aiLookup(String(core0).slice(0, 3));
+  assert(vm.results.length > 0, '本地确有相似结果（' + vm.results.length + ' 条）');
+  eq(vm.showNotFound, true, '★ 只有相似词时也要说"没找到"（以前这种情形一句话都不给）');
+  aiMode = 'ok';
+
+  const homeSrc3 = homeSrc2;
+  assert(/<view v-if="showNotFound"/.test(homeSrc3), '首页「没找到」块的开关改成了 showNotFound');
+  assert(!/v-if="!results\.length && !cached && !aiLoading && !aiResult && !searchTimer"/.test(homeSrc3),
+    '不再以"本地一条结果都没有"为前提（那是把含糊的一屏相似词当成找到了）');
+  assert(/<view v-if="aiError"[\s\S]{0,300}?\{\{ aiError \}\}/.test(homeSrc3), '首页失败态渲染 aiError 文本');
+  assert(/<view v-if="aiError"[\s\S]{0,300}?@tap="aiLookup\(lastQuery\)"/.test(homeSrc3), '首页失败态给「重试」入口');
+  assert(/showNotFound\(\)[\s\S]{0,240}?!this\.aiError/.test(homeScript),
+    'showNotFound 把 aiError 排除在外（"没查成"和"没查到"分开说）');
 
   console.log('');
   console.log(fail === 0 ? '首页搜索逻辑全部通过' : '失败 ' + fail + ' 项');

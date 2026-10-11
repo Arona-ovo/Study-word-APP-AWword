@@ -468,6 +468,93 @@ function mount(props) {
   assert(!/confirming/.test(dv.slice(dv.indexOf('canSearch()'), dv.indexOf('canSearch()') + 320)),
     'word-drill：三关每关都是独立作答，用 answered 一条就够');
 
+  console.log('\n== 16. 三种结局要有三种说法（本地命中 / AI 命中 / 没找到 / 查询失败）==');
+  // 用户实测反馈：查询结果一路走到"什么都没显示"就没了下文 —— 分不清
+  // 「本地没有」「AI 也没有」「AI 请求挂了」这三种情况。它们该有三副不同的样子。
+  {
+    /* --- ① 本地命中：给词条，不问 AI --- */
+    stubs.local = () => [{ w: 'apple', pos: 'n.', m: '苹果', fromText: '当前词书' }];
+    stubs.cache = () => null;
+    let asked = 0;
+    stubs.explain = async (q) => { asked++; return { word: q, pos: 'v.', meaningZh: 'x' }; };
+    const hit = mount({ locked: false, bookId: 'B' });
+    hit.onInput('apple');
+    eq(hit.exactHits.length, 1, '本地精确命中 → 结果就是它');
+    eq(hit.timer, 0, '本地已经查到 → 不排 AI（不花额度）');
+    eq(hit.noExact, false, '本地命中不说"没找到"');
+    eq(hit.aiError, '', '本地命中也没有"查询失败"');
+    hit.close();
+
+    /* --- ② AI 命中：本地只有相似词，AI 结果必须与它们**同时**在 --- */
+    stubs.local = () => [
+      { w: 'running', pos: 'n.', m: '跑步', fromText: '当前词书' },
+      { w: 'runner', pos: 'n.', m: '跑步者', fromText: '当前词书' }
+    ];
+    stubs.explain = async (q) => ({ word: q, pos: 'v.', meaningZh: '释义-' + q, examples: [] });
+    asked = 0;
+    const mixed = mount({ locked: false, bookId: 'B' });
+    mixed.onInput('runz');
+    eq(mixed.exactHits.length, 0, '本地只有相近的词，没有一模一样的');
+    assert(mixed.nearHits.length > 0, '相近的词照旧列出来（' + mixed.nearHits.length + ' 条）');
+    if (mixed.timer) { clearTimeout(mixed.timer); mixed.timer = 0 }
+    await mixed.aiLookup('runz');
+    assert(!!mixed.aiResult, 'AI 给回了结果');
+    assert(mixed.nearHits.length > 0 && !!mixed.aiResult,
+      '★ 相似词与 AI 结果同时在界面上（本地结果不覆盖 AI）');
+    eq(mixed.noExact, false, 'AI 已经给了 → 不说"没找到"');
+    eq(mixed.aiError, '', 'AI 成功 → 没有失败提示');
+    mixed.close();
+
+    /* --- ③ 没找到：本地没有、AI 也给不出 → 说清楚并给出路 --- */
+    stubs.local = () => [];
+    stubs.explain = async () => ({ word: '', pos: '', meaningZh: '', examples: [] });   // 空回复
+    const none = mount({ locked: false, bookId: 'B' });
+    none.onInput('zzqqxx');
+    if (none.timer) { clearTimeout(none.timer); none.timer = 0 }
+    await none.aiLookup('zzqqxx');
+    eq(none.aiResult, null, 'AI 也给不出东西');
+    eq(none.aiError, '', '★ AI 返回空 = "它也不知道"，**不是**查询失败');
+    eq(none.noExact, true, '本地 / 缓存 / AI 全空 → 这时才说"没找到"');
+    none.close();
+
+    /* --- ④ 查询失败：请求本身出错（网络 / 接口），必须看得见、能重试 --- */
+    stubs.explain = async () => { throw new Error('network down'); };
+    const boom = mount({ locked: false, bookId: 'B' });
+    boom.onInput('zzqqxx');
+    if (boom.timer) { clearTimeout(boom.timer); boom.timer = 0 }
+    await boom.aiLookup('zzqqxx');
+    eq(boom.aiResult, null, '失败时没有结果卡');
+    assert(!!boom.aiError, '★ 失败原因亮出来了：' + boom.aiError);
+    eq(boom.aiLoading, false, '失败也要收掉转圈（不然一直卡在这）');
+    eq(boom.noExact, false, '查询失败 ≠ 没找到，不再叠一句"本地词库没有"');
+    // 换个词就得把它清掉，别让上一轮的失败提示挂在下一个词下面
+    boom.onInput('other');
+    eq(boom.aiError, '', '换了词 → 上一轮的失败提示清掉');
+    boom.close();
+    // 重试真的会再发一次请求：不是"看得见的按钮"，而是能走通
+    stubs.explain = async (q) => { retries.push(q); throw new Error('still down'); };
+    const retries = [];
+    const again = mount({ locked: false, bookId: 'B' });
+    again.onInput('zzqqxx');
+    if (again.timer) { clearTimeout(again.timer); again.timer = 0 }
+    await again.aiLookup('zzqqxx');
+    await again.retryAi();
+    eq(retries.length, 2, '点「重试」真的又发了一次请求（不是摆设）');
+    again.close();
+
+    /* --- 模板契约：三块各自独立，谁也别吞掉谁 --- */
+    assert(/<view v-if="aiError"[\s\S]{0,120}?\{\{ aiError \}\}/.test(tpl), '失败态渲染 aiError 文本');
+    assert(/<view v-if="aiError"[\s\S]{0,300}?@tap="retryAi"/.test(tpl), '失败态给「重试」入口');
+    assert(/<view v-if="aiError"[\s\S]{0,300}?@tap="openQuery"/.test(tpl), '失败态也能手动添加这个词');
+    assert(/<view v-if="noExact"[\s\S]{0,700}?@tap="openQuery"/.test(tpl),
+      '"没找到"时给一条出路：去词条页自己填释义');
+    assert(/<view v-if="noExact"[\s\S]{0,400}?@tap="retryAi"/.test(tpl),
+      '"没找到"时能一键重问 AI（不必重新打字）');
+    assert(!/v-else-if="aiError"/.test(tpl), '失败态是独立 v-if（不挂在别人后面被吞掉）');
+    eq(/noExact\(\)[\s\S]{0,220}?!this\.aiError/.test(script), true,
+      'noExact 把 aiError 排除在外（"没查成"和"没查到"不重复说）');
+  }
+
   console.log('');
   console.log(fail === 0 ? '顶栏随手查词全部通过 ✓' : '失败 ' + fail + ' 项 ✗');
   process.exit(fail === 0 ? 0 : 1);

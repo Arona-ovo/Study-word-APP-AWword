@@ -174,16 +174,31 @@
           <text v-else class="sr-tip">{{ $t('点击任意词条查看详情') }}</text>
         </block>
 
-        <!-- 没有结果：本地一条都没有、缓存和 AI 也没给东西。
+        <!-- 没有结果：本地**没有一模一样的那条**、缓存和 AI 也没给东西。
+             以前这里的前提是 `!results.length`（一条本地结果都不能有）——
+             于是"本地给出几十条相近的、但没有用户要查的那个词"时，这句话反而不出现，
+             用户只看到一屏相似词，既不知道查不到，也不知道下一步能干嘛（实测反馈）。
              searchTimer 也算"在路上"：打字后要等 700ms 才发请求，这段空窗期说
-             "AI 也未能补充"是在撒谎（还没问呢），而且会先闪一句"没有"再被结果顶掉。 -->
-        <view v-if="!results.length && !cached && !aiLoading && !aiResult && !searchTimer" class="sr-state">
+             "AI 也未能补充"是在撒谎（还没问呢），而且会先闪一句"没有"再被结果顶掉。
+             aiError 另算一种结局：那是"没查成"，交给下面那块单独说。 -->
+        <view v-if="showNotFound" class="sr-state">
           <text class="sr-state-text">{{ $t('本地词库没有「{q}」', { q: lastQuery }) }}</text>
           <text class="sr-state-hint">{{ aiEnabled ? $t('AI 也未能补充这个词，换个拼写试试') : $t('接入 AI 后，搜不到的词会自动补充到本机缓存') }}</text>
           <view class="sr-actions">
             <text v-if="aiEnabled" class="sr-retry" @tap="aiLookup(lastQuery)">{{ $t('再试一次') }}</text>
             <!-- 反向兜底：这句其实是想让 AI 改页面 → 一键按指令重跑 -->
             <text class="sr-retry sr-retry-cmd" @tap="retryAsCommand">{{ $t('当成指令试试') }}</text>
+          </view>
+        </view>
+
+        <!-- 查询失败 ≠ 没查到。以前 AI 请求挂了只把 aiResult 置空，
+             界面上跟"AI 也不知道这个词"一模一样：既看不出是网络还是配置问题，
+             也没有任何"再试一次"的入口（实测反馈）。 -->
+        <view v-if="aiError" class="sr-state">
+          <text class="sr-state-text">{{ aiError }}</text>
+          <text class="sr-state-hint">{{ $t('网络恢复后可以直接再试一次') }}</text>
+          <view class="sr-actions">
+            <text class="sr-retry" @tap="aiLookup(lastQuery)">{{ $t('重试') }}</text>
           </view>
         </view>
         </block>
@@ -546,6 +561,7 @@ export default {
       cached: null,
       aiResult: null,
       aiLoading: false,
+      aiError: '',       // AI 查询失败的原因（给人看的那句；原始错误只进 console）
       searchTimer: 0,
       // 「相近的词」是否已展开全部（搜 "in" 能出两百多条，一屏铺满等于把结论淹掉）
       nearAll: false,
@@ -634,6 +650,18 @@ export default {
       const q = String(this.lastQuery || '').trim().toLowerCase()
       if (!q) return []
       return (this.results || []).filter(r => String(r.w || '').trim().toLowerCase() !== q)
+    },
+    // 本地有没有"一模一样"的那条：AI 要不要出手、标题怎么说、要不要显示"没找到"，全以它为准
+    // （localSearch 是包含匹配 + 跨全量词典，搜 run 会出 running / runs 一大串，那些都只是"相近"）
+    noExactHit() {
+      return !!this.lastQuery && !this.exactHits.length
+    },
+    // 「本地没有你要的那个词 + 缓存 / AI 也都没给出东西」→ 把"没找到"说清楚。
+    // 以前这里的前提是"本地一条结果都不能有"，于是本地给了几十条相似词时反而不提示 ——
+    // 用户盯着一屏相似词，既不知道查不到，也不知道还能干嘛（实测反馈）。
+    showNotFound() {
+      return this.noExactHit && !this.cached && !this.aiLoading &&
+        !this.aiResult && !this.aiError && !this.searchTimer
     },
     visibleNear() {
       return this.nearAll ? this.nearHits : this.nearHits.slice(0, NEAR_SHOW)
@@ -1229,6 +1257,7 @@ export default {
         this.results = []
         this.cached = null
         this.aiResult = null
+        this.aiError = ''
         this.aiLoading = false
       } else {
         this.closeCmdBar()
@@ -1335,6 +1364,7 @@ export default {
       this.results = []
       this.cached = null
       this.aiResult = null
+      this.aiError = ''
       this.aiLoading = false
       this.cmdSay = ''
       this.cmdSummary = ''
@@ -1647,6 +1677,7 @@ export default {
       this.lastQuery = kw
       this.cached = null
       this.aiResult = null
+      this.aiError = ''
       this.aiLoading = false
       this.nearAll = false   // 换了词就收回折叠：上一轮展开的"相近的词"不该带过来
       this.results = search.localSearch(this.bookId, kw)
@@ -1699,6 +1730,7 @@ export default {
       this.results = []
       this.cached = null
       this.aiResult = null
+      this.aiError = ''
       this.aiLoading = false
       this.nearAll = false
       // 清空即解锁：下一次输入重新交给自动判定
@@ -1746,10 +1778,16 @@ export default {
       AI_INFLIGHT.add(inflightKey)
       this.aiLoading = true
       this.aiResult = null
+      this.aiError = ''
       try {
         const r = await explainWord(q)
         const meaning = (r && r.meaningZh) || ''
-        if (!meaning) throw new Error('empty')
+        // 模型没给出释义 ≠ 查询失败：那是"AI 也不知道这个词"，该走"没找到"那条路。
+        // 以前这两种情况混在一起，网络一抖和"确实查无此词"长得一模一样（实测反馈）。
+        if (!meaning) {
+          if (this.isCurrentQuery(q)) { this.aiResult = null; this.aiError = '' }
+          return
+        }
         const examples = (r && r.examples) || []
         // 只展示、不入库：explainWord 内部已经把释义与例句写进 aiCache（本机缓存），
         // 词书是用户自己的地盘 —— 要不要收进去，由他在单词详情页点「加入词书」决定。
@@ -1767,8 +1805,15 @@ export default {
           examples
         }
       } catch (e) {
-        // 同上：已经换了词就别清 —— 那会顺手把新词的这条结果也抹掉
-        if (this.isCurrentQuery(q)) this.aiResult = null
+        // 「没查到」和「没查成」必须分开：以前失败只把 aiResult 置空，
+        // 界面上和"AI 也不知道这个词"长得一样，用户连再试一次的入口都没有（实测反馈）。
+        // 同上：已经换了词就别写 —— 那会把新词这一轮的状态抹掉
+        if (this.isCurrentQuery(q)) {
+          this.aiResult = null
+          this.aiError = t('AI 查询失败，检查一下网络')
+        }
+        // 原始错误（含接口细节）只进 console，不摆到用户面前
+        console.warn('[home] aiLookup failed:', e && e.message)
       } finally {
         AI_INFLIGHT.delete(inflightKey)
         // 还停留在发起时的那个词上才收起转圈：已经换了词说明后面还有请求在跑，

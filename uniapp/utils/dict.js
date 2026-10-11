@@ -1,8 +1,9 @@
 // utils/dict.js - 点读查词统一入口（离线，无网络请求）
-// 查词优先级：核心词书 → 用户导入词 → 内置常用词典 → 词形还原后再走一遍 → 未收录
+// 查词优先级：核心词书 → 用户导入词 → 内置常用词典 → 内置词书共享表 → 查词补充表 → 词形还原后再走一遍 → 未收录
 // 未收录时仍返回 { found:false }，调用方可继续用 tts.speakWord() 发音（有道单词级可用）。
 import { WORDS } from '../data/words.js';
 import { COMMON_RAW } from '../data/common-words.js';
+import { EXTRA_RAW } from '../data/extra-words.js';
 import { allByText } from '../data/lexicon.js';
 import { getBook } from '../data/wordbooks.js';
 import * as store from './store.js';
@@ -14,6 +15,7 @@ export const SRC_LABEL = {
   book: '内置词书',
   custom: '我的导入',
   common: '常用词',
+  extra: '补充词库',
   none: '未收录'
 };
 
@@ -72,7 +74,7 @@ function customGet(key) {
 }
 
 function hit(key) {
-  return CORE[key] || customGet(key) || COMMON[key] || bookGet(key) || null;
+  return CORE[key] || customGet(key) || COMMON[key] || bookGet(key) || extraGet(key) || null;
 }
 
 // 内置词书共享词条（data/lexicon.js）：排在 core / 导入词 / 常用词之后，
@@ -84,6 +86,113 @@ function bookGet(key) {
     if (!w) return null;
     return { w: w.w, pos: w.pos || '', meaning: w.m || '', lv: w.lv || 0, phonetic: '', src: 'book' };
   } catch (e) { return null; }
+}
+
+/* ---------- 查词补充表（data/extra-words.js） ----------
+   背景就是「单词查询模块」的那句实测反馈 —— 本地查词会"完全搜不到"。
+   根因不是词太少，而是 data/lexicon-data.js 里只有"被某本词书引用过"的行：
+   每本词书都有 size 上限、还剔了初中词，于是 _vocab/src 的 7022 个候选里
+   只有 3893 个真正落进了共享表。剩下那批同样是带中文释义的正经考试词，
+   却因为"没被任何书挑中"而在 App 里查不到。
+
+   extra-words.js 就是那批词的单独导出：行格式与共享表一致，**不进任何词书**
+   （不产生新的词 id → 老用户已背进度不受影响），只当最后一层查词兜底。
+   之所以放在 book 之后而不是之前：同一批词若在词书里也有，标签要显示"内置词书"。
+
+   懒解析 + 单例：只有真的查到这一层才会把 2756 行拆成 Map。 */
+let _extra = null;
+function extraTable() {
+  if (_extra) return _extra;
+  const map = {};
+  EXTRA_RAW.split('\n').forEach(function (line) {
+    const i = line.indexOf('|');
+    if (i < 0) return;
+    const j = line.indexOf('|', i + 1);
+    if (j < 0) return;
+    const key = line.slice(0, i).toLowerCase();
+    if (!key || map[key]) return;
+    map[key] = {
+      w: line.slice(0, i),
+      pos: line.slice(i + 1, j),
+      meaning: line.slice(j + 1),
+      src: 'extra'
+    };
+  });
+  _extra = map;
+  return map;
+}
+
+function extraGet(key) {
+  try {
+    return extraTable()[key] || null;
+  } catch (e) { return null; }
+}
+
+/* ---------- 全量本地词典索引（给「搜/x 搜得着」用） ----------
+   点读是"这个词什么意思"（精确命中，走 lookup）；
+   查词是"我打了这几个字母，本地有没有"（要能前缀 / 近似匹配，必须扫全表）。
+
+   以前 utils/search.js 只扫「当前词书」，4563 个内置词条只有**拼完整了**才捞得到
+   （dict.lookup 是精确 + 词形还原），于是换个词书搜索结果就少一大截 —— 这就是
+   "有些词明明有、就是搜不到"的来源。这里把所有层合成一张逻辑上的平表：
+
+     core（words.js 640）→ common（常用词）→ book（共享表）→ extra（补充表）
+
+   刻意**不含**用户的导入词：那是按词书分桶的私人内容，
+   搜 A 书时不该蹦出 B 书里你自己加的词（check-search 第 6 组守的就是这条）。
+
+   ⚠️ 两个都留着是为了把"省内存"和"省时间"分开：
+   就地遍历不占额外内存，但每次按键要多花一倍时间（实测 7.7ms → 4.5ms 的差别，
+   手机上感知得到）；固化成数组要多吃约 570KB 常驻堆（实测），换来每次按键快一倍。
+   热路径（utils/search.js）用数组；一次性统计走 forEachEntry。
+   check-builtin-books 第 8 组盯着这两个数。 */
+export function forEachEntry(fn) {
+  const visit = function (k, w, pos, m, src) {
+    const key = String(k || '').toLowerCase();
+    if (!key) return;
+    fn(key, w, pos || '', m || '', src);
+  };
+  for (let i = 0; i < WORDS.length; i++) {
+    const w = WORDS[i];
+    visit(w.w, w.w, w.pos, w.m, 'core');
+  }
+  try {
+    for (const key in COMMON) {
+      const c = COMMON[key];
+      visit(key, c.w, c.pos, c.meaning, 'common');
+    }
+    const abt = allByText();
+    for (const key in abt) {
+      const b = abt[key];
+      visit(key, b.w, b.pos, b.m, 'book');
+    }
+  } catch (e) { /* 共享表读不出来就少一层，不致命 */ }
+  try {
+    const ex = extraTable();
+    for (const key in ex) {
+      const e = ex[key];
+      visit(key, e.w, e.pos, e.meaning, 'extra');
+    }
+  } catch (e) { /* 同上 */ }
+}
+
+/**
+ * 同一份平表，固化成数组返回（内部走一遍 forEachEntry，懒建 + 单例）。
+ * 按键每敲一下都要扫全表，所以用数组而非就地遍历（时间/内存的取舍见上面那段注释）。
+ * 新词入库后调用方的 invalidateCache() 会把它清掉重建。
+ */
+let _rows = null;
+export function searchRows() {
+  if (_rows) return _rows;
+  const out = [];
+  const seen = Object.create(null);
+  forEachEntry(function (key, w, pos, m, src) {
+    if (seen[key]) return;      // 同一词形多层重复 → 只留最高优先级的那条
+    seen[key] = 1;
+    out.push({ k: key, w: w, pos: pos, m: m, src: src });
+  });
+  _rows = out;
+  return out;
 }
 
 // 查词：返回 { w, pos, meaning, phonetic, src, found, lemma, inflected }
@@ -198,6 +307,8 @@ export function ownerLabel(raw, bookId) {
 export function invalidateCache() {
   for (const k in cache) delete cache[k];
   for (const k in BOOK_SETS) delete BOOK_SETS[k];
+  // 全量检索表跟着失效：新收的词下一次搜索就得搜得到，不能等重启 App
+  _rows = null;
 }
 
 export { lemma };

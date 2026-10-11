@@ -6,7 +6,19 @@
 ```
 uniapp/data/lexicon-data.js   共享词条表（word|pos|释义），一行一条
 uniapp/data/bookdata.js       每本词书的词条索引（定长 base36）
+uniapp/data/extra-words.js    查词补充词表（同上格式，**不属于任何词书**）
+uniapp/data/build-info.js     语料规模快照（设置页彩蛋用）
 ```
+
+##### extra-words.js：没被任何词书挑中的那批词
+
+源词表一共 7022 个候选，但每本词书都有 `size` 上限、还剔了初中词（`exclude`），
+真正被某本词书引用的只有 3893 个 —— 剩下 2756 个同样是带中文释义的正经考试词，
+以前在 App 里**彻底搜不到**（用户实测反馈"本地查词完全搜不到"）。
+
+为什么不直接塞进 `lexicon-data.js`：共享表的**行号就是用户的学习进度索引**
+（`id = 行号 + LEX_START`，掌握度按 id 存在本机），往中间插一行会让老用户已背记录全部错位。
+所以独立成文件，只给 `utils/dict.js` 当最后一层查词兜底，**绝不产生新的词书 id**。
 
 读取/解码/缓存写在 `uniapp/data/lexicon.js`（手写），分批与词书注册在 `uniapp/data/wordbooks.js`（手写）。
 **重新生成只会覆盖上面两个 `*_data / bookdata` 文件，不会动任何手写代码。**

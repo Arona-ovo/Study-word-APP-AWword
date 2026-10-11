@@ -142,5 +142,34 @@ if (kb > 300) bad('词书语料超预算 300KB：' + kb.toFixed(0) + 'KB');
 else ok('词书语料体积在预算内');
 
 console.log('');
+console.log('== 8. 查词补充表的开销（本地词库扩容的代价是否被盯住）==');
+// 这批词表 _vocab/src 里本来就有，只是没被任何词书挑中，以前在本地完全搜不到。
+// 既然它们是往 App 里加了的，就得有人看着它的真实代价 —— 否则下次再"顺手加一批"就没人拦了。
+{
+  const h1 = process.memoryUsage().heapUsed;   // 只量"建检索表"这一段的增量
+  const t1 = Date.now();
+  const rows = dict.searchRows();
+  const buildMs = Date.now() - t1;
+  const rowsKB = (process.memoryUsage().heapUsed - h1) / 1024;
+  const bySrc = rows.reduce((a, r) => { a[r.src] = (a[r.src] || 0) + 1; return a; }, {});
+  console.log('     全量检索表 ' + rows.length + ' 条：' + JSON.stringify(bySrc) + '，建表 ' + buildMs + 'ms');
+  if (rows.length < 7000) bad('全量检索表规模倒退：' + rows.length + ' 条（应 ≥ 7000）');
+  else ok('全量检索表规模');
+  if (buildMs > 300) bad('建表耗时超预算 300ms：' + buildMs + 'ms');
+  else ok('建表耗时在预算内');
+  console.log('     词书语料 + 检索表常驻：' + rowsKB.toFixed(0) + ' KB（本次增量）/ 累计 ' + ((heapKB + rowsKB) / 1024).toFixed(1) + ' MB');
+  // 盯增量，不盯累计：累计值受 V8 何时 GC 影响很大（同样的代码能飘 ±2MB），
+  // 用它做门槛会变成一条"时红时绿"的假断言。
+  // 门槛放宽到 4MB 是有依据的：这里没法强制 GC（跑的是普通 node），增量里含
+  // 尚未回收的中间垃圾；加 --expose-gc 逐段实测的话，"补充词表"本身约 890KB、
+  // "固化检索表"约 570KB，合计 1.5MB 左右。4MB 是为了让这条线只对"又塞进来一整张词表"
+  // 这种量级的变化报红，而不是每天因 GC 时机不同红一次。
+  if (rowsKB > 4 * 1024) bad('检索表增量超预算 4MB：' + rowsKB.toFixed(0) + 'KB');
+  else ok('检索表内存增量在预算内');
+  if (heapKB + rowsKB > 8 * 1024) bad('常驻堆内存超预算 8MB：' + (heapKB + rowsKB).toFixed(0) + 'KB');
+  else ok('常驻堆内存在预算内');
+}
+
+console.log('');
 console.log(fail === 0 ? '内置词书全部通过' : '失败 ' + fail + ' 项');
 process.exit(fail ? 1 : 0);

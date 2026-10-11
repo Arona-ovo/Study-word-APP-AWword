@@ -12,5 +12,5 @@ export const BUILD_INFO = {
   coreCount: 640,
   bookCount: 6,
   sentenceCount: 626,
-  builtAt: '2026-10-09'
+  builtAt: '2026-10-11'
 }
