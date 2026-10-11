@@ -11,11 +11,22 @@
 // 校验项：
 //   1) icons 必须挂在 app-plus.distribute.icons.{android,ios}（不是 distribute.android.icons）
 //   2) 图标文件存在、是 png、像素尺寸与官方要求一致（mdpi 48 / hdpi 72 / xhdpi 96 / xxhdpi 144 / xxxhdpi 192）
-//   3) splashscreen 自定义启动图：文件存在、像素尺寸符合官方口径（hdpi 480x762 / xhdpi 720x1242）
+//   3) splashscreen 启动图必须是 **.9.png（九宫格）**，尺寸 = 官方内容尺寸 + 2（外圈 1px 黑线），
+//      且黑线结构合法、拉伸区没盖到图案上
 //   4) app-plus.splashscreen 的三个关闭策略开关取值合法
 //   5) 启动图别用 jpg 改名（magic number 必须是 PNG）
+//
+// ⚠️ 第 3 组为什么这么严（实测事故）：
+//   启动图会被**铺满整屏**（fitXY）。普通 png 的比例只要和手机屏幕对不上，整张图就被拉长 ——
+//   图 1080x1882（比例 0.574）遇上 1212x2616 的手机（比例 0.463），纵向被拉长约 24%，
+//   圆头像变竖椭圆、字母被抻长。用户反馈："第一次打开软件，图片是被拉伸的"。
+//   官方解法就是 .9.png（"指定特定的区域进行拉伸而不失真"）：
+//     https://uniapp.dcloud.net.cn/collocation/manifest  → App Splashscreen
+//   所以我们用 gen-splash.py 把画面拆成：图案区**不可拉伸**、四周留白可拉伸。
+//   下面的断言守的就是这件事 —— 黑线画错一点，用户那边就是"圆变椭圆"。
 const fs = require('fs');
 const path = require('path');
+const png = require('./lib/png');
 
 const ROOT = path.resolve(__dirname, '..', 'uniapp');
 const R = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -63,8 +74,8 @@ Object.keys(ICON_PX).forEach(k => {
     k + ' 图标 ' + size.w + 'x' + size.h + '（要求 ' + ICON_PX[k] + '）');
 });
 
-// ---------- 3. 自定义启动图 ----------
-console.log('== 3. 启动图配置 ==');
+// ---------- 3. 自定义启动图必须是合法 .9.png ----------
+console.log('== 3. 启动图（.9.png 九宫格）==');
 const spl = dist.splashscreen || {};
 const style = spl.androidStyle;
 assert(style === undefined || style === 'common' || style === 'default',
@@ -72,19 +83,78 @@ assert(style === undefined || style === 'common' || style === 'default',
 
 if (style === 'default') {
   const targets = spl.android || {};
-  assert(!!targets.hdpi, 'hdpi 启动图已配置（480x762）');
-  // 官方 manifest 只定义 hdpi / xhdpi 两档；xxhdpi 是社区通行做法，配了就对尺寸负责
-  const want = { hdpi: [480, 762], xhdpi: [720, 1242], xxhdpi: [1080, 1882] };
+  assert(!!targets.hdpi, 'hdpi 启动图已配置');
+  // 官方建议的内容尺寸；落盘文件各方向 +2px 放黑线
+  const want = { hdpi: [480, 800], xhdpi: [720, 1280], xxhdpi: [1080, 1920] };
   Object.keys(targets).forEach(k => {
     const rel = targets[k];
     const p = path.join(ROOT, rel);
     if (!fs.existsSync(p)) { bad(k + ' 启动图不存在：' + rel); return; }
-    const size = pngSize(fs.readFileSync(p));
+    if (!/\.9\.png$/.test(rel)) {
+      bad(k + ' 启动图不是 .9.png（普通 png 会被铺满整屏拉伸变形）：' + rel);
+      return;
+    }
+    const buf = fs.readFileSync(p);
+    const size = pngSize(buf);
     if (!size) { bad(k + ' 启动图不是 png（jpg 改名会在打包时报错）：' + rel); return; }
     const w = want[k];
-    assert(!w || (size.w === w[0] && size.h === w[1]),
-      k + ' 启动图 ' + size.w + 'x' + size.h + (w ? '（建议 ' + w[0] + 'x' + w[1] + '）' : ''));
+    assert(!w || (size.w === w[0] + 2 && size.h === w[1] + 2),
+      k + ' 启动图 ' + size.w + 'x' + size.h + (w ? '（应为内容 ' + w[0] + 'x' + w[1] + ' + 2px 黑线）' : ''));
+
+    // ---- 黑线结构：这是"图案不变形"的唯一保证，必须逐像素看
+    let img;
+    try {
+      img = png.decode(buf);
+    } catch (e) {
+      bad(k + ' 启动图解码失败：' + e.message);
+      return;
+    }
+    const top = png.blackRuns(img, 'top');       // 可水平拉伸的列
+    const left = png.blackRuns(img, 'left');     // 可垂直拉伸的行
+    const right = png.blackRuns(img, 'right');   // padding
+    const bottom = png.blackRuns(img, 'bottom');
+
+    // 右、下要"拉满"（官方：不拉满部分设备会显示灰色区域）
+    assert(right.length === 1 && bottom.length === 1 &&
+      right[0][0] === 0 && right[0][1] === size.h - 2 &&
+      bottom[0][0] === 0 && bottom[0][1] === size.w - 2,
+      k + ' 右边/下边黑线拉满（否则部分设备显示灰边）');
+
+    // 上边黑线必须**分成左右两段**：中间那段（含图案）是刻意留的不可拉伸区。
+    // 如果画成一整条 = 等同于没做 9-patch，图案照样被横向拉扁。
+    assert(top.length >= 2, k + ' 上边黑线分左右两段（中间含图案 → 横向不拉伸），实际 ' + top.length + ' 段');
+    // 左边黑线应当只有一段（图案区 + 底部进度槽区都不可拉伸）
+    assert(left.length === 1, k + ' 左边黑线只有一段（图案区与底部进度槽区都不拉伸），实际 ' + left.length + ' 段');
+
+    if (top.length >= 2 && left.length === 1) {
+      const cw = size.w - 2, chh = size.h - 2;
+      const xSum = top.reduce((a, r) => a + (r[1] - r[0]), 0);
+      const ySum = left.reduce((a, r) => a + (r[1] - r[0]), 0);
+      // 两端都得留出足够余量：一边可拉伸区太小的话，宽屏/长屏上拉伸量全挤在几条线里
+      assert(xSum >= 20, k + ' 横向可拉伸区 ' + xSum + 'px（左右两条边加起来 ≥20px）');
+      assert(ySum >= 100, k + ' 纵向可拉伸区 ' + ySum + 'px ≥100（屏幕高出来的部分靠它吸收）');
+      // 但也不能"整条都是可拉伸" —— 那就等于没做 9-patch，图案照样变形
+      assert(xSum < cw * 0.6, k + ' 横向可拉伸区占内容宽 ' + Math.round(xSum / cw * 100) + '%（<60%）');
+      assert(ySum < chh * 0.6, k + ' 纵向可拉伸区占内容高 ' + Math.round(ySum / chh * 100) + '%（<60%）');
+      // 不可拉伸那部分就是"最矮能撑到多少"：超出短屏高度就会被压缩 → 图案变形
+      const fixed = chh - ySum;
+      assert(fixed <= chh * 0.85, k + ' 不可拉伸高 ' + fixed + 'px 占内容高 '
+        + Math.round(fixed / chh * 100) + '%（<85%，否则 16:9 这类短屏上会被压缩变形）');
+    }
+
+    // 四条边除黑线外必须透明，否则 aapt 认不出黑线
+    ['top', 'left', 'right', 'bottom'].forEach(edge => {
+      assert(png.restTransparent(img, edge), k + ' ' + edge + ' 边非黑线的像素全透明（aapt 靠这个认黑线）');
+    });
   });
+
+  // static/ 下的文件会全部打进 apk：旧版普通 png 不能留着
+  const dir = path.join(ROOT, 'static', 'splash');
+  if (fs.existsSync(dir)) {
+    const strays = fs.readdirSync(dir).filter(n => !/\.9\.png$/.test(n));
+    assert(strays.length === 0, 'static/splash 下没有残留的普通 png（会白占 apk 体积）：'
+      + (strays.join(', ') || '无'));
+  }
 } else {
   ok('未启用自定义启动图 → 走「通用启动界面」（应用图标 + 应用名 + 加载圈）');
 }
