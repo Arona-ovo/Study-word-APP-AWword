@@ -3,7 +3,7 @@
 //       （本次 home.vue 多了一个 </view>，vite 报 Invalid end tag，就是这种）
 const fs = require('fs');
 const path = require('path');
-const { scanTemplate } = require('./lib/tpl-depth');
+const { scanTemplate, scanVElse } = require('./lib/tpl-depth');
 
 const ROOT = path.resolve(__dirname, '..', 'uniapp');
 
@@ -32,9 +32,15 @@ files.forEach(f => {
   const tpl = src.slice(start, lastEnd + '</template>'.length);
   const r = scanTemplate(tpl);
   const rel = path.relative(ROOT, f);
-  if (r.depth === 0 && r.negative.length === 0) return;
+  const vbad = scanVElse(tpl);
+  if (r.depth === 0 && r.negative.length === 0 && vbad.length === 0) return;
   bad++;
   console.error('✗ ' + rel);
+  vbad.slice(0, 3).forEach(x => {
+    console.error('    第 ' + x.line + ' 行：<' + x.tag + '> 的 v-' + x.kind +
+      ' 前面没有相邻的 v-if（前一个兄弟的分支类型 = ' + x.prev +
+      '，多半是在 v-if / v-else 之间插了别的元素）');
+  });
   if (r.negative.length) {
     r.negative.slice(0, 3).forEach(x => {
       console.error('    第 ' + x.line + ' 行：</' + x.tag + '>' +
@@ -48,8 +54,34 @@ files.forEach(f => {
   }
 });
 
+/* ---------------- 自检：scanVElse 自己别退化成"永远绿" ---------------- */
+// 真出事那次（practice.vue 插 <confusion-card> 拆散 v-else）全是 GREEN，
+// 因为自闭合的 <view v-else/> 没被认成分支 —— 断言形同虚设。所以这里把
+// 该红 / 该绿的各钉几条，断言本身也要被校验。
+const SELF = [
+  [1, 'v-if 与 v-else 之间插了自闭合组件', '<template><view v-if="a"/><confusion-card\n :show="x"\n/><view v-else/></template>'],
+  [1, 'v-if 与 v-else 之间插了带内容的组件', '<template><view v-if="!empty">a</view><confusion-card\n :show="x"\n/><view v-else class="empty">b</view></template>'],
+  [1, 'v-else 前面什么都没有', '<template><view v-else>x</view></template>'],
+  [1, '嵌套层里被无关元素拆散', '<template><view><text v-if="a">1</text><text>2</text><text v-else>3</text></view></template>'],
+  [0, '注释不算兄弟（不拆散配对）', '<template><view v-if="a">a</view><!-- 说明 --><view v-else>b</view></template>'],
+  [0, 'v-if / v-else-if / v-else 链', '<template><view v-if="a">1</view><view v-else-if="b">2</view><view v-else>3</view></template>'],
+  [0, '组件放在 v-else 之后（正确修法）', '<template><view v-if="!empty">a</view><view v-else>b</view><confusion-card :show="x" /></template>']
+];
+let selfBad = 0;
+SELF.forEach(function (c) {
+  const got = scanVElse(c[2]).length;
+  if (got > 0 !== c[0] > 0) {
+    selfBad++;
+    console.error('✗ 自检不符预期：' + c[1] + '（期望 ' + (c[0] ? '报错' : '通过') + '）');
+  }
+});
+console.log(selfBad === 0
+  ? 'v-else 配对检查自检通过 ✓（' + SELF.length + ' 条：该红的红、该绿的绿）'
+  : 'v-else 配对检查自检失败 ' + selfBad + ' 条 ✗');
+
 console.log('');
-console.log(bad === 0
+const total = bad + selfBad;
+console.log(total === 0
   ? ('嵌套检查通过 ✓（' + files.length + ' 个 .vue）')
-  : ('发现 ' + bad + ' 个文件嵌套异常 ✗'));
-process.exit(bad === 0 ? 0 : 1);
+  : ('发现 ' + total + ' 处异常 ✗'));
+process.exit(total === 0 ? 0 : 1);

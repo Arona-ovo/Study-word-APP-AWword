@@ -245,8 +245,18 @@
     </view>
   </view>
 
+  <!-- 空状态 -->
+  <view v-else class="empty page-nav" :class="appTheme" :style="appBgStyle">
+    <float-navbar :title="$t('翻译练习')" />
+    <view class="empty-text">{{ emptyText }}</view>
+    <button class="btn-primary empty-btn" @tap="goHome">{{ $t('返回首页') }}</button>
+  </view>
+
   <!-- 易混词教学卡：只有本地判定"这一对真被反复搞混了"且 AI 可用时才出现
-       （判定与计数全在本机，见 maybeTeachConfusion）。放在容器外面，不受 v-if="!empty" 影响。 -->
+       （判定与计数全在本机，见 maybeTeachConfusion）。
+       ⚠️ 必须放在模板**最后**：上面是 `v-if="!empty"` / `v-else` 的一对，
+       插在它俩中间会把 v-else 的配对拆散，编译器直接报
+       "v-else has no adjacent v-if"（practice.vue 编译失败过一次）。 -->
   <confusion-card
     :show="confusionShow"
     :seq="confusionSeq"
@@ -260,13 +270,6 @@
     @close="closeConfusion"
     @next="nextAfterConfusion"
   />
-
-  <!-- 空状态 -->
-  <view v-else class="empty page-nav" :class="appTheme" :style="appBgStyle">
-    <float-navbar :title="$t('翻译练习')" />
-    <view class="empty-text">{{ emptyText }}</view>
-    <button class="btn-primary empty-btn" @tap="goHome">{{ $t('返回首页') }}</button>
-  </view>
 </template>
 
 <script>
