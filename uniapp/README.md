@@ -75,6 +75,8 @@
 │   └── index.js             # 门面：页面只 import { ai } 或 { voice }
 ├── utils/ store / settings / engine / judge / tts / tokenize …  # 存储/设置/引擎/判分/本地语音/分词
 ├── components/float-tabbar/  # 悬浮磨砂玻璃底部导航（自绘，替代原生 tabBar）
+├── components/word-search/   # 练习页顶栏「随手查词」（点标题变搜索框，答完才放行）
+├── components/search-history/ # 「最近查过」标签云（首页搜索面板 / 做题页查词共用）
 └── pages/
     ├── cover / home / library / profile / review                 # 主包 5 页
     ├── pkgStudy/   practice（翻译练习）/ word-drill（刷单词）/ stats / history
@@ -542,6 +544,21 @@ m 高不代表不用复习（不复习它就会掉回去），due 到了也不�
 
 - `<float-navbar search />`：中间渲染 `<input>`（`confirm-type="search"`），右侧 `×` 清空，  
   向页面 emit `input` / `search` / `clear` / `focus` / `blur`；组件另暴露 `blurInput()` 供页面主动收起
+
+#### 首页搜索面板：整屏 + 搜索历史
+
+- **面板独立成屏**：`<view v-if="searching && !editing" class="sr-page">`（`position: fixed`、
+  自带 `overflow-y: auto` 与 `--app-bg` 背景，`z-index: 450`）挂在 `float-navbar` 之后、
+  `.page-slide` **之外**（项目约定 4）。以前结果卡就塞在首页 `.page-slide` 里，往下滑露出的
+  还是首页模块 —— 用户反馈「搜索出来的结果滑到底发现还是在首页」。现在滑到底就是结果的最后一条
+- 面板内 `touchstart / touchmove / touchend / touchcancel` 一律 `.stop`，避免带着首页一起滚
+- **清空输入不退屏**：把字删光是"想换个词再查"，退回首屏会让人以为搜索被取消了。
+  空输入只清 `results / lastQuery / cached`，面板留着，于是又回到「最近查过」
+- **搜索历史**（`utils/search-history.js` + `components/search-history/`）：
+  本机 key `fj_search_history_v1`，最多 20 条、新的在前、同一个词重复搜只提到最前不占两格。
+  只在**回车提交**与**点开某条结果**时记一笔 —— 边打字边记会把 ru / runn 这类半成品灌进来。
+  面板里还没打字时（`!lastQuery`）显示，一条都没有时整块不渲染。做题页顶栏查词共用同一份
+- 校验：`_tools/check-home.js` 第 8 组、`_tools/check-word-search.js` 第 13 组
 
 #### 练习页顶栏「随手查词」（components/word-search）
 

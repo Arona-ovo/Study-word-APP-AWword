@@ -26,6 +26,130 @@
       @mode-toggle="toggleMode"
     />
 
+    <!-- 搜索面板：**整屏覆盖**（fixed，放在 .page-slide 之外 —— 见项目约定 4）。
+         以前它是首页里的一张卡，结果滑到底下面还是首页模块，
+         看着就像"搜索和首页没分开"（用户实测反馈）。现在整屏都是搜索，
+         滑到底就是结果的最后一条；「收起」或返回键才回首页。 -->
+    <view
+      v-if="searching && !editing"
+      class="sr-page"
+      @touchstart.stop
+      @touchmove.stop
+      @touchend.stop
+      @touchcancel.stop
+    >
+      <view class="card search-card">
+        <view class="sr-head">
+          <text class="sr-title">{{ searchTitle }}</text>
+          <text class="sr-close" @tap="clearSearch">{{ $t('收起') }}</text>
+        </view>
+
+        <!-- 还没打字：先给"最近查过"（省得同一个词还要重新拼一遍拼写） -->
+        <search-history v-if="!lastQuery" ref="history" @pick="onHistoryPick" />
+
+        <block v-else>
+
+        <!-- 本地命中里**一模一样**的那条，永远放最前。
+             搜 "in" 时下面会带回两百多条"含 in"的词（insurance / engine / criminal…），
+             真正的 "in" 必须单独置顶，否则它被埋在噪音里，用户只能一条条翻（实测反馈）。 -->
+        <view v-for="(it, i) in exactHits" :key="'e' + i" class="sr-item" @tap="openWord(it)">
+          <view class="sr-line">
+            <text class="sr-word">{{ it.w }}</text>
+            <text v-if="it.pos" class="sr-pos">{{ it.pos }}</text>
+            <text class="tag sr-src">{{ it.fromText }}</text>
+          </view>
+          <text class="sr-mean">{{ it.m }}</text>
+        </view>
+
+        <!-- 下面这一块**不和上面互斥**（原来是 v-else-if 链）：
+             本地只命中"相近的"时，AI 那一栏会被整块吞掉 ——
+             用户要查的词一条都没有，AI 也不出手，于是两边都不显示。
+             现在"精确命中 / 缓存 / AI"这三块各用独立 v-if：先说清"有没有你要的那个词"，
+             再让 AI / 缓存补一条，最后才轮到"相近的词"。 -->
+
+        <!-- 底层缓存命中：之前生成过，离线也能直接看 -->
+        <block v-if="cached">
+          <!-- 缓存里的词同样点得开：要不要收进词书在单词页决定 -->
+          <view class="sr-item" @tap="openWord({ w: cached.word })">
+            <view class="sr-line">
+              <text class="sr-word">{{ cached.word }}</text>
+              <text v-if="cached.kind === 'sentence'" class="sr-pos">{{ $t('整句译文') }}</text>
+              <text v-else-if="cached.pos" class="sr-pos">{{ cached.pos }}</text>
+            </view>
+            <text class="sr-mean">{{ cached.meaning }}</text>
+            <view v-for="(ex, i) in cached.examples" :key="i" class="sr-ex">
+              <text class="sr-ex-en">{{ ex.en }}</text>
+              <text class="sr-ex-zh">{{ ex.zh }}</text>
+            </view>
+          </view>
+          <text class="sr-tip">{{ $t('来自本机缓存，不消耗 AI 额度 · 点开词条可加入词书') }}</text>
+        </block>
+
+        <!-- AI 补充中：整句输入时说的是"翻译"而不是"补充释义"，别让用户以为又要给自己一个中文解释。
+             同样用独立 v-if：有缓存时就不再发请求，两者不会同时出现，但别再写成互斥链，
+             否则以后谁给缓存块加个前置条件，AI 这块又会跟着被吞。 -->
+        <view v-if="aiLoading" class="sr-state">
+          <view class="sr-spinner"></view>
+          <text class="sr-state-text">{{ aiLoadingText }}</text>
+        </view>
+
+        <!-- AI 已补充：只进本机缓存，不进任何词书（收不收进词书由用户在单词页决定） -->
+        <view v-if="aiResult" class="sr-ai" @tap="openWord({ w: aiResult.word })">
+          <view class="sr-line">
+            <text class="sr-word">{{ aiResult.word }}</text>
+            <text v-if="aiResult.kind === 'sentence'" class="sr-pos">{{ $t('整句译文') }}</text>
+            <text v-else-if="aiResult.pos" class="sr-pos">{{ aiResult.pos }}</text>
+          </view>
+          <text class="sr-mean">{{ aiResult.meaning }}</text>
+          <view v-for="(ex, i) in aiResult.examples" :key="i" class="sr-ex">
+            <text class="sr-ex-en">{{ ex.en }}</text>
+            <text class="sr-ex-zh">{{ ex.zh }}</text>
+          </view>
+          <view class="sr-foot">
+            <text class="sr-badge">{{ aiBadge }}</text>
+            <text class="sr-speak" :data-w="aiResult.word" @tap.stop="speakResult">{{ $t('发音') }}</text>
+          </view>
+          <text class="sr-tip">{{ $t('点开词条可加入词书') }}</text>
+        </view>
+
+        <!-- 相近的词一律排在最后（可能只是"相近的"：搜 run 会出 running / runs）：
+             用户先看到"有没有一模一样的"，再从近似里挑 —— 反过来（先铺一堆近似）
+             就会出现"弹出来一大堆，但没有我要的"（实测反馈）。 -->
+        <block v-if="nearHits.length">
+          <!-- 有 AI / 缓存那条在上面时加一道细线：两块别糊在一起，
+               用户得分得清哪条是词库里的、哪条是 AI 给的 -->
+          <view v-if="cached || aiResult" class="sr-split"></view>
+          <view class="sr-sub">{{ $t('当前词书里相近的词') }}</view>
+          <view v-for="(it, i) in visibleNear" :key="'n' + i" class="sr-item" @tap="openWord(it)">
+            <view class="sr-line">
+              <text class="sr-word">{{ it.w }}</text>
+              <text v-if="it.pos" class="sr-pos">{{ it.pos }}</text>
+              <text class="tag sr-src">{{ it.fromText }}</text>
+            </view>
+            <text class="sr-mean">{{ it.m }}</text>
+          </view>
+          <text v-if="nearHits.length > visibleNear.length" class="sr-more" @tap="showAllNear">
+            {{ $t('再显示 {n} 个', { n: nearHits.length - visibleNear.length }) }}
+          </text>
+          <text v-else class="sr-tip">{{ $t('点击任意词条查看详情') }}</text>
+        </block>
+
+        <!-- 没有结果：本地一条都没有、缓存和 AI 也没给东西。
+             searchTimer 也算"在路上"：打字后要等 700ms 才发请求，这段空窗期说
+             "AI 也未能补充"是在撒谎（还没问呢），而且会先闪一句"没有"再被结果顶掉。 -->
+        <view v-if="!results.length && !cached && !aiLoading && !aiResult && !searchTimer" class="sr-state">
+          <text class="sr-state-text">{{ $t('本地词库没有「{q}」', { q: lastQuery }) }}</text>
+          <text class="sr-state-hint">{{ aiEnabled ? $t('AI 也未能补充这个词，换个拼写试试') : $t('接入 AI 后，搜不到的词会自动补充到本机缓存') }}</text>
+          <view class="sr-actions">
+            <text v-if="aiEnabled" class="sr-retry" @tap="aiLookup(lastQuery)">{{ $t('再试一次') }}</text>
+            <!-- 反向兜底：这句其实是想让 AI 改页面 → 一键按指令重跑 -->
+            <text class="sr-retry sr-retry-cmd" @tap="retryAsCommand">{{ $t('当成指令试试') }}</text>
+          </view>
+        </view>
+        </block>
+      </view>
+    </view>
+
     <!-- 内容区：切 tab 时整体左右滑动（顶栏与底栏留在外面，不跟着滑） -->
     <view class="page-slide" :class="slideCls" :style="slideStyle">
     <!-- AI 指令：加载态 / 执行结果 / 错误提示 / 撤销 -->
@@ -42,112 +166,6 @@
     <scroll-view v-if="showSuggest" class="cmd-sug" scroll-x>
       <text v-for="s in suggestions" :key="s" class="cmd-chip" @tap="useSuggestion(s)">{{ s }}</text>
     </scroll-view>
-
-    <!-- 搜索结果 -->
-    <view v-if="searching && !editing" class="card search-card">
-      <view class="sr-head">
-        <text class="sr-title">{{ searchTitle }}</text>
-        <text class="sr-close" @tap="clearSearch">{{ $t('收起') }}</text>
-      </view>
-
-      <!-- 本地命中里**一模一样**的那条，永远放最前。
-           搜 "in" 时下面会带回两百多条"含 in"的词（insurance / engine / criminal…），
-           真正的 "in" 必须单独置顶，否则它被埋在噪音里，用户只能一条条翻（实测反馈）。 -->
-      <view v-for="(it, i) in exactHits" :key="'e' + i" class="sr-item" @tap="openWord(it)">
-        <view class="sr-line">
-          <text class="sr-word">{{ it.w }}</text>
-          <text v-if="it.pos" class="sr-pos">{{ it.pos }}</text>
-          <text class="tag sr-src">{{ it.fromText }}</text>
-        </view>
-        <text class="sr-mean">{{ it.m }}</text>
-      </view>
-
-      <!-- 下面这一块**不和上面互斥**（原来是 v-else-if 链）：
-           本地只命中"相近的"时，AI 那一栏会被整块吞掉 ——
-           用户要查的词一条都没有，AI 也不出手，于是两边都不显示。
-           现在"精确命中 / 缓存 / AI"这三块各用独立 v-if：先说清"有没有你要的那个词"，
-           再让 AI / 缓存补一条，最后才轮到"相近的词"。 -->
-
-      <!-- 底层缓存命中：之前生成过，离线也能直接看 -->
-      <block v-if="cached">
-        <!-- 缓存里的词同样点得开：要不要收进词书在单词页决定 -->
-        <view class="sr-item" @tap="openWord({ w: cached.word })">
-          <view class="sr-line">
-            <text class="sr-word">{{ cached.word }}</text>
-            <text v-if="cached.kind === 'sentence'" class="sr-pos">{{ $t('整句译文') }}</text>
-            <text v-else-if="cached.pos" class="sr-pos">{{ cached.pos }}</text>
-          </view>
-          <text class="sr-mean">{{ cached.meaning }}</text>
-          <view v-for="(ex, i) in cached.examples" :key="i" class="sr-ex">
-            <text class="sr-ex-en">{{ ex.en }}</text>
-            <text class="sr-ex-zh">{{ ex.zh }}</text>
-          </view>
-        </view>
-        <text class="sr-tip">{{ $t('来自本机缓存，不消耗 AI 额度 · 点开词条可加入词书') }}</text>
-      </block>
-
-      <!-- AI 补充中：整句输入时说的是"翻译"而不是"补充释义"，别让用户以为又要给自己一个中文解释。
-           同样用独立 v-if：有缓存时就不再发请求，两者不会同时出现，但别再写成互斥链，
-           否则以后谁给缓存块加个前置条件，AI 这块又会跟着被吞。 -->
-      <view v-if="aiLoading" class="sr-state">
-        <view class="sr-spinner"></view>
-        <text class="sr-state-text">{{ aiLoadingText }}</text>
-      </view>
-
-      <!-- AI 已补充：只进本机缓存，不进任何词书（收不收进词书由用户在单词页决定） -->
-      <view v-if="aiResult" class="sr-ai" @tap="openWord({ w: aiResult.word })">
-        <view class="sr-line">
-          <text class="sr-word">{{ aiResult.word }}</text>
-          <text v-if="aiResult.kind === 'sentence'" class="sr-pos">{{ $t('整句译文') }}</text>
-          <text v-else-if="aiResult.pos" class="sr-pos">{{ aiResult.pos }}</text>
-        </view>
-        <text class="sr-mean">{{ aiResult.meaning }}</text>
-        <view v-for="(ex, i) in aiResult.examples" :key="i" class="sr-ex">
-          <text class="sr-ex-en">{{ ex.en }}</text>
-          <text class="sr-ex-zh">{{ ex.zh }}</text>
-        </view>
-        <view class="sr-foot">
-          <text class="sr-badge">{{ aiBadge }}</text>
-          <text class="sr-speak" :data-w="aiResult.word" @tap.stop="speakResult">{{ $t('发音') }}</text>
-        </view>
-        <text class="sr-tip">{{ $t('点开词条可加入词书') }}</text>
-      </view>
-
-      <!-- 相近的词一律排在最后（可能只是"相近的"：搜 run 会出 running / runs）：
-           用户先看到"有没有一模一样的"，再从近似里挑 —— 反过来（先铺一堆近似）
-           就会出现"弹出来一大堆，但没有我要的"（实测反馈）。 -->
-      <block v-if="nearHits.length">
-        <!-- 有 AI / 缓存那条在上面时加一道细线：两块别糊在一起，
-             用户得分得清哪条是词库里的、哪条是 AI 给的 -->
-        <view v-if="cached || aiResult" class="sr-split"></view>
-        <view class="sr-sub">{{ $t('当前词书里相近的词') }}</view>
-        <view v-for="(it, i) in visibleNear" :key="'n' + i" class="sr-item" @tap="openWord(it)">
-          <view class="sr-line">
-            <text class="sr-word">{{ it.w }}</text>
-            <text v-if="it.pos" class="sr-pos">{{ it.pos }}</text>
-            <text class="tag sr-src">{{ it.fromText }}</text>
-          </view>
-          <text class="sr-mean">{{ it.m }}</text>
-        </view>
-        <text v-if="nearHits.length > visibleNear.length" class="sr-more" @tap="showAllNear">
-          {{ $t('再显示 {n} 个', { n: nearHits.length - visibleNear.length }) }}
-        </text>
-        <text v-else class="sr-tip">{{ $t('点击任意词条查看详情') }}</text>
-      </block>
-
-      <!-- 没有结果：本地一条都没有、缓存和 AI 也没给东西。
-           searchTimer 也算"在路上"：打字后要等 700ms 才发请求，这段空窗期说
-           "AI 也未能补充"是在撒谎（还没问呢），而且会先闪一句"没有"再被结果顶掉。 -->
-      <view v-if="!results.length && !cached && !aiLoading && !aiResult && !searchTimer" class="sr-state">
-        <text class="sr-state-text">{{ $t('本地词库没有「{q}」', { q: lastQuery }) }}</text>
-        <text class="sr-state-hint">{{ aiEnabled ? $t('AI 也未能补充这个词，换个拼写试试') : $t('接入 AI 后，搜不到的词会自动补充到本机缓存') }}</text>
-        <view class="sr-actions">
-          <text v-if="aiEnabled" class="sr-retry" @tap="aiLookup(lastQuery)">{{ $t('再试一次') }}</text>
-          <!-- 反向兜底：这句其实是想让 AI 改页面 → 一键按指令重跑 -->
-          <text class="sr-retry sr-retry-cmd" @tap="retryAsCommand">{{ $t('当成指令试试') }}</text>
-        </view>
-      </view>
-    </view>
 
     <!-- 首页模块：按用户保存的顺序渲染；编辑态显示拖拽手柄与收纳按钮 -->
     <view
@@ -391,6 +409,8 @@ import * as cardSpec from '../../utils/card-spec.js'
 import { speak as speakAny } from '../../services/voice.js'
 import * as onboarding from '../../utils/onboarding.js'
 import OnboardingMask from '../../components/onboarding-mask.vue'
+import SearchHistory from '../../components/search-history/search-history.vue'
+import * as searchHistory from '../../utils/search-history.js'
 
 // AI 补充的触发延迟：避免边打字边请求
 const AI_DELAY = 700
@@ -447,7 +467,8 @@ export default {
     WidgetChat,
     AppCardBlocks,
     OnboardingMask,
-    AppDialog
+    AppDialog,
+    SearchHistory
   },
   mixins: [tabSlideMixin('home')],
   data() {
@@ -575,6 +596,8 @@ export default {
     },
     searchTitle() {
       void this.__lang
+      // 刚点开、还没打字：整块是"最近查过"，标题说"查词"（历史组件自己有"搜索历史"标题）
+      if (!this.lastQuery) return t('查词')
       // 整句 + 占位符：英文里数量要放在中间（"{n} matches"），拼接会把语序搞反
       if (this.exactHits.length) {
         return t('本地词库 · 命中 {n} 条', { n: this.results.length })
@@ -1093,6 +1116,39 @@ export default {
       if (this.__suggestTimer) { clearTimeout(this.__suggestTimer); this.__suggestTimer = 0 }
       this.inputFocused = true
       this.suggestAlive = true
+      // 搜索模式：一点输入框就把搜索面板铺开（里面先是"最近查过"）。
+      // 以前要等打了字才出结果 —— 点开搜索框看到的是首页本身，
+      // 往下滑还是首页模块，看着就像"搜索和首页没分开"（用户实测反馈）。
+      if (this.inputMode === 'search') {
+        this.searching = true
+        this.refreshHistory()
+      }
+    },
+
+    /** 让历史组件重新读一次（记了新的一笔之后要同步过来） */
+    refreshHistory() {
+      const h = this.$refs && this.$refs.history
+      if (h && typeof h.refresh === 'function') h.refresh()
+    },
+
+    /**
+     * 记一笔搜索历史。只在两处记：
+     *   · 回车提交（用户明确要查这个）
+     *   · 点开某条结果（查到了、还点进去看，说明这次搜索有价值）
+     * 边打字边记会把 ru / runn 这些半成品灌进来，历史就废了。
+     */
+    rememberSearch(w) {
+      const word = String(w == null ? '' : w).trim()
+      if (!word) return
+      try { searchHistory.add(word) } catch (e) { /* 存不进去不影响搜索本身 */ }
+      this.refreshHistory()
+    },
+
+    /** 点历史里的某个词：填进输入框并立刻查（不用重新拼一遍拼写） */
+    onHistoryPick(w) {
+      const word = String(w == null ? '' : w).trim()
+      if (!word) return
+      this.runSearch(word)
     },
     /**
      * 失焦不能立刻收起推荐条：
@@ -1196,6 +1252,8 @@ export default {
       // 回车要给一个明确动作：已经有**一模一样**的那条就直接进词条页。
       // 以前一律 runSearch（把同样的检索再跑一遍，界面纹丝不动），
       // 用户只会觉得"按回车是坏的"。
+      // 回车是一个明确的"我要查这个" → 记进历史
+      this.rememberSearch(text)
       const q = String(text).trim().toLowerCase()
       const hit = this.results.filter(r => String(r.w || '').trim().toLowerCase() === q)[0]
       if (hit) { this.openWord(hit); return }
@@ -1504,8 +1562,11 @@ export default {
       // 这里若走 clearSearch 会①把键盘收掉②把锁定的指令模式重置成搜索 —— 两头都坑。
       if (!kw) {
         if (this.searchTimer) { clearTimeout(this.searchTimer); this.searchTimer = 0 }
-        this.searching = false
+        // 面板**不关**：把字全删了是"想换个词再查"，退回首屏会让人以为搜索被取消了。
+        // 现在清空之后回到"搜索历史"，再点一下历史或重新打字都顺手 ——
+        // lastQuery 必须跟着清，否则面板的条件 !lastQuery 不成立，历史出不来。
         this.results = []
+        this.lastQuery = ''
         this.cached = null
         this.aiResult = null
         this.aiLoading = false
@@ -1674,6 +1735,8 @@ export default {
     openWord(it) {
       const w = String((it && it.w) || '').trim().toLowerCase()
       if (!w) return
+      // 查到了还点进去看 → 这个词值得记一笔（下次不用重新拼拼写）
+      this.rememberSearch(w)
       const url = '/pkgManage/pages/word-detail/word-detail?w=' + encodeURIComponent(w) +
         '&book=' + encodeURIComponent(String(this.bookId || ''))
       // 记一笔"这次跳转是从搜索结果发起的"：词条页返回时（onShow）据此收起搜索面板。
@@ -1810,6 +1873,28 @@ export default {
 
 /* 搜索结果卡 */
 .search-card { margin-bottom: 24rpx; }
+
+/* 搜索面板：整屏覆盖的一层（顶栏留在上面继续输入，底栏留给切 tab）。
+   它必须有自己的底 —— 透明的话首页模块会从底下透出来，
+   那正是用户说的"滑到底发现还是在首页"。用 --app-bg（和页面同一套背景），
+   看起来就是"进了一个只有搜索的页面"，而不是"首页上贴了张卡"。 */
+.sr-page {
+  position: fixed;
+  left: 0;
+  right: 0;
+  /* 顶栏占位：状态栏 + 胶囊 88rpx + 留白（与 .page-nav 的 padding-top 同一套） */
+  top: calc(var(--status-bar-height, 0px) + 136rpx);
+  /* 底栏 112rpx + 上下留空，别被悬浮胶囊压住最后一条结果 */
+  bottom: calc(152rpx + constant(safe-area-inset-bottom));
+  bottom: calc(152rpx + env(safe-area-inset-bottom));
+  z-index: 450;   /* 在顶栏(400)之上、底栏(500)之下：盖住内容，但不抢两者 */
+  padding: 0 24rpx;
+  overflow-y: auto;
+  background: var(--app-bg, #e4e9e4);
+}
+
+/* 面板里的卡片不再需要下边距（它是这层唯一的内容） */
+.sr-page .search-card { margin-bottom: 24rpx; }
 
 .sr-head {
   display: flex;

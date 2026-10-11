@@ -62,7 +62,13 @@ const onInput = home.match(/onSearchInput\(v\)\s*\{[\s\S]*?\n    \},/);
 assert(!!onInput, '定位到 onSearchInput');
 assert(!!onInput && /if \(!kw\) \{/.test(onInput[0]), '空值有独立分支');
 assert(!!onInput && !/clearSearch/.test(onInput[0].match(/if \(!kw\) \{[\s\S]*?\n      \}/)[0]), '空值分支不调用 clearSearch（不抢焦点/不解锁模式）');
-assert(!!onInput && /searching = false/.test(onInput[0].match(/if \(!kw\) \{[\s\S]*?\n      \}/)[0]), '空值分支只收起结果区');
+// 以前这里断言 searching = false（空输入就退回首屏）。改成"不退屏"是用户反馈来的：
+// 搜索现在是一整屏（.sr-page），把字全删了退回首屏会让人以为搜索被取消了 ——
+// 清空后回到"最近查过"，换个词继续查才顺手（历史自己也随 lastQuery 一起清空）。
+assert(!!onInput && !/searching\s*=\s*false/.test(onInput[0].match(/if \(!kw\) \{[\s\S]*?\n      \}/)[0]),
+  '空值分支留在搜索屏（退回首屏 = 用户会以为搜索被取消）');
+assert(!!onInput && /lastQuery\s*=\s*''/.test(onInput[0].match(/if \(!kw\) \{[\s\S]*?\n      \}/)[0]),
+  '空值分支连 lastQuery 一起清（否则搜索历史出不来）');
 assert(!!onInput && /JUNK_TEXT\.test\(kw\)\) \{ this\.clearSearch\(\)/.test(onInput[0]), '垃圾输入仍走 clearSearch（该收就收）');
 
 console.log('== 3a. navigate：白名单外的页面名不作废成默认页 ==');

@@ -26,10 +26,13 @@
         <text class="ws-close" @tap="close">{{ $t('收起') }}</text>
       </view>
 
-      <!-- 刚点开、还没输入 -->
-      <view v-if="!lastQuery" class="ws-state">
-        <text class="ws-state-text">{{ $t('输入单词或中文释义，查完接着做题') }}</text>
-      </view>
+      <!-- 刚点开、还没输入：先给"最近查过"（做题中间抬头查的大多是刚才没记住的词） -->
+      <block v-if="!lastQuery">
+        <search-history ref="history" @pick="onHistoryPick" />
+        <view class="ws-state">
+          <text class="ws-state-text">{{ $t('输入单词或中文释义，查完接着做题') }}</text>
+        </view>
+      </block>
 
       <block v-else>
         <!-- ① 一模一样的那条。
@@ -122,6 +125,8 @@ import * as aiCache from '../../utils/ai-cache.js'
 import { aiGateReason } from '../../services/config.js'
 import { explainWord } from '../../services/ai-content.js'
 import FloatNavbar from '../float-navbar/float-navbar.vue'
+import SearchHistory from '../search-history/search-history.vue'
+import * as searchHistory from '../../utils/search-history.js'
 
 // 打字停下来多久去问 AI（与首页同一节奏；本机缓存命中就不会问）
 const AI_DELAY = 700
@@ -146,7 +151,7 @@ const AI_INFLIGHT = new Set()
  */
 export default {
   name: 'WordSearch',
-  components: { FloatNavbar },
+  components: { FloatNavbar, SearchHistory },
   props: {
     // 没进搜索态时显示的标题（与页面上原来的顶栏标题一致）
     title: { type: String, default: '' },
@@ -239,6 +244,30 @@ export default {
     onFocus() { this.autofocus = true },
     onBlur() { this.autofocus = false },
 
+    /** 让历史组件重读一次（记了新的一笔之后同步过来） */
+    refreshHistory() {
+      const h = this.$refs && this.$refs.history
+      if (h && typeof h.refresh === 'function') h.refresh()
+    },
+
+    /**
+     * 记一笔搜索历史：只在"回车提交 / 点开某条结果"这两处记 ——
+     * 边打字边记会把 ru / runn 这些半成品灌进来。
+     */
+    rememberSearch(w) {
+      const word = String(w == null ? '' : w).trim()
+      if (!word) return
+      try { searchHistory.add(word) } catch (e) { /* 存不进去不影响查词本身 */ }
+      this.refreshHistory()
+    },
+
+    /** 点历史里的词：直接拿它去搜（省得再拼一遍拼写） */
+    onHistoryPick(w) {
+      const word = String(w == null ? '' : w).trim()
+      if (!word) return
+      this.onInput(word)
+    },
+
     /** 输入变化：本地先查，够不着再等 AI（与首页同一条判定链） */
     onInput(v) {
       const kw = String(v == null ? '' : v).trim()
@@ -276,6 +305,7 @@ export default {
       // 端上 confirm 事件有时不带 value：值还没同步过来的话先按输入走一遍
       if (kw !== this.keyword) { this.onInput(kw); return }
       if (this.timer) { clearTimeout(this.timer); this.timer = 0 }
+      this.rememberSearch(kw)   // 回车 = 明确的"我要查这个"
       const hit = this.exactHits[0]
       if (hit) { this.openWord(hit); return }
       if (this.aiResult) { this.openWord({ w: this.aiResult.word }); return }
@@ -391,6 +421,8 @@ export default {
     openWord(it) {
       const w = String((it && it.w) || '').trim().toLowerCase()
       if (!w) return
+      // 查到了还点进去看 → 记一笔，下次不用重新拼拼写
+      this.rememberSearch(w)
       uni.navigateTo({
         url: '/pkgManage/pages/word-detail/word-detail?w=' + encodeURIComponent(w) +
           '&book=' + encodeURIComponent(String(this.bookId || ''))

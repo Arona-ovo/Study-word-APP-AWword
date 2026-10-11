@@ -301,7 +301,9 @@ assert(!/v-else-if="(cached|aiLoading|aiResult)"/.test(homeSrc2), '三块结果�
     onboarding: { shouldShow: () => false, count: () => 0, stepAt: () => null },
     FloatTabbar: {}, FloatNavbar: {}, WidgetProgress: {}, WidgetFavorites: {}, WidgetStreak: {},
     WidgetChart: {}, WidgetGoal: {}, WidgetUsage: {}, WidgetWorddrill: {}, WidgetChat: {},
-    AppCardBlocks: {}, AppDialog: {}, OnboardingMask: {}
+    AppCardBlocks: {}, AppDialog: {}, OnboardingMask: {},
+    // 搜索历史：首页注册了组件 + 引了模块，缺桩的话脚本加载即崩
+    SearchHistory: {}, searchHistory: { list: () => [], add: () => true, remove: () => true, clear: () => true }
   }, 'home.vue').default;
   assert(!!homePage && typeof homePage.data === 'function', '首页脚本可加载（导出 default）');
   const vm = Object.assign({}, homePage.data(), homePage.methods);

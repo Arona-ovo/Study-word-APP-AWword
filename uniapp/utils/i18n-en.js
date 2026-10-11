@@ -295,6 +295,9 @@ export default {
   '查看词条': 'Open entry',
   '答完这题就能查词': 'Finish this question first — then you can look words up',
   // 「没有一模一样的那个词」时的口径：相近的排后面、讲清楚，并给一条出路
+  // 搜索历史（首页搜索面板 / 做题页顶栏查词共用）
+  '搜索历史': 'Search history',
+  '已清空搜索历史': 'Search history cleared',
   '当前词书里相近的词': 'Close matches in the current wordbook',
   '再显示 {n} 个': 'Show {n} more',
   'AI 查一下': 'Ask AI',

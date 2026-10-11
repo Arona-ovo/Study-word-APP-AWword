@@ -54,13 +54,30 @@ const stubs = {
   aiOn: true
 };
 
+// 最近搜过：做题页查词也复用同一份历史（不是另存一份）
+const histLog = [];
+const histStub = {
+  list: () => histLog.slice().map((w) => ({ w: w, at: 0 })),
+  add: (w) => { histLog.push(String(w)); return true; },
+  remove: (w) => {
+    const i = histLog.indexOf(String(w));
+    if (i < 0) return false;
+    histLog.splice(i, 1);
+    return true;
+  },
+  clear: () => { histLog.length = 0; return true; }
+};
+
 const COMP = loadCode(script, {
   t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
   search: { localSearch: (bid, kw, limit) => stubs.local(bid, kw, limit) },
   aiCache: { findWord: (w) => stubs.cache(w), sentencesOf: () => [] },
   aiGateReason: () => (stubs.aiOn ? '' : '未配置 AI'),
   explainWord: (q) => stubs.explain(q),
-  FloatNavbar: {}
+  // 组件注册了这个娃就要给桩，否则脚本加载即崩（不是假绿，是压根跑不起来）
+  FloatNavbar: {},
+  SearchHistory: {},
+  searchHistory: histStub
 }, 'word-search.vue').default;
 
 assert(!!COMP && typeof COMP.data === 'function', '组件脚本可加载（导出 default）');
@@ -298,7 +315,32 @@ function mount(props) {
   assert(/keep-keyboard/.test(tpl), '点别处不主动收键盘（滚结果时键盘不闪）');
   assert(/:autofocus="autofocus"/.test(tpl), '焦点由组件控制（打开即弹键盘）');
 
-  console.log('\n== 13. 两个练习页的接入契约 ==');
+  console.log('\n== 13. 最近查过：做题页抬头查词也给同一份历史 ==');
+  // 用户反馈：「搜索要显示历史记录」—— 做题中途抬头查的往往就是刚才没记住的词，
+  // 这块不只在首页有，顶栏查词（word-search）也得有。
+  assert(/<block v-if="!lastQuery">[\s\S]{0,200}<search-history/.test(tpl),
+    '还没输入时先显示历史（打完字再让位给结果）');
+  assert(/<search-history[^>]*ref="history"[^>]*@pick="onHistoryPick"/.test(tpl),
+    '接住 pick 事件（点历史那条直接按它查）');
+  const pickCall = [];
+  const hp = mount({});
+  hp.onInput = (v) => pickCall.push('input:' + v);
+  hp.onHistoryPick('apple');
+  // 这里用字符串比：eq 是全等比较，两个数组不可能全等
+  eq(pickCall.join('|'), 'input:apple', '点历史条目 = 把这个词重新查一遍');
+  histLog.length = 0;
+  hp.rememberSearch('Banana');
+  eq(histLog.join('|'), 'Banana', 'rememberSearch 真写进历史（不是只在界面上晃一下）');
+  histLog.length = 0;
+  navs.length = 0;
+  hp.openWord({ w: 'Pear' });
+  eq(histLog.join('|'), 'pear', '点开某条结果也记一笔（词统一存小写，下次同一个词不会再占两格）');
+  assert(navs.length === 1 && /word-detail/.test(navs[0]), '顺手还是照旧跳词条页（' + navs[0] + '）');
+  histLog.length = 0;
+  hp.rememberSearch('   ');
+  eq(histLog.length, 0, '空白不记（enter n 的什么都不该进历史）');
+
+  console.log('\n== 14. 两个练习页的接入契约 ==');
   [['practice', 'pkgStudy/pages/practice/practice.vue'],
     ['word-drill', 'pkgStudy/pages/word-drill/word-drill.vue']].forEach(function (pair) {
     const name = pair[0];

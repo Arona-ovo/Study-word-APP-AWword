@@ -365,6 +365,9 @@ function eq(a, b, label) {
         // 那条就直接进词条页（data 里本来就有这两个，桩要跟上，否则是桩不全而不是逻辑错）
         results: [],
         pickText: (v) => (typeof v === 'string' ? v : String(v == null ? '' : v)),
+        // rememberSearch 是"搜索历史"加的：回车 / 点开某条结果都记一笔。
+        // 桩不跟上就是"桩不全"，不是逻辑错（这条本身就带动过的那几条断言一起验顺序）
+        rememberSearch: (w) => log.push('history:' + w),
         runSearch: (v) => log.push('search:' + v),
         runCommand: (v) => log.push('command:' + v),
         openWord: (it) => log.push('open:' + ((it && it.w) || ''))
@@ -384,24 +387,24 @@ function eq(a, b, label) {
     eq(c.log, [], '只打了个前缀（正文为空）：不做事');
     c = mk('search');
     onSubmit.call(c, 'apple');
-    eq(c.log, ['search:apple'], '有内容时照常查词');
+    eq(c.log, ['history:apple', 'search:apple'], '有内容时照常查词（并顺手记一笔历史）');
     // 回车要有一个"看得见"的动作：本地已经有**一模一样**的那条就直接进词条页。
     // 以前一律 runSearch（把同样的检索再跑一遍、界面纹丝不动），用户只会觉得回车坏了。
     c = mk('search');
     c.results = [{ w: 'apple', pos: 'n.', m: '苹果' }, { w: 'applesauce', pos: '', m: '苹果酱' }];
     onSubmit.call(c, 'Apple');
-    eq(c.log, ['open:apple'], '本地已有这个词 → 回车直接进词条页（不是把检索再跑一遍）');
+    eq(c.log, ['history:Apple', 'open:apple'], '本地已有这个词 → 回车直接进词条页（不是把检索再跑一遍）');
     c = mk('search');
     c.results = [{ w: 'applesauce', pos: '', m: '苹果酱' }];
     onSubmit.call(c, 'apple');
-    eq(c.log, ['search:apple'], '只有相近的 → 回车照旧去检索（精确命中才直达）');
+    eq(c.log, ['history:apple', 'search:apple'], '只有相近的 → 回车照旧去检索（精确命中才直达）');
     c = mk('command');
     onSubmit.call(c, '把背景换成安静的蓝色渐变');
-    eq(c.log, ['command:把背景换成安静的蓝色渐变'], '指令模式下照常执行');
+    eq(c.log, ['command:把背景换成安静的蓝色渐变'], '指令模式下照常执行（指令不是查词，不进搜索历史）');
     // 所见即所得：回车只走界面上显示的模式，自动改判发生在打字时（onSearchInput）
     c = mk('search');
     onSubmit.call(c, '把背景换成安静的蓝色渐变');
-    eq(c.log, ['search:把背景换成安静的蓝色渐变'], '界面显示「搜」时回车就查词（不擅自改判成指令）');
+    eq(c.log, ['history:把背景换成安静的蓝色渐变', 'search:把背景换成安静的蓝色渐变'], '界面显示「搜」时回车就查词（不擅自改判成指令）');
     c = mk('search');
     onSubmit.call(c, '/把背景换成安静的蓝色渐变');
     eq(c.log, ['command:把背景换成安静的蓝色渐变'], '显式前缀能盖过界面上的模式');
@@ -412,6 +415,98 @@ function eq(a, b, label) {
     eq([c.inputMode, c.modeLocked], ['command', true], '空回车不动模式与锁定态');
   }
   assert(/clearSearch\(\) \{/.test(homeSrc), '清空入口 clearSearch 仍在（× / 收起照常可用）');
+
+  /* ---------- 8. 搜索独立成屏 + 搜索历史 ---------- */
+  // 回归点（用户反馈）：「搜索出来的结果滑到底下发现还是在首页」—— 以前结果卡
+  // 就塞在 .page-slide 里，往下滚是卡片后面的首页内容。现在整屏铺一层 .sr-page，
+  // 自己滚动，跟首页彻底分开；并且没输入任何东西时先显示历史记录。
+  console.log('== 8. 搜索独立成屏 + 搜索历史 ==');
+  assert(/<view\s+v-if="searching && !editing"\s+class="sr-page"/.test(homeSrc),
+    '整屏搜索面板 .sr-page 存在（不再是首页里的一张卡）');
+  const srRule = (homeSrc.match(/\.sr-page \{[\s\S]*?\n\}/) || [''])[0];
+  assert(srRule.length > 80, '能抠出 .sr-page 样式块');
+  assert(/position:\s*fixed/.test(srRule),
+    '.sr-page 是 fixed（脱离首页文档流，滚到底也不会露出首页）');
+  assert(/overflow-y:\s*auto/.test(srRule),
+    '.sr-page 自己滚（内容是它内部在滚，不是滚首页）');
+  assert(/background:\s*var\(--app-bg/.test(srRule),
+    '.sr-page 铺了不透明背景（首页内容不会透上来）');
+  assert(/z-index:\s*450/.test(srRule),
+    '.sr-page 盖在内容之上、底栏之下（z-index 450）');
+  assert(/top:\s*calc\(var\(--status-bar-height/.test(srRule),
+    '.sr-page 从顶栏下方开始（不压住输入框）');
+  assert(/bottom:\s*calc\([^)]*env\(safe-area-inset-bottom\)\)/.test(srRule),
+    '.sr-page 底部让开 tabBar + 安全区（最后一条结果不被挡）');
+  // touch 事件要拦住，否则在结果上滑动会带着后面的首页一起滚
+  ['touchstart.stop', 'touchmove.stop', 'touchend.stop'].forEach(ev =>
+    assert(homeSrc.indexOf('@' + ev) >= 0, '拦住 ' + ev + '（不带着首页一起滚）'));
+  // 搜索面板必须排在 float-navbar 之后、且在 .page-slide 之外（约定 4）
+  const iSr = homeSrc.indexOf('class="sr-page"');
+  const iNav = homeSrc.indexOf('float-navbar');
+  const iSlide = homeSrc.indexOf('class="page-slide"');
+  assert(iSr > iNav, '搜索面板在 float-navbar 之后');
+  assert(iSlide > iSr, '搜索面板在 .page-slide 之前 → 不在里面（不然跟着一起左右滑）');
+  const srBlock = homeSrc.slice(iSr, iSlide);
+  assert(srBlock.indexOf('search-card') > 0, '结果卡挂在这层里（不是留在首页卡槽）');
+
+  // 历史记录组件
+  const sh = R('components/search-history/search-history.vue');
+  const shMod = R('utils/search-history.js');
+  assert(/SearchHistory/.test(homeSrc) && /components:\s*\{[\s\S]{0,400}SearchHistory/.test(homeSrc),
+    '首页注册了 SearchHistory 组件');
+  assert(/<search-history[^>]*@pick="onHistoryPick"/.test(homeSrc), '首页接住 history 的 pick 事件');
+  assert(/<search-history[^>]*v-if="!lastQuery"/.test(homeSrc),
+    '还没搜过（lastQuery 为空）才显示历史；有结果了就让位给结果');
+  assert(/refreshHistory\(\)/.test(homeSrc) && /onHistoryPick\(w\)/.test(homeSrc),
+    '有 refreshHistory / onHistoryPick 两个方法');
+  assert(/onHistoryPick\(w\) \{[\s\S]{0,120}runSearch/.test(homeSrc),
+    '点历史条目直接按那个词重新搜（不用再敲一遍）');
+  assert(/onInputFocus\(\) \{[\s\S]{0,700}searching\s*=\s*true/.test(homeSrc),
+    '点输入框就把搜索面板铺开（不是等打完字才出）');
+  assert(/onInputFocus\(\) \{[\s\S]{0,700}refreshHistory\(\)/.test(homeSrc),
+    '铺开的同时把历史读一遍（第一眼就是"最近查过"）');
+  assert(/@tap\.stop="del\(i\)"/.test(sh) && /脱手|删除|del/.test(sh),
+    '每条历史右侧 × 不冒泡（点了不会再点亮整条）');
+  assert(/clearAll/.test(sh) && /清空/.test(sh), '有「清空」入口');
+  // 空输入不再退回首页：把字全删了是"想换个词再查"，退回首屏会让人以为搜索被取消了
+  const oi = homeSrc.match(/\n    onSearchInput\(v\) \{([\s\S]*?)\n    \},/);
+  assert(!!oi, '能抠出 onSearchInput 方法体');
+  if (oi) {
+    const emptyBranch = oi[1].slice(oi[1].indexOf('if (!v.trim())'), oi[1].indexOf('if (!v.trim())') + 400);
+    assert(!/searching\s*=\s*false/.test(emptyBranch),
+      '清空输入不退出搜索屏（还在搜索里，能看到历史重新选）');
+    assert(!/clearSearch\(\)/.test(emptyBranch),
+      '清空输入不整屏收起（不把键盘 / 模式一起收掉）');
+  }
+  // 记历史的时机：回车 + 点开某条结果。边打字边记会把半成品词灌进来
+  assert(/this\.rememberSearch\(text\)/.test(homeSrc), '回车提交记一笔');
+  // openWord 是最后一个方法，收尾是 `    }` 没有逗号，所以这里到 `\n    }` 为止
+  const owBody = homeSrc.match(/\n    openWord\(it\) \{([\s\S]*?)\n    \}/);
+  assert(!!owBody, '能抠出 openWord 方法体');
+  assert(!!owBody && /rememberSearch/.test(owBody[1]), '点开某条结果也记一笔');
+  assert(!!owBody && !/rememberSearch/.test(oi ? oi[1] : ''),
+    '打字过程不记历史（否则 ru / runn 这类半成品会灌满）');
+  // 历史模块本身
+  const HS = await import(P('utils/search-history.js'));
+  ['list', 'add', 'remove', 'clear'].forEach(f =>
+    assert(typeof HS[f] === 'function', 'search-history 导出 ' + f));
+  const words = () => HS.list().map(x => x.w);
+  HS.clear();
+  HS.add('apple');
+  HS.add('banana');
+  HS.add('Apple');
+  eq(words(), ['Apple', 'banana'], '同一个词再查一次 → 提到最前、不重复占两格');
+  eq(HS.add('   '), false, '空白不算一个词');
+  eq(HS.add('***'), false, '纯标点不算一个词');
+  eq(words().length, 2, '没写进去就不占位');
+  for (let i = 0; i < 40; i++) HS.add('w' + i);
+  assert(HS.list().length <= 20, '历史有上限（' + HS.list().length + ' ≤ 20）');
+  eq(words()[0], 'w39', '最新的一条在最前');
+  eq(words().indexOf('w0'), -1, '超上限丢的是最旧的');
+  HS.remove('w39');
+  eq(words().indexOf('w39'), -1, '单条能删');
+  HS.clear();
+  eq(HS.list(), [], '能一次性清空');
 
   console.log('');
   console.log(fail === 0 ? '全部通过 ✓' : ('失败 ' + fail + ' 项 ✗'));
