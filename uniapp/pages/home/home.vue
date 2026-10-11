@@ -63,7 +63,7 @@
             <text v-if="it.pos" class="sr-pos">{{ it.pos }}</text>
             <text class="tag sr-src">{{ it.fromText }}</text>
           </view>
-          <text class="sr-mean">{{ it.m }}</text>
+          <text class="sr-mean">{{ it.full }}</text>
         </view>
 
         <!-- 下面这一块**不和上面互斥**（原来是 v-else-if 链）：
@@ -650,6 +650,16 @@ export default {
       const q = String(this.lastQuery || '').trim().toLowerCase()
       if (!q) return []
       return (this.results || []).filter(r => String(r.w || '').trim().toLowerCase() === q)
+        .map(function (r) {
+          // 搜索列表那一行默认用共享表的短版（背诵卡口径，20 字上限），
+          // 多义词摆不全 —— 只有「一模一样」的那条才换成长版。
+          var o = {}
+          for (var k in r) o[k] = r[k]
+          var full = ''
+          try { full = dict.fullMeaningOf(r.w) } catch (e) { full = '' }
+          o.full = full || r.m || ''
+          return o
+        })
     },
     nearHits() {
       const q = String(this.lastQuery || '').trim().toLowerCase()

@@ -74,11 +74,18 @@ const expandStub = async (w, opts) => {
   polishLog.push({ w: String(w || ''), also: ((opts && opts.also) || []).slice() });
   return Object.assign({ word: w, pos: '' }, polishReply);
 };
-// 真 mixin（不是空壳桩）：只把它的三个外部依赖换成上面的可控实现
+// 真 mixin（不是空壳桩）：只把它的外部依赖换成上面的可控实现
+const lemmaMod = load('utils/lemma.js');
 const wordPolishMixin = load('utils/word-polish-mixin.js', {
   t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
   aiCache: cacheApi,
-  expandWord: expandStub
+  expandWord: expandStub,
+  // 义项补全要查词典层那份完整义项表（data/word-senses.js），缺桩脚本加载即崩。
+  // ⚠️ utils/lemma.js 不会自动装载，必须显式给 lemma / lemmaCandidates
+  dict: load('utils/dict.js', {
+    lemmaCandidates: lemmaMod.lemmaCandidates,
+    lemma: lemmaMod.lemma
+  })
 }).default;
 
 // 最近搜过：做题页查词也复用同一份历史（不是另存一份）
@@ -383,23 +390,24 @@ function mount(props) {
   console.log('\n== 14. 义项补全（做题页抬头查词同样要说全一个词的意思） ==');
   // 用户原话：「搜索出来的本地已缓存单词，有时候其他意思显示不全，有些一词多义显示不全，
   // 这个时候需要 AI 来补充」—— 首页有还不够，做题中途抬头查的往往就是刚才没记住的词。
-  senseMap.bear = [];
-  stubs.local = () => [{ w: 'bear', pos: 'n.', m: '熊', fromText: '当前词书' }];
+  senseMap.violin = [];
+  // violin 在本地词典里只有「小提琴」一条义项 → 判定"显示不全，该补"
+  stubs.local = () => [{ w: 'violin', pos: 'n.', m: '小提琴', fromText: '当前词书' }];
   const po = mount({ locked: false, bookId: 'B' });
-  po.onInput('bear');
-  eq(po.polishWanted, true, '词书里只有"熊"一条 → 判定为显示不全，该补');
+  po.onInput('violin');
+  eq(po.polishWanted, true, '本地只有一条义项 → 判定为显示不全，该补');
   assert(po.polishTimer !== 0, '停手后排了一次补全（不是边打字边发请求）');
   po.close();
   assert(po.polishTimer === 0, '收起搜索 → 补全定时器一起清掉（页面走了不该还发请求）');
 
   // 缓存里已经有完整义项 → 不补（补过一次就够，不反复烧 token）
-  senseMap.bear = [{ pos: 'n.', meaning: '熊' }, { pos: 'v.', meaning: '忍受' }];
+  senseMap.violin = [{ pos: 'n.', meaning: '小提琴' }, { pos: 'n.', meaning: '小提琴手' }];
   const done = mount({ locked: false, bookId: 'B' });
   done.onInput('bear');
   eq(done.polishWanted, false, '★ 缓存里已有完整义项 → 不再补');
   assert(done.polishTimer === 0, '也不排补全请求（一个 token 都不花）');
   done.close();
-  senseMap.bear = [];
+  senseMap.violin = [];
 
   // 落地：补全回来 → 义项一列贴出来 + 预判词有可见反馈
   const POLISH_WORD = 'zilch';            // 独一无二的词：POLISH_DONE 一场会话只补一次

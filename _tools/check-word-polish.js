@@ -86,8 +86,16 @@ const expandStub = async (w, opts) => {
   expandLog.push({ w: String(w || ''), also: ((opts && opts.also) || []).slice() });
   return aiContent.expandWord(w, opts);
 };
+// 判定"本地还有没有更多义项"要查词典层那份完整义项表（data/word-senses.js），
+// 少了这一项 mixin 加载即崩（不是假绿，是压根跑不起来）。
+// ⚠️ utils/ 下的模块不会被自动装载，lemma / lemmaCandidates 必须显式给
+const lemmaMod = load('utils/lemma.js');
+const dict = load('utils/dict.js', {
+  lemmaCandidates: lemmaMod.lemmaCandidates,
+  lemma: lemmaMod.lemma
+});
 const mixinFactory = load('utils/word-polish-mixin.js', {
-  aiCache, expandWord: expandStub, t
+  aiCache, expandWord: expandStub, t, dict
 }).default;
 
 /** 把 mixin 与"宿主"合起来挂一个能跑的实例（模拟 Vue 的 mixin 合并） */
@@ -279,34 +287,35 @@ function mount(host) {
       }
     }
   });
-  host.input('zebra');
+  // violin 在本地词典里只有「小提琴」一条义项 → 属于"显示不全，该补"
+  host.input('violin');
   assert(host.polishTimer !== 0, '停手后排了个定时器（不是边打字边发请求）');
   host.input('');
   eq(host.polishTimer, 0, '清空输入 → 定时器一起清掉（别补到空词上）');
 
   // 直接等定时器跑完太慢（1200ms）：这里手动触发一次，验证落地结果
   llmState.behavior = () => JSON.stringify({
-    word: 'zebra', pos: 'n.',
-    senses: [{ pos: 'n.', meaning: '斑马' }, { pos: 'adj.', meaning: '有斑马纹的' }],
-    examples: [{ en: 'A zebra has stripes.', zh: '斑马有条纹。' }],
-    others: [{ word: 'zebrawood', pos: 'n.', meaning: '斑马木' }]
+    word: 'violin', pos: 'n.',
+    senses: [{ pos: 'n.', meaning: '小提琴' }, { pos: 'n.', meaning: '小提琴手' }],
+    examples: [{ en: 'She plays the violin.', zh: '她拉小提琴。' }],
+    others: [{ word: 'violinist', pos: 'n.', meaning: '小提琴手' }]
   });
-  host.input('zebra');
+  host.input('violin');
   if (host.polishTimer) { clearTimeout(host.polishTimer); host.polishTimer = 0 }
-  const flying = host.aiPolish('zebra');
+  const flying = host.aiPolish('violin');
   eq(host.polishLoading, true, '补全中 → 界面有转圈（不然用户以为没反应）');
   await flying;
   eq(host.polishLoading, false, '回来后转圈收掉');
   eq(host.polish && host.polish.senses.length, 2, '★ 义项贴到界面上（一列全出来）');
-  eq(host.polishPrefetched.join('|'), 'zebrawood', '预判词给一句可见反馈（"顺手备好了 xxx"）');
-  eq(host.polishPrefetchText, 'zebrawood', '拼好的展示文字（模板里不写表达式，见项目约定 9）');
-  assert(!!aiCache.findWord('zebrawood'), '预判词确实进了本机缓存');
-  eq(aiCache.hasFullSenses('zebra'), true, '主词也进了缓存（下次离线看全）');
+  eq(host.polishPrefetched.join('|'), 'violinist', '预判词给一句可见反馈（"顺手备好了 xxx"）');
+  eq(host.polishPrefetchText, 'violinist', '拼好的展示文字（模板里不写表达式，见项目约定 9）');
+  assert(!!aiCache.findWord('violinist'), '预判词确实进了本机缓存');
+  eq(aiCache.hasFullSenses('violin'), true, '主词也进了缓存（下次离线看全）');
 
   // 一场会话里同一个词只补一次：补完就写进缓存了，再补只是白烧 token
   expandLog.length = 0;
-  host.input('zebra');
-  await host.aiPolish('zebra');
+  host.input('violin');
+  await host.aiPolish('violin');
   eq(expandLog.length, 0, '同一个词一场会话只补一次');
 
   console.log('\n== 10. mixin：换词后旧结果不许贴上来 ==');

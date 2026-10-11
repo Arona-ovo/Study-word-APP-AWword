@@ -4,6 +4,7 @@
 import { WORDS } from '../data/words.js';
 import { COMMON_RAW } from '../data/common-words.js';
 import { EXTRA_RAW } from '../data/extra-words.js';
+import { SENSES_RAW } from '../data/word-senses.js';
 import { allByText } from '../data/lexicon.js';
 import { getBook } from '../data/wordbooks.js';
 import * as store from './store.js';
@@ -126,6 +127,72 @@ function extraGet(key) {
   try {
     return extraTable()[key] || null;
   } catch (e) { return null; }
+}
+
+/* ---------- 词典完整义项表（data/word-senses.js） ----------
+   用户反馈「许多单词有一词多义，尽量把默认单词库都丰富一遍」。
+   问题是词书共享表的一行 = 一张**背诵卡**，释义只有 20 字上限 —— 一个词
+   源表里有十几个义项，界面上永远只看得到前四五个。
+
+   所以词表流水线（_vocab/build.js）按同一套清洗规则另出了一份**不截断**
+   的版本，这里把它接进来。三条边界：
+
+     1. **只给词典层用**：词条页 / 点读 / 义项补全。背诵卡和搜索结果列表
+        仍然用短版 —— 那些地方要的是"一眼扫完"，摆一堵字墙反而难用。
+     2. **不进检索索引**：刻意没有并进 forEachEntry / searchRows。
+        那张平表是给"我打了几个字母，本地有没有"用的，每条只显示一行；
+        把长释义塞进去，搜索列表就全变字墙了。
+     3. **不产生词书 id**：和 extra-words.js 一样是只读查词兜底，
+        不占共享表行号，老用户的学习进度一动不动。
+
+   表里只收「短版被截断」的词（约 3316 条），其余词短版就是全量 ——
+   所以查不到不代表性本地不认识，判断收录与否仍然走 lookup()。
+   查找方式：直接在原始文本里扫那一行（'\n词|'），不预解析成 Map。
+   3316 条建成对象要多吃约 800KB 常驻堆，而这功能只在词条页 / 义项补全
+   这种"一次一两条"的地方用 —— 扫一次 319KB 文本是原生 indexOf，比重得多。 */
+function sensesLine(key) {
+  if (!key) return null
+  const at = SENSES_RAW.indexOf('\n' + key + '|')
+  if (at < 0) return null
+  const end = SENSES_RAW.indexOf('\n', at + 1)
+  return SENSES_RAW.slice(at + 1, end < 0 ? SENSES_RAW.length : end)
+}
+
+/**
+ * "a；b；c" / "a，b，c" → ['a','b','c']（空输入返回 []，不是 ['']）。
+ * 切分口径与 utils/word-polish-mixin.js 的 senseCount 保持一致 ——
+ * 否则同一个词会算出两个"义项数"，界面该不该补 AI 就对不上了。
+ */
+export function splitSenses(text) {
+  const s = String(text || '').trim();
+  if (!s) return [];
+  return s.split(/[；;，,、]|\s+\/\s+/).map(function (x) { return String(x || '').trim() }).filter(Boolean);
+}
+
+/**
+ * 这个词的**完整释义**（不截断）。词典层专用。
+ * 表里没有长版时退回 lookup 的短版 —— 那份本来就已经是全量了。
+ * @returns '' = 本地不认识这个词
+ */
+export function fullMeaningOf(raw) {
+  try {
+    const r = lookup(raw);
+    if (!r.found) return '';
+    // 用还原后的原形查（socks → sock）：表里存的是词表里的原形。
+    // 原形那边也没有就退回原形本身再试一次（还原可能还原过头）。
+    const lemma = String(r.lemma || normalize(raw) || '').toLowerCase()
+    const line = sensesLine(lemma) || sensesLine(normalize(raw))
+    if (!line) return r.meaning || ''
+    const i = line.indexOf('|')
+    const j = line.indexOf('|', i + 1)
+    if (i < 0 || j < 0) return r.meaning || ''
+    return line.slice(j + 1) || r.meaning || ''
+  } catch (e) { return ''; }
+}
+
+/** 完整义项数组。空数组 = 本地不认识这个词。 */
+export function fullSensesOf(raw) {
+  return splitSenses(fullMeaningOf(raw));
 }
 
 /* ---------- 全量本地词典索引（给「搜/x 搜得着」用） ----------
@@ -309,6 +376,7 @@ export function invalidateCache() {
   for (const k in BOOK_SETS) delete BOOK_SETS[k];
   // 全量检索表跟着失效：新收的词下一次搜索就得搜得到，不能等重启 App
   _rows = null;
+  // 完整义项表不建索引、不缓存，无需清理（见 sensesLine 的说明）
 }
 
 export { lemma };

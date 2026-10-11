@@ -31,6 +31,17 @@
         <button class="btn-primary wd-speak" @tap="speakWord">{{ isSentence ? $t('朗读整句') : $t('朗读单词') }}</button>
       </view>
 
+      <!-- 完整义项：上面那行释义来自词书共享表，那一行 = 一张背诵卡，
+           只有 20 字上限，多义词必然摆不全。这里用 data/word-senses.js 那份
+           不截断的版本，按义项逐条列开（一词多义显示不全的实测反馈）。 -->
+      <view class="card sense-card" v-if="senses.length > 1">
+        <view class="card-title">{{ $t('完整义项') }}</view>
+        <view v-for="(s, i) in senses" :key="i" class="sn-row">
+          <text class="sn-no">{{ i + 1 }}</text>
+          <text class="sn-text">{{ s }}</text>
+        </view>
+      </view>
+
       <!-- 学习情况（该词在当前词书里才有掌握度） -->
       <view class="card stat-card" v-if="inBook">
         <view class="card-title">{{ $t('学习情况') }}</view>
@@ -217,6 +228,7 @@ export default {
       allBooks: [],
       examples: [],
       ownExample: null, // 这个词自带的例句（导入词自带 / AI 缓存），加入词书时一并带过去
+      senses: [],       // 完整义项（多义词逐条摆开；≤1 条时不显示这张卡）
       // 词典与 AI 都没有释义时，由用户自己填（不填就没有释义，加进词书也没法做题）
       manualPos: '',
       manualMean: '',
@@ -375,6 +387,15 @@ export default {
         })
       } catch (err) { /* 缓存不可用则跳过 */ }
       this.examples = list
+
+      // 7) 完整义项：优先用词典层的长版（不截断），没有就把当前这条释义切开。
+      //    AI 缓存里的词不在 lookup() 的索引里，所以这里还要兜一层。
+      try {
+        const full = dict.fullSensesOf(this.word)
+        this.senses = full.length ? full : dict.splitSenses(this.info.meaning)
+      } catch (err) {
+        this.senses = []
+      }
 
       this.refreshFav()
     },
@@ -895,6 +916,40 @@ export default {
   color: #98a19b;
   color: var(--ink-3, #98a19b);
   padding: 12rpx 0;
+}
+
+/* ---------- 完整义项 ---------- */
+.sense-card { margin-bottom: 24rpx; }
+
+.sn-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 10rpx 0;
+}
+
+.sn-no {
+  flex-shrink: 0;
+  width: 34rpx;
+  height: 34rpx;
+  margin-top: 4rpx;
+  margin-right: 14rpx;
+  border-radius: 50%;
+  background: rgba(46, 107, 255, 0.12);
+  background: rgba(var(--brand-rgb, 46, 107, 255), 0.12);
+  color: #1d4fd8;
+  color: var(--brand-strong, #1d4fd8);
+  font-size: 20rpx;
+  line-height: 34rpx;
+  text-align: center;
+}
+
+.sn-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 27rpx;
+  line-height: 1.6;
+  color: #5a6560;
+  color: var(--ink-2, #5a6560);
 }
 
 /* ---------- 例句 ---------- */

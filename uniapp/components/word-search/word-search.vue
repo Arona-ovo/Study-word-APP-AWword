@@ -46,7 +46,7 @@
             <text v-if="it.pos" class="ws-pos">{{ it.pos }}</text>
             <text class="tag ws-src">{{ it.fromText }}</text>
           </view>
-          <text class="ws-mean">{{ it.m }}</text>
+          <text class="ws-mean">{{ it.full }}</text>
         </view>
 
         <!-- ② 本机缓存命中：以前生成过，离线也能看，不花额度、不发请求 -->
@@ -169,6 +169,7 @@
 import { t } from '../../utils/i18n.js'
 import * as search from '../../utils/search.js'
 import * as aiCache from '../../utils/ai-cache.js'
+import * as dict from '../../utils/dict.js'
 import { aiGateReason } from '../../services/config.js'
 import { explainWord } from '../../services/ai-content.js'
 import FloatNavbar from '../float-navbar/float-navbar.vue'
@@ -249,6 +250,16 @@ export default {
       return (this.results || []).filter(function (r) {
         return String(r.w || '').trim().toLowerCase() === q
       })
+        .map(function (r) {
+          // 搜索列表那一行默认用共享表的短版（背诵卡口径，20 字上限），
+          // 多义词摆不全 —— 只有「一模一样」的那条才换成长版。
+          var o = {}
+          for (var k in r) o[k] = r[k]
+          var full = ''
+          try { full = dict.fullMeaningOf(r.w) } catch (e) { full = '' }
+          o.full = full || r.m || ''
+          return o
+        })
     },
     nearHits() {
       const q = String(this.lastQuery || '').trim().toLowerCase()

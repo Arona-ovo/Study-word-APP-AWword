@@ -436,7 +436,10 @@ console.log('== 17. 没有完全匹配 → 也要问 AI ==');
     wordPolishMixin: load('utils/word-polish-mixin.js', {
       t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
       aiCache,
-      expandWord: async () => ({ senses: [], examples: [], others: [] })
+      expandWord: async () => ({ senses: [], examples: [], others: [] }),
+      // 判定"本地还有没有更多义项"要查词典层那份完整义项表（data/word-senses.js），
+      // 少了这一项 mixin 加载即崩（不是假绿，是压根跑不起来）
+      dict
     }).default,
     // onShow 里会走一遍完整流程（词书概览 / 布局刷新 / 新手引导），
     // 这几个模块要给到能被调用到的形状，否则 onShow 半路抛错，

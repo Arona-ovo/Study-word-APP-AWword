@@ -216,6 +216,7 @@ export default {
   '请从词库列表或首页搜索结果进入': 'Open this from the library or home search results',
   '词典暂未收录（仍可发音）': 'Not in the dictionary yet (pronunciation still available)',
   '未收录（仍可发音）': 'Not in dictionary (pronunciation still available)',
+  '完整义项': 'All senses',
   '朗读单词': 'Pronounce word',
   '加入词书': 'Add to wordbook',
   '这个词还没有释义，先查到释义再加入': 'This word has no definition yet; look it up first',

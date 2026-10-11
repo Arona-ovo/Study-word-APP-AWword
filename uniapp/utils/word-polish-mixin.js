@@ -18,6 +18,7 @@
 import * as aiCache from './ai-cache.js'
 import { expandWord } from '../services/ai-content.js'
 import { t } from './i18n.js'
+import * as dict from './dict.js'
 
 // 停手多久才补：比"补生词"那条路（700ms）更晚 —— 补全不是刚需，别抢在打字前面
 const POLISH_DELAY = 1200
@@ -77,19 +78,37 @@ export default function wordPolishMixin() {
       }
     },
     methods: {
-      /** 界面上现在摆着的义项数：本地精确命中 > 缓存条目 */
+      /**
+       * 这个词**本机到底存了几个义项**（不是"界面上现在摆了几个"）。
+       *
+       * 判定要连词典层那份完整义项一起看 —— 搜索列表那一行是背诵卡口径（20 字上限），
+       * 只看它会得出"只有 1 个义项"的错误结论，于是一个本地明明有 8 个义项
+       * 的词被反复拿去问 AI，白白烧 token。
+       */
       shownSenseCount() {
         const q = String(this.lastQuery || '').trim().toLowerCase()
+        if (!q) return 0
+        let n = 0
+        // 检索结果里的精确命中（界面上正摆着的那条）
         const hit = (this.results || []).filter(
           r => String(r.w || '').trim().toLowerCase() === q
         )[0]
-        if (hit) return senseCount(hit.m)
+        if (hit) n = senseCount(hit.m)
+        // 词典层的不截断版本（data/word-senses.js）
+        try {
+          const full = dict.fullSensesOf(q)
+          if (full.length > n) n = full.length
+        } catch (e) { /* 词典层不可用就只看检索结果 */ }
+        if (n >= 2) return n
+        // 本机 AI 缓存里补齐过的义项表
         const c = this.cached
         if (c && String(c.word || '').trim().toLowerCase() === q) {
           const cs = aiCache.sensesOf(q)
-          return cs.length >= 2 ? cs.length : senseCount(c.meaning)
+          if (cs.length >= 2) return cs.length
+          const cm = senseCount(c.meaning)
+          return cm > n ? cm : n
         }
-        return 0
+        return n
       },
       /**
        * 预判：本次搜索结果里排在前面、还没缓存（或缓存也只有一条）、用户八成要点开的词。
