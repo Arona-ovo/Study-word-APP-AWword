@@ -430,13 +430,28 @@ function eq(a, b, label) {
   assert(/overflow-y:\s*auto/.test(srRule),
     '.sr-page 自己滚（内容是它内部在滚，不是滚首页）');
   assert(/background:\s*var\(--app-bg/.test(srRule),
-    '.sr-page 铺了不透明背景（首页内容不会透上来）');
-  assert(/z-index:\s*450/.test(srRule),
-    '.sr-page 盖在内容之上、底栏之下（z-index 450）');
-  assert(/top:\s*calc\(var\(--status-bar-height/.test(srRule),
-    '.sr-page 从顶栏下方开始（不压住输入框）');
-  assert(/bottom:\s*calc\([^)]*env\(safe-area-inset-bottom\)\)/.test(srRule),
-    '.sr-page 底部让开 tabBar + 安全区（最后一条结果不被挡）');
+    '.sr-page 铺了不透明背景（CSS 变量没继承到时的兜底）');
+  assert(/z-index:\s*350/.test(srRule),
+    '.sr-page 盖在内容之上，但低于顶栏(400)/底栏(500)（z-index 350）');
+  // ⚠️ 这两条钉的是第二起真机事故（用户：「还能看到主页」「滑的是背后的主页不是列表」）：
+  //   ① top 曾经写成 `calc(var(--status-bar-height) + 136rpx)`，变量在本层没继承到就整体
+  //      上移，顶栏底下露出首页那两行小字 —— 改成 top/bottom 全贴 0，不依赖任何变量；
+  //   ② 面板内容不够高（只命中 4 条）时 overflow 容器滚不动，手势穿透给背后的页面 ——
+  //      靠 .sr-body 的 `min-height: calc(100% + 2rpx)` 保证面板"永远能滚"。
+  assert(/top:\s*0\s*;/.test(srRule) && /bottom:\s*0\s*;/.test(srRule),
+    '.sr-page 四条边全贴 0（不靠 --status-bar-height 定位，物理上盖满整屏）');
+  assert(!/top:\s*calc\(/.test(srRule),
+    '.sr-page 的 top 不再读 CSS 变量（变量没继承到就会露出首页，踩过一次）');
+  assert(/overscroll-behavior:\s*contain/.test(srRule),
+    '.sr-page 切断滚动链（滚到两端也不传给首页）');
+  assert(/:style="appBgStyle"/.test(
+    homeSrc.slice(homeSrc.indexOf('class="sr-page"'), homeSrc.indexOf('class="sr-page"') + 260)),
+    '.sr-page 复用首页那一套背景（:style="appBgStyle"）—— 换背景/深色/自定义图才和首页一致');
+  const srBody = (homeSrc.match(/\.sr-body \{[\s\S]*?\n\}/) || [''])[0];
+  assert(/min-height:\s*calc\(100%\s*\+\s*2rpx\)/.test(srBody),
+    '.sr-body 撑满一屏再多 2rpx → 面板永远是"最内层的可滚容器"，手势不会穿透给首页');
+  assert(/padding:\s*calc\(var\(--status-bar-height[^;]*136rpx\)[^;]*env\(safe-area-inset-bottom\)/.test(srBody),
+    '.sr-body 上下留白顺势让出顶栏与底栏（与 .page-nav / .page-tabbar 同一套数字）');
   // touch 事件要拦住，否则在结果上滑动会带着后面的首页一起滚
   ['touchstart.stop', 'touchmove.stop', 'touchend.stop'].forEach(ev =>
     assert(homeSrc.indexOf('@' + ev) >= 0, '拦住 ' + ev + '（不带着首页一起滚）'));

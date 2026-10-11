@@ -33,11 +33,16 @@
     <view
       v-if="searching && !editing"
       class="sr-page"
+      :class="appTheme"
+      :style="appBgStyle"
       @touchstart.stop
       @touchmove.stop
       @touchend.stop
       @touchcancel.stop
     >
+      <!-- 内容层：撑满一屏 + 上下留白让出顶栏与底栏。
+           这一层是"面板永远能滚"的保证 —— 见 .sr-body 的样式注释。 -->
+      <view class="sr-body">
       <view class="card search-card">
         <view class="sr-head">
           <text class="sr-title">{{ searchTitle }}</text>
@@ -182,6 +187,7 @@
           </view>
         </view>
         </block>
+      </view>
       </view>
     </view>
 
@@ -1925,21 +1931,44 @@ export default {
 
 /* 搜索面板：整屏覆盖的一层（顶栏留在上面继续输入，底栏留给切 tab）。
    它必须有自己的底 —— 透明的话首页模块会从底下透出来，
-   那正是用户说的"滑到底发现还是在首页"。用 --app-bg（和页面同一套背景），
-   看起来就是"进了一个只有搜索的页面"，而不是"首页上贴了张卡"。 */
+   那正是用户说的"滑到底发现还是在首页"。
+   背景走根节点下发的那一份（见模板上的 :style="appBgStyle"），
+   这样换背景 / 开深色 / 自定义背景图时和首页是同一套底，不会露出默认灰绿。 */
 .sr-page {
   position: fixed;
   left: 0;
   right: 0;
-  /* 顶栏占位：状态栏 + 胶囊 88rpx + 留白（与 .page-nav 的 padding-top 同一套） */
-  top: calc(var(--status-bar-height, 0px) + 136rpx);
-  /* 底栏 112rpx + 上下留空，别被悬浮胶囊压住最后一条结果 */
-  bottom: calc(152rpx + constant(safe-area-inset-bottom));
-  bottom: calc(152rpx + env(safe-area-inset-bottom));
-  z-index: 450;   /* 在顶栏(400)之上、底栏(500)之下：盖住内容，但不抢两者 */
-  padding: 0 24rpx;
+  /* 四条边全部贴 0。
+     以前 top 写成 `calc(var(--status-bar-height) + 136rpx)`，一旦这个变量
+     在这一层没继承到（CSS 变量只向下继承，见项目约定 13），面板就整体上移，
+     顶栏底下正好露出首页那两行小字（真机截图反馈："还能看到主页"）。
+     贴 0 之后不依赖任何变量，物理上盖满整屏。 */
+  top: 0;
+  bottom: 0;
+  /* 350：盖住首页内容，但要**低于**顶栏(400)与底栏(500) ——
+     那两个必须继续浮在上面，用户还要在顶栏接着改关键词、点底栏切 tab。 */
+  z-index: 350;
   overflow-y: auto;
+  /* 滚到两端也不再把手势传给背后的页面（滚动链切断） */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* 兜底：CSS 变量万一没继承到，至少不会变成透明 */
   background: var(--app-bg, #e4e9e4);
+}
+
+/* 面板内容层。
+   ① 上下留白 = 顶栏占位（状态栏 + 胶囊 88rpx + 留白）+ 底栏占位，
+      和 .page-nav / .page-tabbar 是同一套数字；
+   ② `min-height: calc(100% + 2rpx)` 是**故意**多出来的 2rpx：
+      只要内容比容器高一点点，这个面板就永远是"最内层的可滚容器"，
+      手势一定先被它吃掉。内容不够高（比如只命中 4 条、还没点"再显示 N 个"）时
+      手指一划就会穿透给背后的页面 —— 用户原话就是
+      "上下滑动不是搜索列表在滑动，而是背后的主页在滑动"。 */
+.sr-body {
+  box-sizing: border-box;
+  min-height: calc(100% + 2rpx);
+  padding: calc(var(--status-bar-height, 0px) + 136rpx) 24rpx calc(152rpx + constant(safe-area-inset-bottom));
+  padding: calc(var(--status-bar-height, 0px) + 136rpx) 24rpx calc(152rpx + env(safe-area-inset-bottom));
 }
 
 /* 面板里的卡片不再需要下边距（它是这层唯一的内容） */
