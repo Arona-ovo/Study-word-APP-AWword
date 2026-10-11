@@ -82,6 +82,38 @@
           <text class="ws-tip">{{ $t('点开词条可加入词书') }}</text>
         </view>
 
+        <!-- ③b AI 补全的多义：词书里一个词只存一条释义，老缓存也只有一条
+             —— 于是"一词多义显示不全"。补回来的义项逐条列出来，
+             expandWord() 已经把它们写进本机缓存 —— 下次再查同一个词，离线也是完整的。 -->
+        <view v-if="polishLoading" class="ws-state">
+          <view class="ws-spinner"></view>
+          <text class="ws-state-text">{{ $t('正在补全这个词的义项…') }}</text>
+        </view>
+        <view v-else-if="polish" class="ws-polish">
+          <view class="ws-line">
+            <text class="ws-word">{{ polish.word }}</text>
+            <text v-if="polish.pos" class="ws-pos">{{ polish.pos }}</text>
+            <text class="tag ws-badge">{{ $t('AI 补全 · {n} 个义项', { n: polish.senses.length }) }}</text>
+          </view>
+          <view v-for="(s, i) in polish.senses" :key="'sp' + i" class="ws-sense">
+            <text class="ws-sense-pos">{{ s.pos }}</text>
+            <text class="ws-sense-m">{{ s.meaning }}</text>
+          </view>
+          <view v-for="(ex, i) in polish.examples" :key="'pe' + i" class="ws-ex">
+            <text class="ws-ex-en">{{ ex.en }}</text>
+            <text class="ws-ex-zh">{{ ex.zh }}</text>
+          </view>
+          <!-- 预判预取：顺手把用户接下来最可能查的几个词一起补了、存进缓存 -->
+          <text v-if="polishPrefetchText" class="ws-tip">
+            {{ $t('顺手备好了：{list}（已存本机缓存）', { list: polishPrefetchText }) }}
+          </text>
+          <text v-else class="ws-tip">{{ $t('已存入本机缓存，下次离线也能看全') }}</text>
+        </view>
+        <!-- 还差一次补全（AI 关着 / 不想等定时器）时给个手动入口，别让人干瞪眼 -->
+        <view v-else-if="polishWanted" class="ws-state">
+          <text class="ws-act" @tap="polishNow">{{ $t('让 AI 补全这个词的全部义项') }}</text>
+        </view>
+
         <!-- ④ 一条精确命中都没有：先把"没有"说清楚，再给两条能走下去的路。
              以前这里什么都没有 —— 没配 AI 的话连转圈都不会出现，
              用户既不知道 "in" 到底有没有，也没有任何办法把它加进来（实测反馈）。 -->
@@ -127,6 +159,7 @@ import { explainWord } from '../../services/ai-content.js'
 import FloatNavbar from '../float-navbar/float-navbar.vue'
 import SearchHistory from '../search-history/search-history.vue'
 import * as searchHistory from '../../utils/search-history.js'
+import wordPolishMixin from '../../utils/word-polish-mixin.js'
 
 // 打字停下来多久去问 AI（与首页同一节奏；本机缓存命中就不会问）
 const AI_DELAY = 700
@@ -152,6 +185,9 @@ const AI_INFLIGHT = new Set()
 export default {
   name: 'WordSearch',
   components: { FloatNavbar, SearchHistory },
+  // 与首页同一份"AI 补全多义 + 预判预取"逻辑：做题中间抬头查词，
+  // 看到的同样只有词书里那一条释义，一样要说全（utils/word-polish-mixin.js）
+  mixins: [wordPolishMixin()],
   props: {
     // 没进搜索态时显示的标题（与页面上原来的顶栏标题一致）
     title: { type: String, default: '' },
@@ -273,6 +309,8 @@ export default {
       const kw = String(v == null ? '' : v).trim()
       this.keyword = kw
       if (this.timer) { clearTimeout(this.timer); this.timer = 0 }
+      // 换了词就得把上一轮的补全收干净（连定时器一起，否则会补到新词上）
+      this.clearPolish()
       this.cached = null
       this.aiResult = null
       this.aiLoading = false
@@ -290,6 +328,8 @@ export default {
       if (!this.exactHits.length && !this.cached && this.aiEnabled) {
         this.timer = setTimeout(() => { this.aiLookup(kw) }, AI_DELAY)
       }
+      // 本地/缓存释义只有一条的话，停手一会儿让 AI 把全部义项补上（并写回缓存）
+      this.schedulePolish(kw)
     },
 
     /**
@@ -323,6 +363,8 @@ export default {
           word: w.word,
           pos: String(w.pos || '').trim().toLowerCase() === 'sentence' ? '' : (w.pos || ''),
           meaning: w.meaning || '',
+          // 补全过的词这里带着完整义项：[{ pos, meaning }, ...]；没补过就是 []
+          senses: aiCache.sensesOf(w.word),
           examples: aiCache.sentencesOf(w.word).slice(0, 3).map(function (s) {
             return { en: s.en, zh: s.zh }
           })
@@ -381,6 +423,7 @@ export default {
       this.aiResult = null
       this.aiLoading = false
       this.nearAll = false
+      this.clearPolish()
     },
 
     /** 页面 onShow 调它：从词条页回来的话，别让搜索面板还挂在那儿 */
@@ -466,6 +509,37 @@ export default {
 }
 
 .ws-item:active { opacity: 0.6; }
+
+/* AI 补全的义项表：与缓存/AI 那两张卡是并列的一块，
+   加一道上边线，别让用户以为这几条义项是上面那条词自带的 */
+.ws-polish {
+  padding: 16rpx 0;
+  border-top: 2rpx solid rgba(23, 32, 26, 0.06);
+  border-top: 2rpx solid var(--hairline, rgba(23, 32, 26, 0.06));
+}
+
+.ws-badge { margin-left: 12rpx; }
+
+.ws-sense {
+  display: flex;
+  align-items: baseline;
+  margin-top: 8rpx;
+}
+
+.ws-sense-pos {
+  flex-shrink: 0;
+  width: 76rpx;
+  font-size: 22rpx;
+  color: #98a19b;
+  color: var(--ink-3, #98a19b);
+}
+
+.ws-sense-m {
+  flex: 1;
+  font-size: 26rpx;
+  color: #5a6560;
+  color: var(--ink-2, #5a6560);
+}
 
 .ws-line {
   display: flex;

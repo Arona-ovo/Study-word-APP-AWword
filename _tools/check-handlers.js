@@ -32,6 +32,27 @@ const files = [];
   });
 })(ROOT);
 
+// mixin 提供的方法也算"已定义"：模板里绑定的 handler 常常来自 mixin
+// （例：word-polish-mixin 的 polishNow 被首页 / 做题页顶栏查词共用），
+// 只看文件自己的 <script> 会把它们全判成未定义 —— 那是假红，不是真漏。
+function mixinSource(script, fp) {
+  const block = /mixins:\s*\[([\s\S]*?)\]/.exec(script);
+  if (!block) return '';
+  const names = block[1].match(/[A-Za-z_$][\w$]*(?=\s*\()/g) || [];
+  if (!names.length) return '';
+  let extra = '';
+  const re = /import\s+([A-Za-z_$][\w$]*)\s+from\s*['"](\.[^'"]+)['"]/g;
+  let m;
+  while ((m = re.exec(script))) {
+    if (names.indexOf(m[1]) < 0) continue;
+    const p = path.resolve(path.dirname(fp), m[2]);
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) extra += '\n' + fs.readFileSync(p, 'utf8');
+    } catch (e) { /* 读不到就按"没定义"处理，让断言照常报警 */ }
+  }
+  return extra;
+}
+
 /* ---------------- 1. 事件方法存在性 ---------------- */
 console.log('== 1. 模板事件方法是否定义（' + files.length + ' 个 .vue）==');
 let checked = 0;
@@ -42,7 +63,7 @@ files.forEach(fp => {
   const tpl = src.slice(0, tEnd > 0 ? tEnd : src.length);
   const sStart = src.indexOf('\n<script');
   if (sStart < 0) return;
-  const script = src.slice(sStart);
+  const script = src.slice(sStart) + mixinSource(src.slice(sStart), fp);
 
   // 修饰符（.stop / .prevent …）可有可无；方法名后必须紧跟 "(" 或收尾引号，
   // 以此跳过 `e => setAI(...)` 这类内联箭头表达式（其中的 e 不是方法）

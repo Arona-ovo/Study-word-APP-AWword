@@ -112,6 +112,41 @@
           <text class="sr-tip">{{ $t('点开词条可加入词书') }}</text>
         </view>
 
+        <!-- AI 补全的多义：词书里一个词只存一条释义，老缓存也只有一条，
+             于是"一词多义显示不全"。补回来的义项逐条列出来，
+             expandWord() 已经把它们写进本机缓存 —— 下次再查这个词，离线也是完整的。 -->
+        <view v-if="polishLoading" class="sr-state">
+          <view class="sr-spinner"></view>
+          <text class="sr-state-text">{{ $t('正在补全这个词的义项…') }}</text>
+        </view>
+        <block v-else-if="polish">
+          <view v-if="cached || aiResult" class="sr-split"></view>
+          <view class="sr-polish">
+            <view class="sr-line">
+              <text class="sr-word">{{ polish.word }}</text>
+              <text v-if="polish.pos" class="sr-pos">{{ polish.pos }}</text>
+              <text class="tag sr-badge">{{ $t('AI 补全 · {n} 个义项', { n: polish.senses.length }) }}</text>
+            </view>
+            <view v-for="(s, i) in polish.senses" :key="'sp' + i" class="sr-sense">
+              <text class="sr-sense-pos">{{ s.pos }}</text>
+              <text class="sr-sense-m">{{ s.meaning }}</text>
+            </view>
+            <view v-for="(ex, i) in polish.examples" :key="'pe' + i" class="sr-ex">
+              <text class="sr-ex-en">{{ ex.en }}</text>
+              <text class="sr-ex-zh">{{ ex.zh }}</text>
+            </view>
+            <!-- 预判预取：顺手把用户接下来最可能查的几个词一起补了、存进缓存 -->
+            <text v-if="polishPrefetchText" class="sr-tip">
+              {{ $t('顺手备好了：{list}（已存本机缓存）', { list: polishPrefetchText }) }}
+            </text>
+            <text v-else class="sr-tip">{{ $t('已存入本机缓存，下次离线也能看全') }}</text>
+          </view>
+        </block>
+        <!-- 还差一次补全（AI 关着 / 不想等定时器）时给个手动入口，别让人干瞪眼 -->
+        <view v-else-if="polishWanted" class="sr-state">
+          <text class="sr-act" @tap="polishNow">{{ $t('让 AI 补全这个词的全部义项') }}</text>
+        </view>
+
         <!-- 相近的词一律排在最后（可能只是"相近的"：搜 run 会出 running / runs）：
              用户先看到"有没有一模一样的"，再从近似里挑 —— 反过来（先铺一堆近似）
              就会出现"弹出来一大堆，但没有我要的"（实测反馈）。 -->
@@ -388,6 +423,7 @@ import { explainWord, looksLikeSentence } from '../../services/ai-content.js'
 import { hideNativeTabBar, syncTabbar } from '../../utils/nav.js'
 import * as aiCache from '../../utils/ai-cache.js'
 import tabSlideMixin from '../../utils/tab-slide-mixin.js'
+import wordPolishMixin from '../../utils/word-polish-mixin.js'
 import FloatTabbar from '../../components/float-tabbar/float-tabbar.vue'
 import FloatNavbar from '../../components/float-navbar/float-navbar.vue'
 import WidgetProgress from '../../components/home-widgets/widget-progress.vue'
@@ -470,7 +506,9 @@ export default {
     AppDialog,
     SearchHistory
   },
-  mixins: [tabSlideMixin('home')],
+  // 搜索结果「AI 补全多义 + 预判预取」（首页与做题页共用同一个 mixin，
+  // 以免两边各写一套、改一处漏一处）
+  mixins: [tabSlideMixin('home'), wordPolishMixin()],
   data() {
     return {
       bookId: '',
@@ -1180,6 +1218,7 @@ export default {
       // 切走的时候把另一侧的状态收干净，避免"搜索结果"和"指令结果"同时占屏
       if (want === 'command') {
         if (this.searchTimer) { clearTimeout(this.searchTimer); this.searchTimer = 0 }
+        this.clearPolish()   // 切走搜索态 → 补义项那块一起收掉
         this.searching = false
         this.results = []
         this.cached = null
@@ -1561,6 +1600,9 @@ export default {
       // 空值只清结果：语音输入时输入法常先发一个空 value 的 input 事件再上屏，
       // 这里若走 clearSearch 会①把键盘收掉②把锁定的指令模式重置成搜索 —— 两头都坑。
       if (!kw) {
+        // 补义项的定时器也要一起清：它是"停手 1200ms 后就补"，
+        // 词都清空了还在倒计时，等下一下补的就是一个空词
+        this.clearPolish()
         if (this.searchTimer) { clearTimeout(this.searchTimer); this.searchTimer = 0 }
         // 面板**不关**：把字全删了是"想换个词再查"，退回首屏会让人以为搜索被取消了。
         // 现在清空之后回到"搜索历史"，再点一下历史或重新打字都顺手 ——
@@ -1587,6 +1629,7 @@ export default {
       // 后面一律以「最终生效的模式」为准：手动锁定后 d.mode 可能和界面上的不一样
       const mode = this.inputMode
       if (mode === 'command') {
+        this.clearPolish()   // 切成指令模式就不是查词了，别再补义项
         this.searching = false
         this.results = []
         this.cached = null
@@ -1618,6 +1661,9 @@ export default {
         const delay = near ? AI_NEAR_DELAY : AI_DELAY
         this.searchTimer = setTimeout(() => { this.aiLookup(kw) }, delay)
       }
+      // 本地/缓存已经查到这个词、但义项只有一条（"一词多义显示不全"）→ 停手后让 AI 补全。
+      // 补完会写进本机缓存，所以同一个词不会被补第二次。
+      this.schedulePolish(kw)
     },
     /**
      * 本地结果里有没有和查询词**一模一样**的那条（大小写不敏感）。
@@ -1640,6 +1686,7 @@ export default {
       // 收起结果时让输入框失焦 → 顶栏胶囊动画还原成铺满态
       const nb = this.$refs && this.$refs.navbar
       if (nb && nb.blurInput) nb.blurInput()
+      this.clearPolish()   // 整个搜索收起 → 补义项的定时器与结果一起清
       this.keyword = ''
       this.lastQuery = ''
       this.searching = false
@@ -1665,6 +1712,8 @@ export default {
           // pos 标成 sentence = 这条缓存存的是整句译文（见 ai-content.explainWord）
           kind: String(w.pos || '').trim().toLowerCase() === 'sentence' ? 'sentence' : 'word',
           meaning: w.meaning || '',
+          // 补齐过的多义条目会把义项表一起存下来（老缓存没有 → []）
+          senses: aiCache.sensesOf(w.word),
           examples: ex.slice(0, 4).map(s => ({ en: s.en, zh: s.zh })),
           cached: true
         }
@@ -2002,6 +2051,40 @@ export default {
   border: 2rpx solid rgba(var(--brand-rgb, 46, 107, 255), 0.34);
   border-radius: 999rpx;
   padding: 8rpx 32rpx;
+}
+
+/* ===== AI 补全的多义（词书/老缓存只有一条释义时补出来的那块） ===== */
+.sr-polish {
+  margin-top: 6rpx;
+  padding: 18rpx 20rpx;
+  border-radius: 18rpx;
+  background: rgba(46, 107, 255, 0.06);
+  background: rgba(var(--brand-rgb, 46, 107, 255), 0.06);
+  border: 2rpx solid rgba(46, 107, 255, 0.18);
+  border: 2rpx solid rgba(var(--brand-rgb, 46, 107, 255), 0.18);
+}
+
+/* 义项逐条列：一行一个意思，比挤在一句里"提高；改善；提升"好读 */
+.sr-sense {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 10rpx;
+}
+
+.sr-sense-pos {
+  flex-shrink: 0;
+  min-width: 62rpx;
+  font-size: 22rpx;
+  color: #1d4fd8;
+  color: var(--brand-strong, #1d4fd8);
+}
+
+.sr-sense-m {
+  flex: 1;
+  font-size: 26rpx;
+  line-height: 1.55;
+  color: #17201a;
+  color: var(--ink-1, #17201a);
 }
 
 /* 没结果时的两个兜底动作：再试一次 AI 补充 / 当成指令重跑 */

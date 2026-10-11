@@ -301,6 +301,13 @@ export default {
   '当前词书里相近的词': 'Close matches in the current wordbook',
   '再显示 {n} 个': 'Show {n} more',
   'AI 查一下': 'Ask AI',
+  // AI 补全多义（word-polish-mixin：义项补全 + 预判预取，补完写回本机缓存）
+  '正在补全这个词的义项…': 'Filling in every sense of this word…',
+  'AI 补全 · {n} 个义项': 'AI · {n} senses',
+  '顺手备好了：{list}（已存本机缓存）': 'Also ready: {list} (saved to local cache)',
+  '已存入本机缓存，下次离线也能看全': 'Saved to local cache — full list offline next time',
+  '让 AI 补全这个词的全部义项': 'Ask AI for every sense of this word',
+  '接入 AI 后才能补全义项': 'Connect AI to fill in word senses',
   '手动添加「{q}」': 'Add "{q}" manually',
   '未接入 AI，可在词条页自己填释义': 'AI is off — fill in the definition on the word page',
   '发音': 'Pronounce',

@@ -16,6 +16,9 @@ const TTL = 7 * 24 * 3600 * 1000;   // 7 天：过期的内容自动淘汰
 const MAX_WORDS = 2000;
 const MAX_SENTENCES = 1000;
 const MAX_SIG = 500;
+// 一个词最多记多少个义项：这是"补全多义"用的，真正常用的义项一般也就三五个，
+// 再多就是模型在凑数了，记下来反而把那一条撑得没法看
+const MAX_SENSES = 8;
 
 let cache = null;
 
@@ -110,10 +113,13 @@ export function stats() {
 }
 
 // ---------- 缓存单词 ----------
-// entry: { word, pos, meaning, phonetic, src }
+// entry: { word, pos, meaning, senses, phonetic, src }
+// senses 是补齐的义项表 [{pos, meaning}] —— 老缓存（AI 只回一条释义）没有这个字段，
+// 取的时候一律按"可能没有"处理，别直接 .length。
 export function findWord(q) {
   const k = key(q);
   if (!k) return null;
+
   const c = cur();
   for (let i = 0; i < c.words.length; i++) {
     const w = c.words[i];
@@ -124,14 +130,38 @@ export function findWord(q) {
   return null;
 }
 
+/**
+ * 缓存里这个词的义项表（补齐过才是多条，老条目是 []）。
+ * 判断"这个词显示全不全"一律用这里：**缓存有 ≥2 个义项就别再花一次 AI**。
+ */
+export function sensesOf(q) {
+  const w = findWord(q);
+  return (w && Array.isArray(w.senses)) ? w.senses : [];
+}
+
+/** 这个词的缓存已经补齐过义项了吗 */
+export function hasFullSenses(q) {
+  return sensesOf(q).length >= 2;
+}
+
 export function rememberWord(entry) {
   const c = cur();
   const word = key(entry && entry.word);
   if (!word) return null;
+  const senses = Array.isArray(entry && entry.senses)
+    ? entry.senses
+      .map(s => ({
+        pos: String((s && s.pos) || ''),
+        meaning: String((s && s.meaning) || '')
+      }))
+      .filter(s => s.meaning)
+      .slice(0, MAX_SENSES)
+    : [];
   const rec = {
     word,
     pos: String((entry && entry.pos) || ''),
     meaning: String((entry && entry.meaning) || ''),
+    senses,
     phonetic: String((entry && entry.phonetic) || ''),
     src: String((entry && entry.src) || 'ai'),
     q: String((entry && entry.q) || ''),

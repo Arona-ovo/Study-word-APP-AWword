@@ -12,11 +12,14 @@
 //   9) AI 回来时输入已经换词 → 结果不贴到界面上（防串词）
 //  10) 点结果 → 进单词详情页（w + book）
 //  11) close 收干净：清 AI 定时器、清关键词、让顶栏失焦
-// B. 两个练习页的接入契约
+//  12) 顶栏契约（组件挂在 float-navbar 上）
+//  13) 最近查过（搜索历史）
+//  14) 义项补全（与首页共用 word-polish-mixin：显示不全才补、补完落缓存、顺手预判几个）
+//  15) 两个练习页的接入契约 = 分组标题的「== 15 ==」
 //   - 主分支顶栏换成 <word-search>，锁定态由 canSearch 给
 //   - canSearch 口径：practice 还要排除"目标词确认关进行中"（那一关考的就是词义）
 //   - onShow 收面板（从词条页返回）、onUnload 关搜索（别让 AI 定时器跑到页面外面）
-const { loadCode } = require('./lib/load');
+const { load, loadCode } = require('./lib/load');
 const fs = require('fs');
 const path = require('path');
 
@@ -54,6 +57,30 @@ const stubs = {
   aiOn: true
 };
 
+// 缓存里"已补全的词"：小写词 → 义项表。模拟 utils/ai-cache 里那份多义存储
+const senseMap = {};
+// 组件与 mixin 各有一份 aiCache 依赖袋（mixin 是独立模块，闭包里用的是自己的那份），
+// 两边必须指向同一套数据，否则"缓存已有完整义项 → 不再补"这条断言永远测不到
+const cacheApi = {
+  findWord: (w) => stubs.cache(w),
+  sentencesOf: () => [],
+  sensesOf: (w) => senseMap[String(w || '').trim().toLowerCase()] || [],
+  hasFullSenses: (w) => cacheApi.sensesOf(w).length >= 2
+};
+// 补全请求记一笔：只看"有没有发、带没带预判候选"，不去真跑模型
+const polishLog = [];
+let polishReply = { senses: [], examples: [], others: [] };
+const expandStub = async (w, opts) => {
+  polishLog.push({ w: String(w || ''), also: ((opts && opts.also) || []).slice() });
+  return Object.assign({ word: w, pos: '' }, polishReply);
+};
+// 真 mixin（不是空壳桩）：只把它的三个外部依赖换成上面的可控实现
+const wordPolishMixin = load('utils/word-polish-mixin.js', {
+  t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
+  aiCache: cacheApi,
+  expandWord: expandStub
+}).default;
+
 // 最近搜过：做题页查词也复用同一份历史（不是另存一份）
 const histLog = [];
 const histStub = {
@@ -71,24 +98,37 @@ const histStub = {
 const COMP = loadCode(script, {
   t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
   search: { localSearch: (bid, kw, limit) => stubs.local(bid, kw, limit) },
-  aiCache: { findWord: (w) => stubs.cache(w), sentencesOf: () => [] },
+  aiCache: cacheApi,
   aiGateReason: () => (stubs.aiOn ? '' : '未配置 AI'),
   explainWord: (q) => stubs.explain(q),
   // 组件注册了这个娃就要给桩，否则脚本加载即崩（不是假绿，是压根跑不起来）
   FloatNavbar: {},
   SearchHistory: {},
-  searchHistory: histStub
+  searchHistory: histStub,
+  // 真 mixin：组件声明了 mixins: [wordPolishMixin()]，这里给的是同一个实现
+  wordPolishMixin
 }, 'word-search.vue').default;
 
 assert(!!COMP && typeof COMP.data === 'function', '组件脚本可加载（导出 default）');
 
 function mount(props) {
-  const ctx = Object.assign({}, COMP.data(), COMP.methods, props || {});
+  // Vue 的 mixin 合并：组件自己的 data / methods 覆盖 mixin 的同名字段
+  const mix = (COMP.mixins || []).reduce(function (acc, m) {
+    return {
+      data: Object.assign({}, acc.data, typeof m.data === 'function' ? m.data() : {}),
+      methods: Object.assign({}, acc.methods, m.methods || {}),
+      computed: Object.assign({}, acc.computed, m.computed || {})
+    };
+  }, { data: {}, methods: {}, computed: {} });
+  const ctx = Object.assign(
+    {}, mix.data, COMP.data(), mix.methods, COMP.methods, props || {}
+  );
   ctx.$nextTick = (fn) => fn();          // 同步执行：断言里不用等
   ctx.__blurred = false;
   ctx.$refs = { navbar: { blurInput: () => { ctx.__blurred = true; } } };
-  Object.keys(COMP.computed || {}).forEach((k) => {
-    Object.defineProperty(ctx, k, { get: () => COMP.computed[k].call(ctx), configurable: true });
+  Object.keys(Object.assign({}, mix.computed, COMP.computed || {})).forEach((k) => {
+    const fn = (mix.computed[k]) || (COMP.computed || {})[k];
+    Object.defineProperty(ctx, k, { get: () => fn.call(ctx), configurable: true });
   });
   ctx.refreshAi();                       // 组件是 created 里做的，这里补上（否则 AI 那条路永远走不到）
   return ctx;
@@ -340,7 +380,65 @@ function mount(props) {
   hp.rememberSearch('   ');
   eq(histLog.length, 0, '空白不记（enter n 的什么都不该进历史）');
 
-  console.log('\n== 14. 两个练习页的接入契约 ==');
+  console.log('\n== 14. 义项补全（做题页抬头查词同样要说全一个词的意思） ==');
+  // 用户原话：「搜索出来的本地已缓存单词，有时候其他意思显示不全，有些一词多义显示不全，
+  // 这个时候需要 AI 来补充」—— 首页有还不够，做题中途抬头查的往往就是刚才没记住的词。
+  senseMap.bear = [];
+  stubs.local = () => [{ w: 'bear', pos: 'n.', m: '熊', fromText: '当前词书' }];
+  const po = mount({ locked: false, bookId: 'B' });
+  po.onInput('bear');
+  eq(po.polishWanted, true, '词书里只有"熊"一条 → 判定为显示不全，该补');
+  assert(po.polishTimer !== 0, '停手后排了一次补全（不是边打字边发请求）');
+  po.close();
+  assert(po.polishTimer === 0, '收起搜索 → 补全定时器一起清掉（页面走了不该还发请求）');
+
+  // 缓存里已经有完整义项 → 不补（补过一次就够，不反复烧 token）
+  senseMap.bear = [{ pos: 'n.', meaning: '熊' }, { pos: 'v.', meaning: '忍受' }];
+  const done = mount({ locked: false, bookId: 'B' });
+  done.onInput('bear');
+  eq(done.polishWanted, false, '★ 缓存里已有完整义项 → 不再补');
+  assert(done.polishTimer === 0, '也不排补全请求（一个 token 都不花）');
+  done.close();
+  senseMap.bear = [];
+
+  // 落地：补全回来 → 义项一列贴出来 + 预判词有可见反馈
+  const POLISH_WORD = 'zilch';            // 独一无二的词：POLISH_DONE 一场会话只补一次
+  stubs.local = () => [{ w: POLISH_WORD, pos: 'n.', m: '零', fromText: '当前词书' }];
+  polishLog.length = 0;
+  polishReply = {
+    senses: [{ pos: 'n.', meaning: '零' }, { pos: 'n.', meaning: '无价值的东西' }],
+    examples: [{ en: 'e', zh: 'z' }],
+    others: [{ word: 'nil', pos: 'n.', meaning: '零' }]
+  };
+  const land = mount({ locked: false, bookId: 'B' });
+  land.onInput(POLISH_WORD);
+  if (land.polishTimer) { clearTimeout(land.polishTimer); land.polishTimer = 0 }
+  const pf = land.aiPolish(POLISH_WORD);
+  eq(land.polishLoading, true, '补全中 → 转圈亮起来');
+  await pf;
+  eq(land.polishLoading, false, '回来后转圈收掉');
+  eq(land.polish && land.polish.senses.length, 2, '★ 两个义项都列出来（不再只有一个意思）');
+  eq(land.polishPrefetchText, 'nil', '顺手备好的预判词有可见反馈');
+  eq(polishLog.length, 1, '只发一次补全请求');
+  // 换词后旧的补全不许贴上来
+  land.onInput('other');
+  if (land.polishTimer) { clearTimeout(land.polishTimer); land.polishTimer = 0 }
+  eq(land.polish, null, '换词 → 上一轮的补全清掉（不张冠李戴）');
+  land.close();
+  polishReply = { senses: [], examples: [], others: [] };
+
+  // 模板契约：补全那块是独立分支，排在 AI 结果之后、"相近的词"之前
+  const iPolish = tpl.indexOf('v-else-if="polish"');
+  const iAiResult = tpl.indexOf('v-if="aiResult"');
+  assert(iPolish > 0 && iPolish > iAiResult, '补全块排在 AI 结果之后');
+  assert(iPolish < iNear, '补全块排在「相近的词」之前（先给能用的，再给近似的）');
+  assert(/v-if="polishLoading"/.test(tpl), '补全中给一句"正在补全这个词的义项…"');
+  assert(/v-else-if="polishWanted"[\s\S]{0,200}?@tap="polishNow"/.test(tpl),
+    '还差一次补全时给手动入口（AI 关着 / 不想等定时器时点一下）');
+  // 缓存那条要带上义项表：mixin 靠它判断"界面上现在摆着几条义项"
+  assert(/senses:\s*aiCache\.sensesOf\(/.test(script), 'cacheHitFor 返回的条目带上义项表');
+
+  console.log('\n== 15. 两个练习页的接入契约 ==');
   [['practice', 'pkgStudy/pages/practice/practice.vue'],
     ['word-drill', 'pkgStudy/pages/word-drill/word-drill.vue']].forEach(function (pair) {
     const name = pair[0];

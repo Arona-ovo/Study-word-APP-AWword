@@ -54,6 +54,8 @@ export async function explainWord(word) {
       word: hit.word,
       pos: hit.pos || '',
       meaningZh: hit.meaning || '',
+      // 补齐过的多义条目会把义项表一起存下来（老缓存没有 → []）
+      senses: aiCache.sensesOf(hit.word),
       kind: isSentencePos(hit.pos) ? 'sentence' : 'word',
       // 例句单独存在 sentences 桶里，这里按词捞回来即可
       examples: aiCache.sentencesOf(hit.word).map(s => ({ en: s.en, zh: s.zh })),
@@ -89,10 +91,13 @@ export async function explainWord(word) {
     pos: kind === 'sentence' ? (obj.pos || 'sentence') : (obj.pos || ''),
     meaningZh: obj.meaningZh,
     kind: kind,
+    senses: Array.isArray(obj.senses) ? obj.senses.slice(0, 8) : [],
     examples: Array.isArray(obj.examples) ? obj.examples.slice(0, 4) : []
   }
   // 落底层：单词一条 + 每个例句一条（以后搜索/查看同一个词能直接命中）
-  aiCache.rememberWord({ word: out.word, pos: out.pos, meaning: out.meaningZh, src: 'ai', q: w });
+  aiCache.rememberWord({
+    word: out.word, pos: out.pos, meaning: out.meaningZh, senses: out.senses, src: 'ai', q: w
+  });
   out.examples.forEach(ex => {
     aiCache.rememberSentence({ en: ex.en, zh: ex.zh, word: out.word, source: 'ai' });
   });
@@ -102,6 +107,132 @@ export async function explainWord(word) {
 /** pos 标成 sentence = 这条缓存存的是整句译文，不是单词释义 */
 function isSentencePos(pos) {
   return String(pos || '').trim().toLowerCase() === 'sentence'
+}
+
+// 预判预取的数量上限：多了就是浪费 token，也容易把缓存塞满一堆用户根本不查的词
+const MAX_ALSO = 3       // 调用方本地点名的候选（本次搜索结果里排在前面的那几条）
+const MAX_RELATED = 3    // 模型自己预判的同根 / 搭配词
+const MAX_OTHERS = 5     // 一次调用总共最多补几个附带词
+
+/**
+ * 「补全多义 + 顺手多备几个词」—— 一次调用拿回三样东西：
+ *
+ *   1. 目标词的**常用义项表**（`senses`）。词书里一个词只存一条释义，
+ *      老缓存也只有一条 —— 用户看到的就是"一词多义显示不全"。
+ *   2. 例句（走 sentences 桶，和 explainWord 同一套）
+ *   3. `others`：预判用户**接下来最可能查**的几个词，顺手一起补了。
+ *      来源两路：调用方本地传进来的候选（`also`，通常是本次搜索结果里排在前面、
+ *      用户八成要点开的那几条）+ 模型给的同根词 / 搭配 / 高频邻词（`related`）。
+ *
+ * **全部写进 aiCache**（用户原话："AI 补充完，记得载入缓存"）：
+ *   · 主词记成完整义项条目 → 下次再查，离线也能看到全部义项，不用再花一次 token
+ *   · others 一并落成缓存条目（src='ai-prefetch'）→ "本地多缓存一些"就是这么来的：
+ *     用户还没查，那几个词已经在本机备好了，查到时直接命中、不再等 AI
+ *
+ * 代价控制：一次调用覆盖 1 个主词 + 最多 5 个附带词，比"每个词各问一次"省得多；
+ * 是否调用由页面决定（缓存里已有 ≥2 个义项就别再补）。
+ *
+ * @param word 要补全的词
+ * @param opts { also: string[] } 本地预判的候选词（≤3）
+ * @returns { word, pos, senses:[{pos,meaning}], examples:[{en,zh}], others:[{word,pos,meaning}] }
+ */
+export async function expandWord(word, opts) {
+  const w = String(word || '').trim()
+  if (!w) throw new ServiceError('单词为空', { degradable: true })
+
+  // 已经补齐过就直接从缓存返回 —— 不花 token（守卫只挡花钱的那一步，缓存读取不挡）
+  if (aiCache.hasFullSenses(w)) {
+    const hit = aiCache.findWord(w)
+    return {
+      word: hit.word,
+      pos: hit.pos || '',
+      senses: aiCache.sensesOf(w),
+      examples: aiCache.sentencesOf(hit.word).map(s => ({ en: s.en, zh: s.zh })).slice(0, 2),
+      others: [],
+      fromCache: true
+    }
+  }
+
+  aiFeature('lookup')
+  ensureEnabled()
+
+  const also = ((opts && opts.also) || [])
+    .map(x => String(x || '').trim())
+    .filter(Boolean)
+    .slice(0, MAX_ALSO)
+
+  const sys = [
+    'You are an English-Chinese dictionary for Chinese students.',
+    'Return ONLY strict JSON: ',
+    '{"word":"...","pos":"...","senses":[{"pos":"n.","meaning":"中文释义"}],',
+    '"examples":[{"en":"...","zh":"..."}],"others":[{"word":"...","pos":"...","meaning":"中文释义"}]}.',
+    'senses: list EVERY commonly used sense of the word, most frequent first.',
+    'Give 1 sense only if the word truly has just one; do NOT invent rare or obsolete senses.',
+    'examples: exactly 1 short CEFR A2-B1 sentence with Chinese translation.',
+    'others: first give an entry for EACH word listed in ALSO below (if any), then add up to '
+      + MAX_RELATED + ' words the student is most likely to look up next '
+      + '(same root, common collocations, or closely related high-frequency words).',
+    'Never include the main word itself in others. At most ' + MAX_OTHERS + ' entries in others.',
+    'All Chinese definitions must be concise. No markdown, no code fences, no extra text.'
+  ].join(' ')
+  const user = 'Word: ' + w + '\nALSO: ' + (also.length ? also.join(', ') : '(none)')
+
+  const r = await chatCompletion([
+    { role: 'system', content: sys },
+    { role: 'user', content: user }
+  ], { temperature: 0.3, timeout: 20000 })
+
+  const obj = extractJSON(r.content)
+  if (!obj) throw new ServiceError('模型返回异常', { degradable: true })
+
+  const senses = (Array.isArray(obj.senses) ? obj.senses : [])
+    .map(s => ({
+      pos: String((s && s.pos) || ''),
+      meaning: String((s && s.meaning) || '')
+    }))
+    .filter(s => s.meaning)
+    .slice(0, 8)
+  const meaningZh = senses.length
+    ? senses.map(s => s.meaning).join('；')
+    : String(obj.meaningZh || '')
+  if (!senses.length && !meaningZh) throw new ServiceError('模型返回异常', { degradable: true })
+
+  const examples = (Array.isArray(obj.examples) ? obj.examples : [])
+    .map(e => ({ en: String((e && e.en) || ''), zh: String((e && e.zh) || '') }))
+    .filter(e => e.en)
+    .slice(0, 2)
+
+  const main = String(obj.word || w).trim().toLowerCase()
+  const others = (Array.isArray(obj.others) ? obj.others : [])
+    .map(o => ({
+      word: String((o && o.word) || '').trim(),
+      pos: String((o && o.pos) || ''),
+      meaning: String((o && o.meaning) || '')
+    }))
+    .filter(o => o.word && o.meaning && o.word.toLowerCase() !== main)
+    .slice(0, MAX_OTHERS)
+
+  const out = {
+    word: String(obj.word || w).trim(),
+    pos: String(obj.pos || ''),
+    senses,
+    meaningZh,
+    examples,
+    others,
+    fromCache: false
+  }
+
+  // 落底层：主词（带完整义项）+ 例句 + 预判的那几个词
+  aiCache.rememberWord({ word: out.word, pos: out.pos, meaning: meaningZh, senses, src: 'ai', q: w })
+  examples.forEach(ex => {
+    aiCache.rememberSentence({ en: ex.en, zh: ex.zh, word: out.word, source: 'ai' })
+  })
+  others.forEach(o => {
+    // 已经有一条完整释义的不再覆盖（那可能是用户自己加过的）
+    if (aiCache.findWord(o.word)) return
+    aiCache.rememberWord({ word: o.word, pos: o.pos, meaning: o.meaning, src: 'ai-prefetch', q: '' })
+  })
+  return out
 }
 
 /**

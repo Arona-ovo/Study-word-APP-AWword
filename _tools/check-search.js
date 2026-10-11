@@ -291,8 +291,15 @@ assert(!/v-else-if="(cached|aiLoading|aiResult)"/.test(homeSrc2), '三块结果�
     aiGateReason: () => '',          // 空 = 已接入 AI
     speakWord: () => {}, speak: () => {},
     hideNativeTabBar: () => {}, syncTabbar: () => {},
-    // 必须是可调用的：home.vue 里是 mixins: [tabSlideMixin('home')]
+    // 必须是可调用的：home.vue 里是 mixins: [tabSlideMixin('home'), wordPolishMixin()]
     tabSlideMixin: () => ({}),
+    // 义项补全：首页引了这个 mixin，缺桩脚本加载即崩（不是假绿，是压根跑不起来）。
+    // 用真 mixin：onSearchInput 里会调 clearPolish() / schedulePolish()，空壳桩会 TypeError
+    wordPolishMixin: load('utils/word-polish-mixin.js', {
+      t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
+      aiCache,
+      expandWord: async () => ({ senses: [], examples: [], others: [] })
+    }).default,
     // onShow 里会走一遍完整流程（词书概览 / 布局刷新 / 新手引导），
     // 这几个模块要给到能被调用到的形状，否则 onShow 半路抛错，
     // 下面几条断言会"莫名其妙"地红 —— 那是桩不全，不是产品逻辑错。
@@ -306,12 +313,24 @@ assert(!/v-else-if="(cached|aiLoading|aiResult)"/.test(homeSrc2), '三块结果�
     SearchHistory: {}, searchHistory: { list: () => [], add: () => true, remove: () => true, clear: () => true }
   }, 'home.vue').default;
   assert(!!homePage && typeof homePage.data === 'function', '首页脚本可加载（导出 default）');
-  const vm = Object.assign({}, homePage.data(), homePage.methods);
+  // mixin 也要合进来：clearPolish / schedulePolish 都来自 word-polish-mixin，
+  // 不合的话 onSearchInput 一进来就 TypeError（那不是产品逻辑错，是桩没搭全）
+  const vmMix = (homePage.mixins || []).reduce(function (acc, m) {
+    return {
+      data: Object.assign({}, acc.data, typeof m.data === 'function' ? m.data() : {}),
+      methods: Object.assign({}, acc.methods, m.methods || {}),
+      computed: Object.assign({}, acc.computed, m.computed || {})
+    };
+  }, { data: {}, methods: {}, computed: {} });
+  const vm = Object.assign(
+    {}, vmMix.data, homePage.data(), vmMix.methods, homePage.methods
+  );
   vm.aiEnabled = true;   // 由 aiGateReason() 在 onLoad 里写入，这里直接给
   // computed 也挂上：searchTitle / exactHits / nearHits 都是 computed，
   // 只给 data + methods 的话 this.exactHits 是 undefined，一读就 TypeError
-  Object.keys(homePage.computed || {}).forEach((k) => {
-    Object.defineProperty(vm, k, { get: () => homePage.computed[k].call(vm), configurable: true });
+  const vmComputed = Object.assign({}, vmMix.computed, homePage.computed || {});
+  Object.keys(vmComputed).forEach((k) => {
+    Object.defineProperty(vm, k, { get: () => vmComputed[k].call(vm), configurable: true });
   });
   const titleOf = () => vm.searchTitle;
   const wait = (ms) => new Promise(r => setTimeout(r, ms));
