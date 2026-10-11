@@ -321,6 +321,20 @@ assert(!/v-else-if="(cached|aiLoading|aiResult)"/.test(homeSrc2), '三块结果�
 
   // 换到一本几乎空的词书，内置词照样能搜到 —— 以前这里是一条都不会有的
   const emptyBook = wordbook.createUserBook('18 组·空书', '单测');
+
+  // 日常短词 / 口语 / 缩略语：这批词被 _vocab/build.js 的 STOP 表挡在**词书**之外是对的
+  // （没人需要把 "hi" 做成单词卡片），可它们在本地词典里曾经压根不存在 ——
+  // 用户随手敲一个短词就什么都查不到（真机反馈搜 "en"） 。现在 must 能精确查到。
+  const EVERYDAY = ['hi', 'hey', 'oh', 'ah', 'um', 'yeah', 'bye', 'wow',
+    'vs', 'etc', 'per', 'via', 'nor', 'ms', 'dr', 'pm', 'id', 'ad', 'tv', 'pc',
+    'net', 'fax', 'ex', 'pi', 'fig', 'men', 'women', 'won'];
+  const missingEveryday = EVERYDAY.filter(function (w) {
+    const r = search.localSearch(emptyBook, w, 5);
+    return !(r.length > 0 && String(r[0].w).toLowerCase() === w);
+  });
+  assert(missingEveryday.length === 0,
+    '★ 日常短词在本地词典里查得到（' + EVERYDAY.length + ' 个抽样）' +
+    (missingEveryday.length ? '（查不到的：' + missingEveryday.join(', ') + '）' : ''));
   const cs = search.localSearch(emptyBook, 'computer', 5);
   assert(cs.length > 0 && cs[0].w.toLowerCase() === 'computer',
     '空词书里也能搜到内置词 computer（实际 ' + cs.map(r => r.w).join('/') + '）');
@@ -585,6 +599,57 @@ console.log('== 17. 没有完全匹配 → 也要问 AI ==');
   assert(/<view v-if="aiError"[\s\S]{0,300}?@tap="aiLookup\(lastQuery\)"/.test(homeSrc3), '首页失败态给「重试」入口');
   assert(/showNotFound\(\)[\s\S]{0,240}?!this\.aiError/.test(homeScript),
     'showNotFound 把 aiError 排除在外（"没查成"和"没查到"分开说）');
+
+  console.log('\n== 21. 不许替 AI 撒谎 + 回车必须有明确动作 ==');
+  /* --- 1) 短词两难：不许替 AI 撒谎 + 回车必须有明确动作 --- */
+  // 用户实测反馈（2026-10-11 真机截图）：搜 "en"，屏幕上写着
+  // 「本地词库没有「en」」+「AI 也未能补充这个词」，而 AI 结果、本机缓存都是空的，
+  // 回车也没有任何反应 —— 用户彻底没有下一步可走。
+  // 两个真因：
+  //   ① 界面替 AI 撒谎：'en' 只有 2 个字母，达不到 AI_NEAR_MIN_LEN，
+  //      自动路径**压根没去问 AI**，界面却一律写"AI 也未能补充"；
+  //   ② 回车退化成 runSearch(text)：把同样的检索再跑一遍，界面纹丝不动。
+  const SHORT = 'en';   // 本地有 12 条相近词、但**没有**一模一样的那条（probe 过）
+  aiMode = 'empty';
+  vm.onSearchInput(SHORT);
+  assert(vm.results.length > 0, '搜短词「' + SHORT + '」本地仍有相近结果（' + vm.results.length + ' 条）');
+  eq(vm.searchTimer, 0, '★ 短词不自动问 AI（防抖 + 长度门槛，避免边打字烧 token）');
+  eq(vm.aiTried, false, '★ 没问过 AI 就不许声称问过了（这是这条反馈的根）');
+  assert(!/AI 也/.test(vm.aiHint), '★ 没问过 AI 时第二行不许出现"AI 也…"：' + vm.aiHint);
+  assert(/相近/.test(vm.aiHint) && vm.aiHint.indexOf(SHORT) >= 0,
+    '★ 这时要说清"上面那几条只是相近的"并点出查的词：' + vm.aiHint);
+  eq(vm.aiActionText, '让 AI 查一下', '★ 没问过 → 按钮是"让 AI 查一下"（入口得摆在手上）');
+
+  // 回车 = 用户明确的动作 → 立刻问 AI，不受上面那条长度门槛限制
+  aiAsked.length = 0;
+  vm.onSubmit(SHORT);
+  assert(aiAsked.length === 1 && aiAsked[0] === SHORT,
+    '★ 回车后立刻真的去问了 AI（不再退化成"再跑一遍同样的检索"）：' + aiAsked.join(','));
+  eq(vm.aiTried, true, '★ 真问过之后，这一轮的"问过 AI"标记亮起来');
+  await wait(50);   // aiLookup 是 async，等它落地
+  assert(/AI 也没查到这个词/.test(vm.aiHint), '★ AI 回来是空的 → 这时才可以说"AI 也没查到"：' + vm.aiHint);
+  eq(vm.aiActionText, '再问一次', '★ 问过了 → 按钮改成"再问一次"（不会鬼打墙地重复"可以去问"）');
+
+  // 换个词 = 新一轮，标记必须跟着归零，否则会拿上一轮的结论说给新词听
+  vm.onSearchInput(String(core0).slice(0, 2));
+  eq(vm.aiTried, false, '★ 换了词就把"问过 AI"重置（否则新词沿用上一轮的说法）');
+  if (vm.searchTimer) { clearTimeout(vm.searchTimer); vm.searchTimer = 0 }
+  await wait(50);
+  aiMode = 'ok';
+
+  // 模板契约：第二行改由 aiHint 统一出口，不再写死 aiEnabled 三元的那一句
+  assert(/\{\{ aiHint \}\}/.test(homeSrc3), '首页「没找到」块的第二行交给 aiHint');
+  assert(!/aiEnabled \? \$t\('AI 也未能补充这个词/.test(homeSrc3),
+    '首页不再写死"AI 也未能补充这个词"（那是替 AI 撒谎的那一行）');
+  assert(/@tap="askAi"/.test(homeSrc3) && /\{\{ aiActionText \}\}/.test(homeSrc3),
+    '首页给了「让 AI 查一下 / 再问一次」按钮（文案随 aiTried 变化）');
+  assert(/@tap="openQuery"/.test(homeSrc3), '首页给了「手动添加」这条出口（AI 关着也能走下去）');
+  assert(/askAi\(\)[\s\S]{0,160}?this\.aiLookup\(this\.lastQuery\)/.test(homeScript), 'askAi 真的把当前词交给 AI');
+  // 做题页顶栏查词是同一套链路，同样的话术要同步过去
+  const wsSrc = fs.readFileSync(path.join(ROOT, 'components', 'word-search', 'word-search.vue'), 'utf8');
+  assert(/\{\{ aiHint \}\}/.test(wsSrc), '查词组件同样用 aiHint（两边口径不能走偏）');
+  assert(!/aiEnabled \? \$t\('AI 也未能补充这个词/.test(wsSrc), '查词组件不再写死"AI 也未能补充这个词"');
+  assert(/aiTried/.test(wsSrc) && /aiActionText/.test(wsSrc), '查词组件同步了 aiTried / aiActionText');
 
   console.log('');
   console.log(fail === 0 ? '首页搜索逻辑全部通过' : '失败 ' + fail + ' 项');

@@ -4,7 +4,7 @@
 // 存在理由（用户实测反馈「本地查词完全搜不到」）：
 //   _vocab/src 的 5 张考试词表合计 7022 个候选词，但每本词书都有 size 上限、
 //   还剔了初中词，真正被某本词书引用的只有 3893 个（= lexicon-data.js 的行）。
-//   剩下这 2756 个同样是带中文释义的正经考试词，却因为"没被任何书挑中"而查不到。
+//   剩下这 2794 个同样是带中文释义的正经考试词，却因为"没被任何书挑中"而查不到。
 //
 // 为什么不直接塞进 lexicon-data.js：
 //   共享表的**行号就是用户的学习进度索引**（id = 行号 + LEX_START，掌握度按 id 存在本机）。
@@ -15,31 +15,49 @@
 //
 // 行格式：word|pos|释义（与共享表一致）
 // 词条来源与许可见 _vocab/README.md。
-export const EXTRA_COUNT = 2756
+export const EXTRA_COUNT = 2794
 
 export const EXTRA_RAW = `
 used|adj.|用过的；习惯的
+women|n.|女人们
+men|n.|男人们
+tv|n.|电视
 war|n.|战争；军事，战术；冲突，对抗，竞争
 research|n.|研究；调查
 star|n.|星形
+oh|int.|哦哟；表示惊讶
 training|n.|培训；训练；培养；瞄准；整枝
 thought|n.|念头；思想；思考；想法；关心
 london|n.|伦敦
+per|prep.|按照
 lost|adj.|错过的；迷惑的；失去的；丧失的；失败
 third|num.|第三；三分之一
+ok|int.|好的
+hi|int.|你好
 sale|n.|销售；出售；拍卖
 france|n.|法国
+pm|n.|下午；午后
+id|n.|身份证；身份标识
 latest|adj.|最近的；最迟地；最后地；最新的事物
+ms|n.|女士
+dr|n.|博士；医生
 paris|n.|巴黎
+net|n.|网状物
 saying|n.|谚语；言论；俗话；口头禅
 pro|n.|职业性的；专业的；赞成的，支持的
+ad|n.|广告
 russian|adj.|俄国的；俄语的；俄国人
 wednesday|n.|星期三
+nor|conj.|也不
+won|v.|赢得；获胜
 sweet|adj.|甜的；悦耳的；芳香的；亲切的；糖果；乐趣
 mom|n.|妈妈
+hey|int.|嘿呀；打招呼的呼声
 truck|n.|敞篷货车；卡车；交易；手推车；以物易物
 fashion|n.|风尚；方式；时尚；流行款式；流行式样
 tool|n.|工具，用具；器械，机床；手段；使用工具
+yeah|adv.|是的
+via|prep.|经由；通过
 southern|adj.|南的；南方的；南方人
 scene|n.|场面；情景；景象；事件
 calendar|n.|日历，历书；历法；日程表；将…列入表中
@@ -51,6 +69,7 @@ ocean|n.|海洋
 speech|n.|演讲；讲话；演说；说话方式
 ride|v.|骑马；乘车；依靠；漂浮；乘坐；交通工具
 trouble|n.|麻烦；烦恼；故障；动乱；折磨；疾病；问题
+ex|adj.|以前的；前任的
 creative|adj.|创造性的；有创造力的
 dollar|n.|美元
 zero|n.|零点，零度
@@ -68,6 +87,8 @@ stick|v.|粘，贴；柴枝，枝条；黏住；坚持；刺，戳
 theatre|n.|剧场，戏院；影剧院；电影院，戏院；戏剧
 hunter|n.|猎人；猎犬；搜寻者
 asia|n.|亚洲
+fax|n.|传真
+wow|int.|哇哦
 wet|adj.|湿的；多雨的，雨天的；有雨的；湿气；弄湿
 fourth|num.|第四；四分之一
 ireland|n.|爱尔兰
@@ -95,9 +116,11 @@ mile|n.|英里；较大的距离
 tennis|n.|网球
 irish|adj.|爱尔兰的；爱尔兰人的；爱尔兰语
 smoke|v.|冒烟；吸烟；抽烟；无常的事物；弥漫
+etc|adv.|等等；以及其他
 swimming|n.|游泳；目眩；晕眩的；漂浮
 physics|n.|物理
 nursing|n.|护理；看护；养育
+pc|n.|个人电脑
 laboratory|n.|实验室，研究室
 cheese|n.|奶酪，干酪；要人；停止；叛变的；胆小的
 australian|adj.|澳大利亚的；澳大利亚人
@@ -107,6 +130,7 @@ surprise|n.|令人惊奇的事物；惊奇，诧异；突然袭击
 turning|n.|转向；旋转；回转；转弯处
 wake|v.|醒来；唤醒；警觉；尾迹；守夜；守丧
 unable|adj.|不会的，不能的；不能胜任的
+ah|int.|哎呀；表示惊讶
 shooting|n.|射击；打猎；摄影；射门
 victory|n.|胜利；成功；克服
 worry|n.|担心；烦恼；撕咬；发愁；折磨
@@ -142,12 +166,14 @@ outstanding|adj.|突出的，杰出的；未解决的；未偿付的
 mall|n.|商场；购物中心
 mexican|adj.|墨西哥的；墨西哥人的；墨西哥语
 chips|n.|小木片
+um|int.|嗯哼；表示迟疑
 disabled|adj.|残疾的；残废的，有缺陷的
 doll|n.|洋娃娃；玩偶；无头脑的美丽女人
 motorcycle|n.|摩托车；机动车
 singer|n.|歌手
 mars|n.|火星；战神
 announcement|n.|公告；宣告；发表；通告
+yo|int.|打招呼的叫声
 soap|n.|肥皂
 suffering|n.|痛苦，苦难；受难；苦楚；受苦的；患病的
 soldier|n.|军人；懒汉；一片烤面包；当兵；磨洋工
@@ -172,6 +198,7 @@ shorts|n.|短裤
 advertisement|n.|广告
 photographer|n.|摄影师；照相师
 uncle|n.|叔叔；伯父；伯伯；舅父；姨丈；姑父
+vs|prep.|对阵；与……相比
 loud|adj.|响亮的；吵闹的；刺目的；太招摇的
 scottish|adj.|苏格兰的；苏格兰人的；苏格兰语的
 darkness|n.|黑暗；模糊；无知；阴郁
@@ -206,6 +233,7 @@ knee|n.|膝盖
 chick|n.|小鸡；小鸟；少妇；胆小的；懦弱的
 snake|n.|阴险的人；迂回前进；蜿蜒；弯弯曲曲地行进
 stomach|n.|腹部；胃口；忍受；吃下；吃得下
+eh|int.|是吧
 explorer|n.|探险家；勘探者；探测器
 sink|n.|下沉，沉没；洗脸盆；洗涤槽；洗碗池；消沉
 stamp|n.|邮票；印记；标志；跺脚；铭记；标出
@@ -215,6 +243,7 @@ documentary|n.|纪录片；纪录的；文献的；记录片；记录的
 pig|n.|猪，小猪，野猪；猪肉；生小猪
 smell|n.|气味；闻出，闻到，嗅到；嗅，闻；臭味
 shame|v.|使羞愧；玷辱；遗憾的事；羞耻，羞愧
+bye|int.|再见
 camel|n.|骆驼；打捞浮筒；工作作风官僚；驼色的
 intention|n.|打算，意图；意图，意向，目的；愈合
 penny|n.|便士
@@ -247,9 +276,12 @@ elder|adj.|年龄较大的，年长的；长者；老人；长辈
 gentle|adj.|和蔼的；轻柔的；温和的；文雅的
 bicycle|n.|自行车，脚踏车；骑脚踏车；骑自行车
 medal|n.|勋章，奖章；纪念章
+oops|int.|哎哟；糟糕
 sunglasses|n.|太阳镜
 butterfly|n.|蝴蝶；蝶泳；举止轻浮的人；追求享乐的人
+ie|adv.|也就是
 southeast|adj.|东南的；东南地区；来自东南；向东南
+pi|n.|圆周率
 jeep|n.|吉普车
 repairs|n.|修理；备件；弥补；纠正
 hobby|n.|嗜好；业余爱好
@@ -272,6 +304,7 @@ cage|n.|笼子；鸟笼，囚笼；笼，兽笼；牢房，监狱
 fork|n.|餐叉；分叉；叉起；使成叉状
 tent|n.|帐篷；住处；帷幕
 junk|n.|垃圾，废物；舢板；废旧物品，破烂
+fig|n.|无花果
 wound|n.|创伤，伤；使受伤；伤害；伤口
 wallet|n.|皮夹子；钱包，皮夹
 seventh|num.|第七；七分之一
@@ -336,6 +369,7 @@ marry|v.|和…结婚；娶，嫁；为…证婚；与……结婚
 goat|n.|山羊
 banana|n.|香蕉；芭蕉属植物；喜剧演员；大鹰钩鼻
 musician|n.|音乐家；作曲家
+hmm|int.|嗯嗯；沉吟时的声音
 sail|n.|航行；启航，开船；帆，篷；驾驶
 hunger|n.|饿，饥饿；渴望；挨饿；食欲，胃口
 turtle|n.|海龟
@@ -433,6 +467,7 @@ freezing|adj.|冻结的；极冷的；冰冻的；严寒的；冷冻用的
 alcoholic|adj.|酒精的，含酒精的；酒鬼，酗酒者
 passionate|adj.|热情的
 mommy|n.|妈咪
+yep|adv.|是的
 mentally|adv.|精神上，智力上；心理上
 mailbox|n.|邮箱；邮筒
 lightly|adv.|轻轻地，轻松地
@@ -593,6 +628,7 @@ harmless|adj.|无害的；无恶意的
 premature|adj.|比预期时间早的
 presidency|n.|总统任期
 popcorn|n.|爆米花
+nope|adv.|不是；没有
 fourteen|num.|十四；十五世纪
 heroin|n.|海洛因
 tract|n.|大片
@@ -1039,6 +1075,7 @@ volt|n.|伏特；环骑；闪避
 pilgrim|n.|朝圣者；漫游者；去朝圣
 prose|n.|散文；单调；平凡的；乏味的；乏味地讲话
 interruption|n.|打扰；中断；障碍物
+eg|adv.|例如
 trench|n.|深沟；壕沟，战壕；沟，沟渠；堑壕；掘沟
 displacement|n.|移置；免职；置换；取代
 transformer|n.|变压器
@@ -1414,6 +1451,7 @@ cuckoo|n.|杜鹃，布谷鸟
 blouse|n.|女衬衫；罩衫；宽松的上衣；女装衬衫
 rhyme|v.|押韵；作诗；韵律；韵脚；韵文；用韵诗表达
 courageous|adj.|有勇气的；勇敢的，无畏的
+phew|int.|呼啦；松一口气
 discriminate|v.|歧视；区别；辨别
 catastrophe|n.|大灾难；大祸；惨败；灾祸；横祸
 incapable|adj.|无能力的；无资格的

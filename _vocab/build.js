@@ -416,6 +416,28 @@ for (const [w, e] of all) {
   if (!built.m) continue            // 释义被清洗规则剔光了（多为音译人名 / 缩写），不收录
   extraRows.push({ w, pos: built.pos, m: built.m, s: freqScore(w) })
 }
+// ---------------------------------------------------------------- 日常短词 / 口语 / 缩略语
+//
+// 主流程的 STOP 表会剔掉 hi / ok / vs / nor / net 这类"功能词"——**对词书来说完全正确**：
+// 没有人需要把 "hi" 做成一张单词卡片。可词典是另一回事：真机反馈里用户随手敲一个短词，
+// 本地一条都答不上来（它们既不在考试词表、也不在常用词表，等于在本地词典里不存在）。
+// 所以补一张亲手校过的 everyday.txt，**只喂给查词补充表**（只读、不进任何词书、
+// 不占共享表行号），让日常短词也能立刻查到，同时不污染任何人的背诵列表。
+//
+// ⚠️ 这张表不能丢进上面那条合并链：那样会被 STOP 表整批剔掉，白补。
+const extraSet = new Set(extraRows.map(r => r.w))
+const { map: everydayMap } = loadVocab('everyday.txt')
+let everydayHit = 0
+for (const [w, glosses] of everydayMap) {
+  if (keptWordSet.has(w) || commonWordSet.has(w) || extraSet.has(w)) continue
+  const built = buildEntry(glosses)
+  if (!built.m) continue            // 释义被清洗规则剔光了就不收（宁缺毋滥）
+  extraRows.push({ w, pos: built.pos, m: built.m, s: freqScore(w) })
+  extraSet.add(w)
+  everydayHit++
+}
+console.log(`[extra] 日常短词 / 口语 / 缩略语补 ${everydayHit} 条（候选 ${everydayMap.size}）`)
+
 // 按词频排：查词命中多条时，靠前的更可能是用户想查的那个（与共享表同一口径）
 extraRows.sort((a, b) => a.s - b.s || (a.w < b.w ? -1 : 1))
 console.log(`[extra] 查词补充词库 ${extraRows.length} 条（候选 ${all.size}，已剔共享表 ${keptWordSet.size} / 常用词 ${commonWordSet.size}）`)

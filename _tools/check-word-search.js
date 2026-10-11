@@ -555,6 +555,44 @@ function mount(props) {
       'noExact 把 aiError 排除在外（"没查成"和"没查到"不重复说）');
   }
 
+  console.log('\n== 17. 不许替 AI 撒谎（短词陷入两难）==');
+  // 用户实测反馈（2026-10-11 真机截图，首页同款问题）：搜 "en"，界面写着
+  // 「本地词库没有「en」」+「AI 也未能补充这个词」，可 AI 结果、本机缓存都是空的，
+  // 用户卡在中间无路可走。根因是**没问过 AI 却替它回了话** —— 界面必须区分
+  // 「AI 真查过了」和「压根还没问过」，后者要把"去问 AI"的入口递到手上。
+  {
+    const SHORT = 'en';
+    stubs.local = () => [
+      { w: 'end', pos: 'n.', m: '结束', fromText: '当前词书' },
+      { w: 'envy', pos: 'n.', m: '嫉妒', fromText: '当前词书' }
+    ];
+    stubs.cache = () => null;
+    stubs.explain = async () => ({ word: '', pos: '', meaningZh: '', examples: [] });   // 空回复
+    const p = mount({ locked: false, bookId: 'B' });
+    p.onInput(SHORT);
+    eq(p.exactHits.length, 0, '短词：本地没有一模一样的那条');
+    assert(p.nearHits.length > 0, '短词：本地倒是有相近结果（' + p.nearHits.length + ' 条）');
+    eq(p.aiTried, false, '★ 还没问过 AI → aiTried 保持 false');
+    assert(!/AI 也/.test(p.aiHint), '★ 没问过就不许说"AI 也…"：' + p.aiHint);
+    assert(/相近/.test(p.aiHint), '★ 这时要说"上面那些只是相近的"：' + p.aiHint);
+    eq(p.aiActionText, '让 AI 查一下', '★ 没问过 → 按钮是"让 AI 查一下"');
+
+    if (p.timer) { clearTimeout(p.timer); p.timer = 0 }
+    await p.aiLookup(SHORT);
+    eq(p.aiTried, true, '★ 真问过之后才把标记亮起来');
+    assert(/AI 也没查到这个词/.test(p.aiHint), '★ AI 回来是空的 → 这时才说"AI 也没查到"：' + p.aiHint);
+    eq(p.aiActionText, '再问一次', '★ 问过了 → 按钮改成"再问一次"（不然一直说"可以去问"就是鬼打墙）');
+
+    p.onInput('other');
+    eq(p.aiTried, false, '★ 换词 = 新一轮，"问过 AI"跟着归零（不能拿上一轮的结论说给新词听）');
+    p.close();
+
+    assert(/\{\{ aiHint \}\}/.test(tpl), '"没找到"那块的第二行交给 aiHint');
+    assert(!/aiEnabled \? \$t\('AI 也未能补充这个词/.test(tpl), '不再写死"AI 也未能补充这个词"');
+    assert(/\{\{ aiActionText \}\}/.test(tpl), '按钮文案跟着 aiTried 走（aiActionText）');
+    assert(/this\.aiTried = true/.test(script), 'aiLookup 里真的把"问过了"记下来');
+  }
+
   console.log('');
   console.log(fail === 0 ? '顶栏随手查词全部通过 ✓' : '失败 ' + fail + ' 项 ✗');
   process.exit(fail === 0 ? 0 : 1);

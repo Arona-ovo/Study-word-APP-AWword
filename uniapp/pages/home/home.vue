@@ -183,9 +183,13 @@
              aiError 另算一种结局：那是"没查成"，交给下面那块单独说。 -->
         <view v-if="showNotFound" class="sr-state">
           <text class="sr-state-text">{{ $t('本地词库没有「{q}」', { q: lastQuery }) }}</text>
-          <text class="sr-state-hint">{{ aiEnabled ? $t('AI 也未能补充这个词，换个拼写试试') : $t('接入 AI 后，搜不到的词会自动补充到本机缓存') }}</text>
+          <!-- 第二行按"到底问没问过 AI"分三种说法 —— 见 aiHint 的注释：
+               搜 "en" 这种两三个字母时自动路径是**不会**去问 AI 的（怕边打字边烧 token），
+               以前却一律写"AI 也未能补充这个词"，等于替 AI 回绝了一件它压根没被问的事 -->
+          <text class="sr-state-hint">{{ aiHint }}</text>
           <view class="sr-actions">
-            <text v-if="aiEnabled" class="sr-retry" @tap="aiLookup(lastQuery)">{{ $t('再试一次') }}</text>
+            <text v-if="aiEnabled" class="sr-retry" @tap="askAi">{{ aiActionText }}</text>
+            <text class="sr-retry" @tap="openQuery">{{ $t('手动添加「{q}」', { q: lastQuery }) }}</text>
             <!-- 反向兜底：这句其实是想让 AI 改页面 → 一键按指令重跑 -->
             <text class="sr-retry sr-retry-cmd" @tap="retryAsCommand">{{ $t('当成指令试试') }}</text>
           </view>
@@ -562,6 +566,7 @@ export default {
       aiResult: null,
       aiLoading: false,
       aiError: '',       // AI 查询失败的原因（给人看的那句；原始错误只进 console）
+      aiTried: false,    // 这一轮**问过** AI 吗（决定"没找到"那块该说什么，见 aiHint）
       searchTimer: 0,
       // 「相近的词」是否已展开全部（搜 "in" 能出两百多条，一屏铺满等于把结论淹掉）
       nearAll: false,
@@ -662,6 +667,31 @@ export default {
     showNotFound() {
       return this.noExactHit && !this.cached && !this.aiLoading &&
         !this.aiResult && !this.aiError && !this.searchTimer
+    },
+    /**
+     * 「没找到」那块第二行说什么。
+     *
+     * 唯一原则：**不许替 AI 撒谎**。自动路径是防抖 + 门槛的（见 onSearchInput 里
+     * AI_NEAR_* 那几条）：查 "en" 这种两三个字母、本地又有一堆相近词时，
+     * 打字过程中根本不会去问 AI（否则每敲一个字母就烧一次 token）。
+     * 可界面原来一律写「AI 也未能补充这个词」—— 等于替 AI 回绝了一件它没被问过的事，
+     * 用户只能对着屏幕两难（实测反馈：搜 "en" 既没 AI 结果、缓存也没有、回车还没反应）。
+     */
+    aiHint() {
+      void this.__lang
+      if (!this.aiEnabled) return t('接入 AI 后，搜不到的词会自动补充到本机缓存')
+      // 真问过了，AI 也没给出东西 —— 这才是"AI 也未能补充"
+      if (this.aiTried) return t('AI 也没查到这个词，换个拼写试试')
+      // 下面这些都还没问过，说清楚"这些只是相近的"，并把问的入口递到手上
+      if (this.nearHits.length) {
+        return t('上面 {n} 条只是相近的词，都不是「{q}」本身', { n: this.nearHits.length, q: this.lastQuery })
+      }
+      return t('本地没有这个词条，可以让 AI 查一下')
+    },
+    /** 那个按钮写什么：没问过 = 让 AI 查一下；问过了 = 再问一次 */
+    aiActionText() {
+      void this.__lang
+      return this.aiTried ? t('再问一次') : t('让 AI 查一下')
     },
     visibleNear() {
       return this.nearAll ? this.nearHits : this.nearHits.slice(0, NEAR_SHOW)
@@ -1258,6 +1288,7 @@ export default {
         this.cached = null
         this.aiResult = null
         this.aiError = ''
+        this.aiTried = false
         this.aiLoading = false
       } else {
         this.closeCmdBar()
@@ -1328,10 +1359,26 @@ export default {
       // 用户只会觉得"按回车是坏的"。
       // 回车是一个明确的"我要查这个" → 记进历史
       this.rememberSearch(text)
+      // 用户已经明说要查这个了 → 把还在路上的防抖请求取消，不要等它
+      if (this.searchTimer) { clearTimeout(this.searchTimer); this.searchTimer = 0 }
       const q = String(text).trim().toLowerCase()
       const hit = this.results.filter(r => String(r.w || '').trim().toLowerCase() === q)[0]
       if (hit) { this.openWord(hit); return }
+      if (this.aiResult) { this.openWord({ w: this.aiResult.word }); return }
+      if (this.cached) { this.openWord({ w: this.cached.word }); return }
+      // 本地没有 → 立刻问 AI。
+      // ⚠️ 这里**不受 AI_NEAR_MIN_LEN 那条长度门槛限制**：
+      // 门槛是给"边打字边自动补"用的（怕每个字母都烧一次 token），
+      // 而回车 / 点「搜」是用户明确的动作，他要的就是这一次查询。
+      // 搜 "en" 这类短词时如果也走门槛，就会退化成"按回车什么都不发生"（实测反馈）。
+      if (this.aiEnabled) { this.aiLookup(text); return }
+      // 没接 AI 就没有上面那条出路了 —— 至少把这一轮的本地检索跑满：
+      // 相近的词摆出来、上面的「没找到」那块跟着给出人工添加的入口，
+      // 别让回车看着像没反应（这条也是 2026-10-11 那条反馈里"回车没反应"的一半原因）
       this.runSearch(text)
+      if (!this.results.length) {
+        uni.showToast({ title: t('未接入 AI，可在词条页自己填释义'), icon: 'none' })
+      }
     },
     useSuggestion(s) {
       this.keyword = s
@@ -1365,6 +1412,7 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiError = ''
+      this.aiTried = false
       this.aiLoading = false
       this.cmdSay = ''
       this.cmdSummary = ''
@@ -1678,6 +1726,7 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiError = ''
+      this.aiTried = false
       this.aiLoading = false
       this.nearAll = false   // 换了词就收回折叠：上一轮展开的"相近的词"不该带过来
       this.results = search.localSearch(this.bookId, kw)
@@ -1731,6 +1780,7 @@ export default {
       this.cached = null
       this.aiResult = null
       this.aiError = ''
+      this.aiTried = false
       this.aiLoading = false
       this.nearAll = false
       // 清空即解锁：下一次输入重新交给自动判定
@@ -1760,6 +1810,21 @@ export default {
       }
     },
 
+    /**
+     * 「让 AI 查一下 / 再问一次」：把 lastQuery 交给 AI。
+     * 和回车走同一条路 —— 明确动作，不受自动路径的长度门槛限制。
+     * （模板里不写函数调用与表达式，项目约定 9，所以收成具名方法。）
+     */
+    askAi() {
+      if (!this.lastQuery) return
+      this.aiLookup(this.lastQuery)
+    },
+
+    /** 「手动添加「xxx」」：带着当前查的词进词条页，自己填释义后加入词书 */
+    openQuery() {
+      this.openWord({ w: this.lastQuery })
+    },
+
     // AI 补充：拿到释义 → 只落本机缓存（explainWord 内部已写入）→ 展示给用户。
     // 不再自动写进任何词书：临时查一个词就被塞进核心词书，词库很快就脏了。
     async aiLookup(kw) {
@@ -1779,6 +1844,9 @@ export default {
       this.aiLoading = true
       this.aiResult = null
       this.aiError = ''
+      // 记下"这一轮真的问过 AI"：无论回来是结果、空手还是报错，
+      // 「没找到」那块都得改口（不能一直说"可以让 AI 查一下"，那会变成鬼打墙）
+      this.aiTried = true
       try {
         const r = await explainWord(q)
         const meaning = (r && r.meaningZh) || ''

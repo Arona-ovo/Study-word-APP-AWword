@@ -132,9 +132,11 @@
              用户既不知道 "in" 到底有没有，也没有任何办法把它加进来（实测反馈）。 -->
         <view v-if="noExact" class="ws-state">
           <text class="ws-state-text">{{ $t('本地词库没有「{q}」', { q: lastQuery }) }}</text>
-          <text class="ws-state-hint">{{ aiEnabled ? $t('AI 也未能补充这个词，换个拼写试试') : $t('接入 AI 后，搜不到的词会自动补充到本机缓存') }}</text>
+          <!-- 第二行按"到底问没问过 AI"分开说 —— 见 aiHint 的注释：
+               没问过就不能替 AI 回绝，否则用户只剩"两难"（实测反馈：搜 "en"） -->
+          <text class="ws-state-hint">{{ aiHint }}</text>
           <view class="ws-actions">
-            <text v-if="aiEnabled" class="ws-act" @tap="retryAi">{{ $t('AI 查一下') }}</text>
+            <text v-if="aiEnabled" class="ws-act" @tap="retryAi">{{ aiActionText }}</text>
             <text class="ws-act" @tap="openQuery">{{ $t('手动添加「{q}」', { q: lastQuery }) }}</text>
           </view>
         </view>
@@ -223,6 +225,7 @@ export default {
       autofocus: false,       // 打开搜索时把输入框抢过来（弹键盘）
       aiEnabled: false,
       aiError: '',            // AI 查询失败的原因（给人看的那句；原始错误只进 console）
+      aiTried: false,         // 这一轮**问过** AI 吗（决定"没找到"那块该说什么，见 aiHint）
       nearAll: false,         // 「相近的词」是否已展开全部
       timer: 0
     }
@@ -256,6 +259,31 @@ export default {
     },
     visibleNear() {
       return this.nearAll ? this.nearHits : this.nearHits.slice(0, NEAR_SHOW)
+    },
+
+    /**
+     * 「没找到」那块的第二行到底该说什么 —— 原则是**不许替 AI 撒谎**。
+     *
+     * 打字过程中的 AI 补充是被防抖推迟的（停手 700ms 才发），而且 aiLookup 自己也有一道
+     * 「至少要有字母或汉字」的闸 —— 也就是说，"界面上写着没找到"的时候 AI 不一定真的被问过。
+     * 以前一律写「AI 也未能补充这个词」—— 等于替 AI 回绝了一件它没做过的事，
+     * 用户看到"AI 也不显示、缓存也没有"，就彻底没有下一步了（实测反馈）。
+     *
+     * 现在按四种情况分开说：没接 AI / 真问过了 / 只列出相近的 / 本地确实没有。
+     */
+    aiHint() {
+      void this.__lang
+      if (!this.aiEnabled) return t('接入 AI 后，搜不到的词会自动补充到本机缓存')
+      if (this.aiTried) return t('AI 也没查到这个词，换个拼写试试')
+      if (this.nearHits.length) {
+        return t('上面 {n} 条只是相近的词，都不是「{q}」本身', { n: this.nearHits.length, q: this.lastQuery })
+      }
+      return t('本地没有这个词条，可以让 AI 查一下')
+    },
+    /** 那个按钮写什么：没问过 = 让 AI 查一下；问过了 = 再问一次 */
+    aiActionText() {
+      void this.__lang
+      return this.aiTried ? t('再问一次') : t('让 AI 查一下')
     },
     // 一条精确命中都没有、缓存和 AI 也没给东西 → 显示"没有"+ 两条出路。
     // 别把 AI 的转圈/结果吞掉：那两样都在的时候用户马上就有答案了。
@@ -330,6 +358,7 @@ export default {
       this.aiResult = null
       this.aiLoading = false
       this.aiError = ''
+      this.aiTried = false   // 换了词 = 新一轮，"这一轮问过 AI 吗"得重新开始记
       this.nearAll = false
       if (!kw) {
         this.lastQuery = ''
@@ -402,6 +431,9 @@ export default {
       this.aiLoading = true
       this.aiResult = null
       this.aiError = ''
+      // 记下"这一轮真的问过 AI"：不管回来的是结果、空手还是报错，
+      // 「没找到」那块都得改口（不能一直说"可以让 AI 查一下"，那会变成鬼打墙）
+      this.aiTried = true
       try {
         const r = await explainWord(q)
         const meaning = (r && r.meaningZh) || ''
@@ -452,6 +484,7 @@ export default {
       this.aiResult = null
       this.aiLoading = false
       this.aiError = ''
+      this.aiTried = false
       this.nearAll = false
       this.clearPolish()
     },

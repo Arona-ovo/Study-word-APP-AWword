@@ -354,13 +354,23 @@ function eq(a, b, label) {
   assert(!!om, '能抠出 onSubmit 方法体');
   if (om) {
     const intentMod = await import(P('utils/intent.js'));
-    const onSubmit = new Function('intent', 'return function (v) {' + om[1] + '\n};')(intentMod);
+    // t / uni 也要传进去：onSubmit 在没有 AI 时会 toast 一句"怎么手动加"（见下面第 3 条用例）
+    const toasts = [];
+    const onSubmit = new Function('intent', 't', 'uni', 'return function (v) {' + om[1] + '\n};')(
+      intentMod,
+      (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
+      { showToast: (o) => toasts.push(o && o.title) }
+    );
     // 只记录"真的按下去了什么"：runSearch / runCommand 各记一笔
+    // 回车时会读到的状态：本地那条 / 缓存 / AI 结果 / 防抖定时器 / AI 开关。
+    // 少给一个就是"桩不全"，会炸成 ReferenceError 而不是逻辑错（踩过：加了 aiLookup 分支后
+    // onSubmit 里的 t() 在依赖袋里没有，整个第 7 组直接挂掉）。
     const mk = (mode) => {
       const log = [];
       return {
         log: log,
         inputMode: mode, keyword: '', modeLocked: false, lastCmdText: '',
+        searchTimer: 0, aiEnabled: false, cached: null, aiResult: null,
         // results / openWord 是 onSubmit 新增用到的：回车时本地已有**一模一样**的
         // 那条就直接进词条页（data 里本来就有这两个，桩要跟上，否则是桩不全而不是逻辑错）
         results: [],
@@ -370,7 +380,9 @@ function eq(a, b, label) {
         rememberSearch: (w) => log.push('history:' + w),
         runSearch: (v) => log.push('search:' + v),
         runCommand: (v) => log.push('command:' + v),
-        openWord: (it) => log.push('open:' + ((it && it.w) || ''))
+        openWord: (it) => log.push('open:' + ((it && it.w) || '')),
+        // 本地查不到时回车会立刻去问 AI（2026-10-11 补：以前只再跑一遍检索，等于没反应）
+        aiLookup: (w) => log.push('ai:' + w)
       };
     };
     let c = mk('search');
@@ -413,6 +425,29 @@ function eq(a, b, label) {
     c.modeLocked = true;
     onSubmit.call(c, '');
     eq([c.inputMode, c.modeLocked], ['command', true], '空回车不动模式与锁定态');
+    // 2026-10-11 实测反馈：搜 "en" 时本地只有一堆相近的词，回车却什么都没发生 ——
+    // 一半原因是回车退化成 runSearch（把同样的检索再跑一遍，界面纹丝不动），
+    // 另一半是打字那条链路有长度门槛（AI_NEAR_MIN_LEN=3），短词压根没去问过 AI。
+    // 回车是用户明确的动作：不受那条门槛限制，本地没有就立刻问。
+    c = mk('search');
+    c.aiEnabled = true;
+    c.results = [{ w: 'ending', pos: '', m: '结局' }];
+    toasts.length = 0;
+    onSubmit.call(c, 'en');
+    eq(c.log, ['history:en', 'ai:en'], '★ 本地只有相近的 + 已接 AI → 回车立刻问 AI（短词也不被门槛拦住）');
+    // AI 关着就没有上面那条出路了：至少把本地检索跑满，别让人觉得回车坏了
+    c = mk('search');
+    c.results = [{ w: 'ending', pos: '', m: '结局' }];
+    toasts.length = 0;
+    onSubmit.call(c, 'en');
+    eq(c.log, ['history:en', 'search:en'], '没接 AI → 回车仍把本地检索跑满（不是什么都不做）');
+    eq(toasts.length, 0, '本地还有相近的结果时不啰嗦（列表就摆在眼前）');
+    c = mk('search');
+    toasts.length = 0;
+    onSubmit.call(c, 'zzqqxx');
+    eq(c.log, ['history:zzqqxx', 'search:zzqqxx'], '本地一条都没有 → 检索照旧跑，再给一句怎么手动加');
+    assert(toasts.length === 1 && /自己填释义/.test(toasts[0] || ''),
+      '★ 一条都没有时才提示「可在词条页自己填释义」：' + toasts.join('|'));
   }
   assert(/clearSearch\(\) \{/.test(homeSrc), '清空入口 clearSearch 仍在（× / 收起照常可用）');
 

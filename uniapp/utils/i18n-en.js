@@ -6,6 +6,12 @@
 //
 // 占位符用 {name}：t('已加入「{name}」', { name }) 
 export default {
+  // ---------- 与 PWstudy 联动 ----------
+  // 练习页顶部那条来路提示与结束回跳按钮（只有从 PWstudy 跳进来才出现）
+  '来自 PWstudy 的学习任务': 'Task from PWstudy',
+  '结束并返回': 'Finish & return',
+  '没找到 PWstudy，请手动切回去': 'PWstudy not found — please switch back manually',
+
   // ---------- 通用 ----------
   '确定': 'Confirm',
   '其他': 'Other',
@@ -304,6 +310,13 @@ export default {
   '当前词书里相近的词': 'Close matches in the current wordbook',
   '再显示 {n} 个': 'Show {n} more',
   'AI 查一下': 'Ask AI',
+  // 「没找到」那块的四种说法 —— 关键是**不许替 AI 撒谎**：
+  // 没问过 AI 就不能说"AI 也查不到"（见 home.vue 的 aiHint）
+  '让 AI 查一下': 'Ask AI',
+  '再问一次': 'Ask again',
+  'AI 也没查到这个词，换个拼写试试': 'AI couldn’t find it either — try another spelling',
+  '上面 {n} 条只是相近的词，都不是「{q}」本身': 'The {n} entries above are only close matches — none of them is “{q}”',
+  '本地没有这个词条，可以让 AI 查一下': 'Not in the local dictionary — ask AI to look it up',
   // AI 补全多义（word-polish-mixin：义项补全 + 预判预取，补完写回本机缓存）
   '正在补全这个词的义项…': 'Filling in every sense of this word…',
   'AI 补全 · {n} 个义项': 'AI · {n} senses',
