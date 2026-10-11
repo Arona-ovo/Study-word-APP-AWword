@@ -12,6 +12,7 @@ import { autoDowngrade } from './utils/perf.js'
 import { purgeJunkWords } from './utils/wordbook.js'
 import * as usage from './utils/usage.js'
 import * as sfx from './utils/sfx.js'
+import * as link from './utils/link.js'
 
 export default {
   onLaunch() {
@@ -36,6 +37,20 @@ export default {
     try {
       setTimeout(() => { autoDowngrade(false) }, 1500)
     } catch (e) {}
+    // 被 awword:// 链接唤起（PWstudy 番茄钟把用户送过来背单词）：认领启动参数，
+    // 再挂 newintent —— 应用已在后台时再被唤起走的是这个事件。
+    // 放在这一串 init 之后：认领会 navigateTo 练习页，那一页依赖 store/settings 已就绪。
+    // 用户自己点开 App 时没有启动参数，link 的 ctx 为空，整条链路不参与任何流程。
+    // #ifdef APP-PLUS
+    try {
+      const bootArgs = plus.runtime.arguments
+      // 启动参数里的跳转要等首页渲染完再执行，太早 navigateTo 会丢
+      if (bootArgs) setTimeout(() => { try { link.consume(bootArgs) } catch (e) {} }, 900)
+      plus.globalEvent.addEventListener('newintent', () => {
+        try { link.consume(plus.runtime.arguments) } catch (e) {}
+      })
+    } catch (e) {}
+    // #endif
   },
   onShow() {
     // App 从后台回前台后原生 tabBar 可能复现，补一次隐藏

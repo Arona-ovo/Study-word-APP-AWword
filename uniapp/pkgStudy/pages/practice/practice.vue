@@ -10,6 +10,14 @@
       :locked="!canSearch"
     />
 
+    <!-- PWstudy（番茄钟）把用户送过来时的来路提示 + 结束回跳。
+         只有从那边跳进来才有（link 的 ctx 为空时整条不显示，行为与之前完全一致）。
+         学完点一下就带着"本次学会几个词 + 待了多久"回到那边的统计里。 -->
+    <view v-if="fromLink" class="pl-banner">
+      <text class="pl-txt">{{ $t('来自 PWstudy 的学习任务') }}</text>
+      <view class="pl-go" @tap="backToPartner">{{ $t('结束并返回') }}</view>
+    </view>
+
     <!-- 答题流程 -->
     <block v-if="!finished">
       <!-- 顶部两条进度。
@@ -294,6 +302,8 @@ import FloatNavbar from '../../../components/float-navbar/float-navbar.vue'
 import WordSearch from '../../../components/word-search/word-search.vue'
 import ConfusionCard from '../../../components/confusion-card/confusion-card.vue'
 import * as confusion from '../../../utils/confusion.js'
+// 与 PWstudy（番茄钟）的联动：它把用户送过来背单词，学完把战果送回去
+import * as link from '../../../utils/link.js'
 
 /* ---------- 作答方式：选择题 / 手动输入 ----------
    和刷单词页同一条规矩（见 word-drill.vue）：选了就一直固定着 ——
@@ -381,7 +391,10 @@ export default {
       critiqueOpen: false,
       critiqueLoading: false,
       critique: null,
-      critiqueError: ''
+      critiqueError: '',
+      // 本次是不是从 PWstudy（番茄钟）跳进来的：
+      // 决定顶部那条来路提示，以及离开时要不要把战果送回去
+      fromLink: false
     }
   },
   computed: {
@@ -398,6 +411,9 @@ export default {
     }
   },
   async onLoad(opt) {
+    // 从 PWstudy 跳进来的会话：顶部显示来路，离开时把战果送回去。
+    // 自己点进来时 ctx 为空，这一行就是 false，之后所有联动分支都不会走。
+    try { this.fromLink = link.hasCtx() } catch (e) { this.fromLink = false }
     try {
       this.bookId = wordbook.currentBookId()
       const r = aiGateReason()
@@ -430,9 +446,23 @@ export default {
     tts.stop()
     // 搜索里的 AI 兜底可能还挂着定时器 → 一起收干净
     if (this.$refs.search) this.$refs.search.close()
+    // 从 PWstudy 来的会话：离开时把战果送回去（实际停留分钟 + 确认通过 = 真学会的词数）。
+    // 用 correctCount 而不是 answerCount —— 那边要的是"学会了几个词"，不是"做了几道题"。
+    // 已经点过「结束并返回」时 ctx 已被消费，hasCtx 为假，这里不会重复记账。
+    try { if (this.fromLink && link.hasCtx()) link.finish(this.correctCount) } catch (e) {}
   },
 
   methods: {
+    /**
+     * 结束这一轮学习并回到 PWstudy，把战果送过去。
+     * 没跳成（那边没装 / 被系统拦）要明说，不能静默 —— 否则用户以为记上了，回去一看没有。
+     */
+    backToPartner() {
+      let went = false
+      try { went = link.finish(this.correctCount) } catch (e) { went = false }
+      if (!went) uni.showToast({ title: t('没找到 PWstudy，请手动切回去'), icon: 'none' })
+    },
+
     // 清理"作答后延迟朗读参考答案"的定时器，避免切题后仍触发上一题的语音。
     // 确认题切关的短延时也一并清掉（onHide / onUnload 都走这里）：
     // 人在确认区点了一关就切走了，定时器再把人拉回落账是很怪的。
@@ -1028,6 +1058,40 @@ export default {
 </script>
 
 <style>
+/* PWstudy（番茄钟）送来的学习任务：一条来路提示 + 结束回跳。
+   只有从那边跳进来才会渲染（见脚本里的 fromLink），自己点进来时页面上看不到它。 */
+.pl-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24rpx;
+  padding: 18rpx 24rpx;
+  border-radius: 20rpx;
+  background: rgba(var(--surface-rgb, 255, 255, 255), 0.72);
+  -webkit-backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
+  backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
+  border: 2rpx solid var(--hairline, rgba(23, 32, 26, 0.08));
+}
+.pl-txt {
+  flex: 1;
+  min-width: 0;
+  font-size: 24rpx;
+  color: var(--ink-2, #5a6560);
+}
+.pl-go {
+  flex-shrink: 0;
+  margin-left: 18rpx;
+  padding: 10rpx 26rpx;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+  font-weight: 500;
+  letter-spacing: 1rpx;
+  color: #ffffff;
+  background: #2e6bff;
+  background: var(--brand, #2e6bff);
+}
+.pl-go:active { opacity: 0.86; }
+
 /* 顶部双进度（已做 / 会了）：两条同分母，竖排各占一行 */
 .pb-top { margin-bottom: 24rpx; }
 
