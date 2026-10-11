@@ -94,8 +94,12 @@ console.log('== 3. 主包 data 白名单与体积 ==');
 // data/extra-words.js 是 2026-10-11 新增的「查词补充词表」（2756 条，113KB）：
 // _vocab/src 里那些**没被任何词书挑中**的考试词条，以前在本地是彻底搜不到的（详见文件头注释）。
 // 它同样是"启动时静态装载的语料"，所以归到下面那组，跟词书语料一起看总量。
+// word-senses.js 是「词典层完整义项」（3316 条 / 319KB），
+// 只被 utils/dict.js 引用，用来给词条页 / 点读 / 义项补全补上被 20 字上限截掉的义项。
+// 它**不进词书**（见 check-word-senses.js 第 8 组），所以不计入下面的 BOOKLOAD。
 const ALLOW = ['data/words.js', 'data/sentences.js', 'data/wordbooks.js', 'data/common-words.js',
-  'data/lexicon.js', 'data/lexicon-data.js', 'data/bookdata.js', 'data/extra-words.js'];
+  'data/lexicon.js', 'data/lexicon-data.js', 'data/bookdata.js', 'data/extra-words.js',
+  'data/word-senses.js'];
 const BOOKLOAD = ['data/lexicon-data.js', 'data/bookdata.js', 'data/extra-words.js'];
 const inMain = [...mainSet].map(rel).filter((r) => r.startsWith('data/')).sort();
 inMain.forEach((d) => assert(ALLOW.indexOf(d) >= 0, '主包 data 在白名单内：' + d));
@@ -105,22 +109,36 @@ const bookKB = kbOf(inMain.filter((d) => BOOKLOAD.indexOf(d) >= 0));
 const otherKB = kbOf(inMain.filter((d) => BOOKLOAD.indexOf(d) < 0));
 const dataKB = bookKB + otherKB;
 console.log('     词书语料 ' + bookKB.toFixed(0) + ' KB + 其余 data ' + otherKB.toFixed(0) + ' KB = ' + dataKB.toFixed(0) + ' KB');
-// 300 → 360（2026-10-11）：加了查词补充词表 extra-words.js（2756 条 / 113KB）。
-// 这笔开销换的是「本地搜不到单词」这个实测痛点 —— 以前 search 只扫当前词书，
-// 内置几千个词只有拼完整了才捞得到；现在全量表常驻，词表本身就成了可搜索资产。
-// 行序（= 用户学习进度）一个字没动：它不属于任何词书，不产生新 id。
-// 真正会被用户感知的指标（装载耗时 / 常驻内存）由 check-builtin-books 第 7 组守。
-assert(bookKB <= 360, '内置词书语料 ≤ 360 KB（实际 ' + bookKB.toFixed(0) + '）');
+// 300 → 360 → 400（2026-10-11 / 10-12）：两笔新增，都是**往词典里加东西、不动词书行号**。
+//   1. 查词补充词表 extra-words.js（3012 条 / 126KB）
+//      _vocab/src 里那些**没被任何词书挑中**的考试词条，以前在本地彻底搜不到。
+//      以前 search 只扫当前词书，内置几千个词只有拼完整了才捞得到。
+//   2. 修掉清洗规则三处误杀后多回收 218 条（writer / cute / baseball / socks…）
+// 行序（= 用户学习进度）一个字没动：这两处都不属于任何词书，不产生新 id。
+// 真正会被用户感知的指标（装载耗时 / 常驻内存）由 check-builtin-books 第 7 / 9 组守。
+assert(bookKB <= 400, '内置词书语料 ≤ 400 KB（实际 ' + bookKB.toFixed(0) + '）');
 // wordbooks.js 现在要定义 6 本词书 + 自建/导入书的兜底逻辑，从 3KB 涨到 ~9KB 属于合理增长，
 // 预算从 200 抬到 210；真正要盯的是 sentences.js（119KB 的句库），它一动这个数就会跳。
-assert(otherKB <= 210, '其余 data ≤ 210 KB（实际 ' + otherKB.toFixed(0) + '）');
+//
+// 210 → 560（2026-10-12）：新增 data/word-senses.js（3316 条 / 319KB）。
+//   它是「词典层完整义项」—— 词书共享表的一行 = 一张背诵卡，释义只有 20 字上限，
+//   于是 light（源表 22 义）、hard（14 义）、note（12 义）这类多义词
+//   在界面上永远只看得到前四五个，这正是用户反馈的「一词多义显示不全」。
+//   为什么不直接放宽 MAX_MEAN：那会把背诵卡撑成一堵字墙。两个消费方需求冲突，
+//   所以拆成两份：短版给卡片与列表，长版给查词 / 点读 / 词条页。
+//   ⚠️ 它不进检索索引、不进任何词书（check-word-senses.js 第 7 / 8 组守着）。
+assert(otherKB <= 560, '其余 data ≤ 560 KB（实际 ' + otherKB.toFixed(0) + '）');
 
 const totalKB = [...mainSet].reduce((s, f) => s + fs.statSync(f).size, 0) / 1024;
 console.log('     主包源码合计 ' + totalKB.toFixed(0) + ' KB');
 // 见上方阈值口径注释：主战场是 APK，这条只用来拦"某个不小心 import 了整个语料/分包"这类失控，
 // 不是性能指标。1600 KB 换算下来距 App 端任何实际瓶颈都还很远，留出余量避免它再次变成
 // 逼着砍产品功能的假约束。真正会被用户感知的（装载耗时 / 常驻内存）由 check-builtin-books 第 7 组守。
-assert(totalKB <= 1600, '主包源码 ≤ 1600 KB（粗护栏，防无意识膨胀）');
+//
+// 1600 → 2050（2026-10-12）：word-senses.js 那 319KB 词典语料。
+//   真金白银换的是「多义词只看得到前四五个意思」这个实测痛点；
+//   代价实测：装载 6ms、常驻 +966KB（check-builtin-books 第 9 组盯这两个数）。
+assert(totalKB <= 2050, '主包源码 ≤ 2050 KB（粗护栏，防无意识膨胀）');
 
 console.log('== 4. 分包内相对导入可解析 ==');
 let broken = 0;

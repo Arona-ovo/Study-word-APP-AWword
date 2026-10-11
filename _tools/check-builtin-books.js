@@ -170,6 +170,84 @@ console.log('== 8. 查词补充表的开销（本地词库扩容的代价是否�
   else ok('常驻堆内存在预算内');
 }
 
+// ---------------------------------------------------------------------------
+console.log('');
+console.log('');
+console.log('== 9. 完整义项层的开销（一词多义补全的代价是否被盯住）==');
+// 与上一组同一条规矩：**往词典里加东西必须有人记账**。
+// 这张表 319KB / 3316 条，只在词条页 / 点读 / 义项补全这种"一次一两条"的地方用，
+// 所以刻意不预解析成 Map —— 扫原始文本取行即可，省下约 800KB 常驻堆。
+// 下面量的是这三笔账：规模、装载耗时、单次查询耗时。
+{
+  const sensesPath = path.join(__dirname, '..', 'uniapp', 'data', 'word-senses.js');
+  const h9 = process.memoryUsage().heapUsed;
+  const t9 = Date.now();
+  const sensesMod = load('data/word-senses.js');
+  const loadMs = Date.now() - t9;
+  const loadKB = (process.memoryUsage().heapUsed - h9) / 1024;
+  const sensesRaw = String(sensesMod.SENSES_RAW || '');
+  const sensesCount = sensesMod.SENSES_COUNT;
+  const rawKB = fs.statSync(sensesPath).size / 1024;
+  console.log('     data/word-senses.js ' + rawKB.toFixed(0) + ' KB（' + sensesCount + ' 条）');
+  console.log('     装载 ' + loadMs + 'ms，常驻 +' + loadKB.toFixed(0) + ' KB');
+  if (sensesCount > 1000) ok('完整义项规模没有萎缩（' + sensesCount + ' 条）');
+  else bad('完整义项规模萎缩：' + sensesCount + ' 条（应 > 1000）');
+  if (rawKB <= 400) ok('完整义项源码 ≤ 400 KB（实际 ' + rawKB.toFixed(0) + ' KB）');
+  else bad('完整义项源码超预算 400KB：' + rawKB.toFixed(0) + ' KB');
+  if (loadKB <= 1200) ok('完整义项常驻内存增量 ≤ 1200 KB（实际 ' + loadKB.toFixed(0) + ' KB）');
+  else bad('完整义项常驻内存超预算：' + loadKB.toFixed(0) + ' KB（这张表刻意不建索引，涨了说明有人改成了预解析）');
+
+  // 行格式：word|pos|释义（与共享表同口径，便于逐行 diff）
+  const lines = sensesRaw.split('\n').filter((l) => l.trim());
+  let badRow = '';
+  let emptyMean = 0;
+  const seen = {};
+  let dup = 0;
+  lines.forEach((l) => {
+    const p = l.split('|');
+    const w = p[0] || '';
+    const m = p.slice(2).join('|');
+    if (!/^[a-z][a-z'\-]*$/.test(w)) badRow = badRow || l;
+    if (!m) emptyMean++;
+    if (seen[w]) dup++;
+    seen[w] = 1;
+  });
+  if (!badRow) ok('word 列全是合法小写词形');
+  else bad('word 列有非法词形（反例：' + badRow + '）');
+  if (emptyMean === 0) ok('没有空释义行');
+  else bad('有 ' + emptyMean + ' 行空释义');
+  if (dup === 0) ok('同一个词不重复出现');
+  else bad('同一个词重复出现 ' + dup + ' 行');
+  // 残留空格是被清洗规则剔掉的信号（dropSpace 已在 build 阶段处理）
+  const spaced = lines.filter((l) => /[　\s]/.test(l.split('|').slice(2).join('|')));
+  if (spaced.length === 0) ok('释义里没有残留空格');
+  else bad('释义里有残留空格（反例：' + spaced[0] + '）');
+
+  // 长版必须**严格长于**短版，否则就是白占体积。
+  // 抽样取常见的多义词：这些词短版一定被 20 字截断过，长版理应更长。
+  const probe = ['light', 'hard', 'note', 'present', 'bear', 'bank',
+    'clear', 'book', 'run', 'stand', 'free', 'right'];
+  let longer = 0;
+  for (const w of probe) {
+    const shortN = dict.splitSenses(dict.lookup(w).meaning).length;
+    const fullN = dict.fullSensesOf(w).length;
+    if (fullN > shortN) longer++;
+  }
+  console.log('     抽样里长版严格更全的：' + longer + ' / ' + probe.length);
+  if (longer >= Math.ceil(probe.length / 2)) ok('至少一半抽样词的长版严格长于短版（' + longer + '/' + probe.length + '）');
+  else bad('长版没比短版更全，白占体积：' + longer + '/' + probe.length);
+
+  const tq = Date.now();
+  for (let i = 0; i < 200; i++) dict.fullSensesOf(probe[i % probe.length]);
+  const queryMs = Date.now() - tq;
+  console.log('     200 次查询耗时 ' + queryMs + 'ms（单次 ' + (queryMs / 200).toFixed(3) + 'ms）');
+  // 不建索引、只扫文本 → 单次应该在 0.1ms 量级。
+  // 若这里飙到毫秒级，多半是有人把它改成了 split() 后逐行匹配（那会每次建 3316 个字符串）。
+  if (queryMs <= 400) ok('200 次完整义项查询 ≤ 400ms（实际 ' + queryMs + 'ms）');
+  else bad('完整义项查询太慢：200 次 ' + queryMs + 'ms（多半是被改成了逐行 split 匹配）');
+}
+
+
 console.log('');
 console.log(fail === 0 ? '内置词书全部通过' : '失败 ' + fail + ' 项');
 process.exit(fail ? 1 : 0);
