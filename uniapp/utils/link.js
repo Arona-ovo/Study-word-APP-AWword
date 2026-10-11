@@ -17,6 +17,8 @@
 //
 // ③ 没从 PWstudy 进来时：ctx 为空，这个模块不参与任何流程，行为与本改动之前完全一致。
 
+import * as partner from './partner.js'
+
 export const SCHEME = 'awword';
 export const PARTNER_SCHEME = 'pwstudy';
 // 与 PWstudy 侧同一个 key：那边拿它把时长记进 daily[].byApp['app:awword']
@@ -118,10 +120,16 @@ export function consume(url, go) {
   const link = parse(url);
   if (!link || link.kind !== 'study') return false;
   const minutes = Math.round(Number(link.params.minutes) || 0);
+  // linked：对面（PWstudy）现在是不是把我们当关联伙伴。
+  //   0      → 手动模式：来路提示保留「回去」按钮，但学完不替用户自动跳
+  //   1 / 没这个参数 → 自动模式（没这个参数 = 老版本 PWstudy，按已关联处理）
+  // 为什么不能缺了默认：一次"失去明示同意"的自动跳转 = 把用户扣在对面。
+  const lk = String(link.params.linked == null ? '' : link.params.linked).toLowerCase();
   ctx = {
     minutes: minutes > 0 ? minutes : 25,
     taskId: link.params.task || '',
     back: link.params.back || (PARTNER_SCHEME + '://vocab-done'),
+    linked: lk !== '0',
     startAt: Date.now()
   };
   const nav = go || function (u) { uni.navigateTo({ url: u }); };
@@ -158,5 +166,8 @@ export function finish(words) {
     words: w > 0 ? w : '',
     task: c.taskId
   });
+  // 记一笔"链路真的通了"：设置页靠它回答"上次同步是什么时候"（见 utils/partner.js）。
+  // 放在 openUrl 之前 —— 跳不跳得出去是那边的事，这边确实已经把数据送出去了。
+  try { partner.noteSync(min, w) } catch (e) {}
   return openUrl(url);
 }

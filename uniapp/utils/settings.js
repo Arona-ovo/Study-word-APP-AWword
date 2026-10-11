@@ -40,6 +40,14 @@ function defaults() {
     // 只记"上次导出过什么"，纯粹用于设置页显示一行提示；
     // 备份内容本身在文件 / 剪贴板里，不在这里。
     backup: { lastAt: 0, lastFile: '' },
+    // 伙伴 App（PWstudy 番茄钟）的关联意愿。
+    // 这是**本地意愿**，不是开关：两边各自存各自的，互不要求握手达成一致
+    // —— 否则任一侧卸载重装/清数据，另一侧就成了解不开的死结。
+    //   state: undecided 还没决定 | linked 已关联 | declined 明确不用
+    //   askedCount / lastAskAt 是防骚扰用的（最多自动问 3 次、两次之间至少隔 2 天）
+    //   lastSyncAt / lastWords 是"链路真的通着"的证据 —— 设置页靠它回答"上次同步是什么时候"
+    // ⚠️ 这里的数字含义见 utils/partner.js，改动要和那边一起改。
+    partner: { v: 1, state: 'undecided', askedCount: 0, lastAskAt: 0, linkedAt: 0, lastSyncAt: 0, lastWords: 0 },
     // 外观：主题色 / 背景（key 见 utils/theme.js 的 ACCENTS 与 BACKGROUNDS）
     theme: {
       accent: 'blue',      // 主题色

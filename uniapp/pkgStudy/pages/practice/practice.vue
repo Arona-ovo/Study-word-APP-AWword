@@ -12,10 +12,15 @@
 
     <!-- PWstudy（番茄钟）把用户送过来时的来路提示 + 结束回跳。
          只有从那边跳进来才有（link 的 ctx 为空时整条不显示，行为与之前完全一致）。
-         学完点一下就带着"本次学会几个词 + 待了多久"回到那边的统计里。 -->
-    <view v-if="fromLink" class="pl-banner">
-      <text class="pl-txt">{{ $t('来自 PWstudy 的学习任务') }}</text>
-      <view class="pl-go" @tap="backToPartner">{{ $t('结束并返回') }}</view>
+         学完点一下就带着"本次学会几个词 + 待了多久"回到那边的统计里。
+         分两种粒度（协议字段 linked，规则见交接文档 11.8）：
+           linked = 1 / 没这个参数 → 自动：离开这一页时替用户跳回去，数据是这次的战果
+           linked = 0             → 手动：只留一行提示 + 「回去」按钮，不替用户做决定
+         区别只在"要不要替他跳"，**不是"能不能回去"** —— 人是点了对面的入口才过来的，
+         学完回不去跟绑架没区别。 -->
+    <view v-if="fromLink" class="pl-banner" :class="{ weak: !linked }">
+      <text class="pl-txt">{{ linked ? $t('来自 PWstudy 的学习任务') : $t('这一组是从 PWstudy 过来的') }}</text>
+      <view class="pl-go" @tap="backToPartner">{{ linked ? $t('结束并返回') : $t('回去') }}</view>
     </view>
 
     <!-- 答题流程 -->
@@ -394,7 +399,10 @@ export default {
       critiqueError: '',
       // 本次是不是从 PWstudy（番茄钟）跳进来的：
       // 决定顶部那条来路提示，以及离开时要不要把战果送回去
-      fromLink: false
+      fromLink: false,
+      // 对面有没有把我们当关联伙伴（= linked 参数不是 0）。false 时只给「回去」按钮，
+      // 不替用户自动跳 —— 他明确没点过「打通」，那就不由我们替他做这个决定。
+      linked: true
     }
   },
   computed: {
@@ -413,7 +421,14 @@ export default {
   async onLoad(opt) {
     // 从 PWstudy 跳进来的会话：顶部显示来路，离开时把战果送回去。
     // 自己点进来时 ctx 为空，这一行就是 false，之后所有联动分支都不会走。
-    try { this.fromLink = link.hasCtx() } catch (e) { this.fromLink = false }
+    // linked 一起读出来 —— 它决定"自动回跳"还是"留个按钮让用户自己点"。
+    try {
+      this.fromLink = link.hasCtx()
+      const c = link.getCtx()
+      if (c && c.linked === false) this.linked = false
+    } catch (e) {
+      this.fromLink = false
+    }
     try {
       this.bookId = wordbook.currentBookId()
       const r = aiGateReason()
@@ -449,7 +464,13 @@ export default {
     // 从 PWstudy 来的会话：离开时把战果送回去（实际停留分钟 + 确认通过 = 真学会的词数）。
     // 用 correctCount 而不是 answerCount —— 那边要的是"学会了几个词"，不是"做了几道题"。
     // 已经点过「结束并返回」时 ctx 已被消费，hasCtx 为假，这里不会重复记账。
-    try { if (this.fromLink && link.hasCtx()) link.finish(this.correctCount) } catch (e) {}
+    // ⚠️ 只在 linked（对面也认这个关联）时替用户跳 —— 没认就改成手动，见下面 else 分支。
+    try {
+      if (this.fromLink && link.hasCtx()) {
+        if (this.linked) link.finish(this.correctCount)
+        else link.clearCtx()
+      }
+    } catch (e) {}
   },
 
   methods: {
@@ -1091,6 +1112,23 @@ export default {
   background: var(--brand, #2e6bff);
 }
 .pl-go:active { opacity: 0.86; }
+
+/* linked = 0：对面没认这次关联，横幅降级 —— 一行字 + 一个「回去」按钮。
+   视觉做轻（去掉实心主色按钮），但它**必须在**：人是从对面点进来的，回不去像被扣下。 */
+.pl-banner.weak {
+  padding: 14rpx 22rpx;
+  background: rgba(var(--surface-rgb, 255, 255, 255), 0.5);
+}
+.pl-banner.weak .pl-txt {
+  font-size: 23rpx;
+  color: var(--ink-3, #98a19b);
+}
+.pl-banner.weak .pl-go {
+  padding: 8rpx 24rpx;
+  font-weight: 400;
+  color: var(--ink-1, #17201a);
+  background: rgba(var(--neutral-rgb, 23, 32, 26), 0.06);
+}
 
 /* 顶部双进度（已做 / 会了）：两条同分母，竖排各占一行 */
 .pb-top { margin-bottom: 24rpx; }

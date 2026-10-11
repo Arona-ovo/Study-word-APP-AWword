@@ -11,6 +11,11 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- PWstudy（番茄钟）联动：targetSdk >= 30 时必须在这里声明包名，
+             否则 plus.runtime.isApplicationExist({pname:'com.pwstudy.app'}) 一律返回 false
+             —— 检测不到它装没装，关联入口会一直显示"未检测到"。
+             包名以 PWstudy 仓库 manifest.json 为准，改了要两边同步。 -->
+        <package android:name="com.pwstudy.app" />
     </queries>
 
     <application>

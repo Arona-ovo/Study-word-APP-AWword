@@ -40,6 +40,8 @@ console.log('\n[3] 进来的字段名（PWstudy → 这边）');
 is(/params\.minutes/.test(link), '认 minutes（对方建议的本次时长）');
 is(/params\.task/.test(link), '认 task（对得上 PWstudy 的任务）');
 is(/params\.back/.test(link), '认 back（学完回哪去）');
+// linked：对面当前有没有把我们当已关联 —— 决定"自动回跳"还是"留个按钮自己点"（文档 11.8）
+is(/params\.linked/.test(link), '认 linked（0 = 手动回跳；没有这个参数按已关联处理）');
 is(/kind\s*!==\s*'study'/.test(link), "只认 kind = 'study'");
 
 console.log('\n[4] 回去的字段名（这边 → PWstudy）');
@@ -64,6 +66,12 @@ console.log('\n[6] 自己点开 App 时不受任何影响');
 // ctx 为空时整条链路必须完全不参与，否则没从 PWstudy 进来的用户会看到一条莫名的横幅
 is(/if\s*\(!\s*ctx\s*\)\s*return/.test(link), '没有 ctx 时直接返回');
 is(/v-if="fromLink"/.test(practice), '来路提示是 v-if 控制的（没来路就不渲染）');
+
+console.log('\n[7] 包名与 Android 包可见性（对接文档 11.1 / 11.2）');
+// 包名是对方检测我们装没装的钥匙 —— 发布后一改，老用户本地存的关联状态全部失效
+is(/"packageName"\s*:\s*"com\.AWword"/.test(mf), 'manifest 钉住了 packageName = com.AWword（发布后不许再改）');
+is(/<queries>[\s\S]*?<package\s+android:name="com\.pwstudy\.app"\s*\/>[\s\S]*?<\/queries>/.test(read('AndroidManifest.xml')),
+   'AndroidManifest.xml 的 <queries> 里声明了 com.pwstudy.app（targetSdk>=30 才看得到对方）');
 
 if (fail) {
   console.error('\n存在 ' + fail + ' 项失败');

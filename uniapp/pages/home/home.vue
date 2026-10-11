@@ -434,6 +434,18 @@
       @confirm="onDeleteConfirm"
       @cancel="delConfirm.show = false"
     />
+
+    <!-- 关联 PWstudy 的首次询问（三选一菜单）。
+         三个选项必须都在 —— 少一个「以后再说」或者「不用了」，它就成了绑架而不是询问。 -->
+    <app-dialog
+      :show="partnerAsk.show"
+      mode="sheet"
+      :title="$t('要和 PWstudy 打通吗？')"
+      :content="$t('检测到这台设备上装了 PWstudy（番茄钟 · 学习规划）。打通之后：它那边排的学习任务能一键把你送过来背，背完自动把时长和词数记回它今天的统计里。不打通也不影响背单词 —— 这一组该怎么背还怎么背。')"
+      :items="partnerAskItems"
+      @confirm="onPartnerAsk"
+      @cancel="partnerAsk.show = false"
+    />
   </view>
 </template>
 
@@ -469,6 +481,7 @@ import * as pageAgent from '../../services/page-agent.js'
 import * as cardSpec from '../../utils/card-spec.js'
 import { speak as speakAny } from '../../services/voice.js'
 import * as onboarding from '../../utils/onboarding.js'
+import * as partner from '../../utils/partner.js'
 import OnboardingMask from '../../components/onboarding-mask.vue'
 import SearchHistory from '../../components/search-history/search-history.vue'
 import * as searchHistory from '../../utils/search-history.js'
@@ -577,6 +590,9 @@ export default {
       sheetList: [],
       // 删除 AI 卡的确认弹窗（AppDialog）：记下要删的卡 id 与名字
       delConfirm: { show: false, id: '', name: '' },
+      // 关联 PWstudy 的首次询问（三选一）。和 detect 一样是"可选增强"：
+      // 没装 / 已关联 / 明确关掉 / 正在练习，任何一种情况都不弹。
+      partnerAsk: { show: false },
       dragIndex: -1,
       dragDy: 0,
       dragStartY: 0,
@@ -607,6 +623,15 @@ export default {
     }
   },
   computed: {
+    /** 首次询问的三个选项：接受 / 稍后 / 拒绝，一个都不能少 */
+    partnerAskItems() {
+      void this.__lang
+      return [
+        { label: t('打通（推荐）') },
+        { label: t('以后再说') },
+        { label: t('不用了，我就专心背') }
+      ]
+    },
     /** 双模式输入框：指令态给不同的 placeholder 与提示 */
     navPlaceholder() {
       void this.__lang   // 建立渲染依赖：切语言后 computed 立刻重算（否则 placeholder 卡在旧语言）
@@ -799,6 +824,9 @@ export default {
     try { uni.$emit('home:refresh') } catch (e) {}
     // 首次进入：放一遍新手引导（已看完 / 跳过则不弹；设置页可重看）
     this.queueGuide()
+    // 要不要问一句"和 PWstudy 打通吗"。内部自己判条件（装没装 / 问过几次 / 在不在练习），
+    // 最多问 3 次、两次之间至少隔 2 天，练习中一次都不弹。
+    this.maybePartnerAsk()
   },
   onHide() {
     if (this.searchTimer) { clearTimeout(this.searchTimer); this.searchTimer = 0 }
@@ -819,6 +847,7 @@ export default {
       this.guide.box = null
     }
     if (this.guideTimer) { clearTimeout(this.guideTimer); this.guideTimer = 0 }
+    if (this.__partnerTimer) { clearTimeout(this.__partnerTimer); this.__partnerTimer = 0 }
   },
   // 返回键 / 返回手势：搜索结果、编辑态、收纳抽屉都是"页面里的临时状态"，
   // 返回键该先退出它们，而不是直接把 App 退出（首页是栈底页，返回 = 退出应用）。
@@ -832,6 +861,45 @@ export default {
     return false
   },
   methods: {
+    // ---------- 关联 PWstudy（可选增强）----------
+    // 三个硬规矩：可跳过、可关闭、不绝不打断正在进行的事。
+    // 所以它是"延迟 1.2 秒 + 已有弹窗让路 + 正在练习不弹"这三件小事叠出来的。
+    maybePartnerAsk() {
+      if (this.__partnerTimer) clearTimeout(this.__partnerTimer)
+      this.__partnerTimer = setTimeout(() => {
+        this.__partnerTimer = 0
+        // 别人已经占着屏幕就别挤：引导遮罩、删除确认、收纳抽屉、编辑态、搜索结果
+        if (this.partnerAsk.show || this.delConfirm.show || this.guide.show) return
+        if (this.sheetShow || this.editing || this.searching) return
+        let go = false
+        try {
+          go = partner.shouldAsk({
+            installed: partner.installed(),
+            practicing: partner.practicing()
+          })
+        } catch (e) { go = false }
+        if (!go) return
+        // 先记账再弹：不管最后选哪个，这一轮"问过了"都成立，
+        // 否则关掉弹窗、切走再回来会立刻再问一次。
+        partner.markAsked()
+        this.partnerAsk = { show: true }
+      }, 1200)
+    },
+    /** 三选一的结果：0 打通 / 1 以后再说 / 2 不用了 */
+    onPartnerAsk(i) {
+      this.partnerAsk = { show: false }
+      if (i === 0) {
+        try { partner.link() } catch (e) {}
+        uni.showToast({ title: t('已关联 · 背完会自动把战绩记回那边'), icon: 'none', duration: 2400 })
+        return
+      }
+      // 1 = 以后再说：markAsked 已经在弹之前记过账了，这里什么都不做
+      if (i === 2) {
+        try { partner.unlink() } catch (e) {}
+        uni.showToast({ title: t('已关闭 · 设置页随时可以重新打开'), icon: 'none', duration: 2400 })
+      }
+    },
+
     // ---------- 新手引导 ----------
     // 原则：目标测不到（被收纳 / 结构变了）就跳过那一步，宁可少讲也不能卡死。
     // 首次进首页延迟一拍再启动：等首屏卡片渲染完，测量才有目标。

@@ -11,6 +11,52 @@ export default {
   '来自 PWstudy 的学习任务': 'Task from PWstudy',
   '结束并返回': 'Finish & return',
   '没找到 PWstudy，请手动切回去': 'PWstudy not found — please switch back manually',
+  // 关联意愿层（utils/partner.js）：首次询问的三选一 + 设置页四态。
+  // 这一层的每句话都在回答"不关联会怎样" —— 译文也别翻成"必须做"。
+  '这一组是从 PWstudy 过来的': 'You came here from PWstudy',
+  '回去': 'Go back',
+  '要和 PWstudy 打通吗？': 'Link with PWstudy?',
+  // 弹窗正文**不许带换行**：1) .dlg-content 没有 pre-line，换行渲染出来就是个空格；
+  // 2) i18n 的 normKey 会折叠空白 —— 带 \n 的 key 在查表时永远命中不了自己。
+  '检测到这台设备上装了 PWstudy（番茄钟 · 学习规划）。打通之后：它那边排的学习任务能一键把你送过来背，背完自动把时长和词数记回它今天的统计里。不打通也不影响背单词 —— 这一组该怎么背还怎么背。':
+    'PWstudy (pomodoro · study planner) is installed on this device. Link it and its study tasks can send you here to review — your time and word count go straight back into today\'s stats when you finish. Nothing changes if you skip it: you can keep studying exactly as you do now.',
+  '打通（推荐）': 'Link (recommended)',
+  '以后再说': 'Later',
+  '不用了，我就专心背': 'No thanks, I\'ll just study',
+  '已关联 · 背完会自动把战绩记回那边': 'Linked — your results will be sent back automatically',
+  '已关闭 · 设置页随时可以重新打开': 'Off — turn it back on in Settings any time',
+  '已关联 · 背完会自动把战绩记回它那边': 'Linked — results go back to PWstudy automatically',
+  '已关闭 · 随时可以在这里重新打开': 'Off — you can turn it back on here any time',
+  '已取消关联': 'Unlinked',
+  '没能打开 PWstudy，请手动切过去': 'Couldn\'t open PWstudy — please switch over manually',
+  '伙伴 App': 'Partner app',
+  '可选': 'Optional',
+  '已关联': 'Linked',
+  '未检测到': 'Not detected',
+  '关联后它那边排好的学习任务能一键把你送过来背，背完自动把时长和词数记回它今天。不关联也完全不影响 —— 这边背书、练习、复习一条都不少。':
+    'Once linked, its study tasks can send you here to review, and your minutes and word count go back to its today automatically. Skipping it changes nothing here — reviewing, practice and revision all work the same.',
+  '未检测到 PWstudy': 'PWstudy not detected',
+  '装上之后再回到这一页，关联入口会自动出现': 'Install it and come back — the link option shows up here automatically',
+  // ⚠️ 设置页那颗「重新检测」按钮用的就是性能检测那一条（全局唯一，别再抄一份）
+  '去 PWstudy': 'Open PWstudy',
+  '从那边挑一组任务过来背，背完自动回到这里': 'Pick a task over there and study it — you\'ll come right back afterwards',
+  '只断开跳转和回传，背过的词和记录一条都不会少': 'Only stops the hand-off — learned words and records stay put',
+  '尚未关联': 'Not linked',
+  '之前选过不用这个功能，随时可以重新打开': 'You skipped this before — turn it on again any time',
+  '设备上检测到 PWstudy，要不要打通？': 'PWstudy detected on this device — link it?',
+  '未设置': 'Not set',
+  '重新关联': 'Link again',
+  '关联': 'Link',
+  '不用了': 'No thanks',
+  '取消关联': 'Unlink',
+  '之后两边不再互相跳转，也不再回传词数。已经背过的词、打卡和全部学习记录都原样保留 —— 那是真实发生过的学习，不跟着关联一起删。':
+    'The two apps stop handing off to each other. Words you already learned, check-ins and every study record stay — that really happened, it won\'t be deleted along with the link.',
+  '今天 {min} 分钟 · {words} 词': 'Today {min} min · {words} words',
+  '还没有同步记录': 'no sync yet',
+  '刚刚同步': 'synced just now',
+  '{n} 分钟前同步': 'synced {n} min ago',
+  '{n} 小时前同步': 'synced {n} h ago',
+  '{n} 天前同步': 'synced {n} d ago',
 
   // ---------- 通用 ----------
   '确定': 'Confirm',

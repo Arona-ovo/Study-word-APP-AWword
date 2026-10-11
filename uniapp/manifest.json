@@ -28,7 +28,8 @@
         "distribute" : {
             "android" : {
                 "permissions" : [ "<uses-permission android:name=\"android.permission.INTERNET\"/>" ],
-                "schemes" : [ "awword" ]
+                "schemes" : [ "awword" ],
+                "packageName" : "com.AWword"
             },
             "ios" : {
                 "dSYMs" : false
