@@ -451,6 +451,16 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
     '监听键盘高度，且页面卸载时摘掉（不然会留一个幽灵回调）');
   assert(/\.chat-bottom \{[\s\S]{0,90}flex-shrink: 0/.test(chatSrc), '.chat-bottom 不参与收缩（高度由它和消息列表分）');
 
+  /* --- 9c. 消息一多就滑不动（用户反馈：「对话到第二句的时候甚至无法往下滑」）---
+     flex 列里的子项默认 `min-height: auto` = "不许比内容矮"。列表少了 `min-height: 0`，
+     消息一多就把容器撑高（而不是自己滚动）：容器溢出到可视区外 → 底部输入框被顶出屏幕，
+     列表高度等于内容高度 → 一点可滚余量都没有。这两条是那个 bug 的根，别删。 */
+  assert(/\.msg-list \{[\s\S]{0,400}min-height: 0/.test(chatSrc),
+    '消息列表写了 min-height: 0（少了它消息一多就把容器撑高、自己反而滑不动）');
+  assert(/\.chat-container\.chat-container \{[\s\S]{0,60}min-height: 0/.test(chatSrc),
+    '用双类选择器压掉全局 .container 的 min-height: 100vh（同特异性时不能赌加载顺序）');
+  assert(!/max-height:\s*100%/.test(chatSrc), '不再靠 max-height: 100% 兜高度（fixed 元素上百分比不一定按预期解析）');
+
   // 可视高度由 uni.getSystemInfoSync().windowHeight 提供（App 端 adjustResize 生效时它会变矮）
   let fakeWinH = 800;
   uni.getSystemInfoSync = () => ({ windowHeight: fakeWinH });
