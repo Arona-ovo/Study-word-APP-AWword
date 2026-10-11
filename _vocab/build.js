@@ -41,10 +41,22 @@ const OUT = path.join(__dirname, '..', 'uniapp', 'data')
 const LEX_START = 10001
 
 // 释义上限（汉字数）。中文在 UTF-8 里一个字 3 字节，这个数几乎线性地决定产物体积；
-// 而主包源码上限由 _tools/check-bundle-size.js 盯着（微信小程序主包 2MB 的余量换算出来的）。
-// 调大前先跑一遍那个脚本确认还有余量。
+// 主包源码上限由 _tools/check-bundle-size.js 盯着，装载耗时与常驻内存由
+// _tools/check-builtin-books.js 第 7 组盯着 —— 改这个数之前先跑这两个脚本。
+//
+// 两套上限，对应两个完全不同的消费方：
+//   MAX_MEAN      = 词书共享表那一行 = 一张**背诵卡**，要短、要一眼扫完（20 字）
+//   MAX_MEAN_FULL = 词典层的完整义项，回答的是"这个词到底有几个意思"（64 字）
+//
+// ⚠️ 别把两者合并：放宽共享表会把背诵卡撑成一堵墙，不放宽则义项永远只看得到前四五个
+// （用户实测反馈「有些一词多义显示不全」：light 源表有 22 个义项，界面上只摆得出 6 个）。
+// 完整版单独导出到 data/word-senses.js，只给查词 / 点读 / 词条页用。
 const MAX_MEAN = 20
+const MAX_MEAN_FULL = 64
 const MAX_SENSE = 10
+// 单个词最多收几个义项：极少数词的源表释义能拉到 20+ 条，
+// 全摆出来就变成一堵字墙了（长得最夸张的是 light / note，各 22 条）
+const MAX_SENSES = 12
 
 // 纯语法功能词：不当背单词词条（词义在内置词典里仍查得到），
 // 否则第一组会变成 "the / of / and" 这种没法背的内容。
@@ -102,8 +114,18 @@ const WORD_RE = /^[a-z][a-z'\-]*$/
 const SENSE_OK = /^[一-龥、，：？！…·～（）0-9]+$/
 // 合并后的整条释义：同上，外加义项之间的分号
 const MEAN_OK = /^[一-龥、，：？！…·～（）0-9；]+$/
-// 人名 / 地名 / 学科标注：这类义项是词典副产品，不是考点
-const SENSE_JUNK = /(人名|姓氏|名字|女子名|男子名|地名|国名|货币|化学元素|度量衡|棒球|足球术语)/
+// 人名 / 地名 / 学科标注：这类义项是词典副产品，不是考点。
+//
+// ⚠️ 这里每一条都必须是"标注用语"，不能是普通词义 —— 写宽了会整词误杀：
+//    以前这里写的是 `棒球`（本意 `棒球术语`），结果 `baseball ← n. 棒球` 唯一的
+//    义项被判为 junk → 整条丢弃 → 本地词典里查不到 baseball。改回 `棒球术语` 后恢复。
+//    同理别写裸 `术语` —— 那是 term / terminology 的正经义项。
+const SENSE_JUNK = /(人名|姓氏|名字|女子名|男子名|地名|国名|货币|化学元素|度量衡|棒球术语|足球术语)/
+// 词书共享表专用（严格档）：与上面只差一个裸 `棒球`，**不要去修它**。
+//   共享表的行号 = 用户的学习进度索引，而清洗规则决定了"哪些行留得下来"——
+//   改规则 = 改行成员 = 老用户已背记录错位且不报错。
+//   想给词典层纠偏请用 relaxed 档（见 buildEntry 的注释）。
+const SENSE_JUNK_LEGACY = /(人名|姓氏|名字|女子名|男子名|地名|国名|货币|化学元素|度量衡|棒球|足球术语)/
 
 // ---------------------------------------------------------------- 读取源数据
 
@@ -173,20 +195,43 @@ function normalizeSpace(s) {
   return s.replace(/[　\s]+/g, ' ').trim()
 }
 
+// 释义里的空格一律丢掉。
+// 源表大量使用「， 」「； 」这种"标点后加一个空格"的排版（alright / writer / cute /
+// specifically 全是这样），残留的空格会让整条义项过不了 SENSE_OK（它只认汉字与中文标点），
+// 于是这些再普通不过的词被整条丢弃、本地词典查不到 —— 实测 228 条被剔光的词里大头就是这个。
+// 中文释义本来也不需要空格，直接删掉即可。
+function dropSpace(s) {
+  return s.replace(/[　\s]+/g, '')
+}
+
 function trimPunct(s) {
   return s.replace(/^[,，;；.。、:：()（）[\]【】"'"'·]+|[,，;；.。、:：()（）[\]【】"'"'·]+$/g, '').trim()
 }
 
-function cleanSense(chunk) {
+/**
+ * @param chunk   原始片段
+ * @param stat    可选：传一个对象进来统计"为什么被丢"，用于调规则时看是哪条在误杀
+ * @param relaxed 可选：词典层档位。词书共享表**不能**开这个开关 —— 见下面两处说明。
+ */
+function cleanSense(chunk, stat, relaxed) {
+  const why = k => { if (stat) stat[k] = (stat[k] || 0) + 1 }
+  // relaxed：丢掉释义里的空格。
+  //   源表大量使用「， 」「； 」这种"标点后加一个空格"的排版（alright / writer / cute /
+  //   specifically 全是这样），残留空格会让整条义项过不了 SENSE_OK（它只认汉字与中文标点），
+  //   于是这些再普通不过的词被整条丢弃、本地词典查不到 ——
+  //   实测 228 条被剔光的候选词里，大头就是这个。中文释义本来也不需要空格。
+  //   ⚠️ 只对词典层开：放宽会让原本没释义的词变得有释义，
+  //      共享表一旦因此多出行，行号就全体位移了。
   let s = trimPunct(normalizeSpace(chunk))
-  if (!s || s.length < 2) return ''       // 单字多半是被切碎的残渣
-  if (!CJK.test(s)) return ''             // 没中文 = 残留标记
+  if (relaxed) s = dropSpace(s)
+  if (!s || s.length < 2) { why('tooShort'); return '' }   // 单字多半是被切碎的残渣
+  if (!CJK.test(s)) { why('noCJK'); return '' }         // 没中文 = 残留标记
   if (s.length > MAX_SENSE) s = s.slice(0, MAX_SENSE)
-  if (!SENSE_OK.test(s)) return ''        // 含拉丁字母 / 半角括号，多为音译人名或脏数据
-  if (SENSE_JUNK.test(s)) return ''
+  if (!SENSE_OK.test(s)) { why('badChar'); return '' }  // 含拉丁字母 / 半角括号 / 空格
+  if ((relaxed ? SENSE_JUNK : SENSE_JUNK_LEGACY).test(s)) { why('junk'); return '' }
   // 括号必须成对：源表里有 "(要人)的侍从" 这类写法，切开后容易只剩半个括号
   const c1 = (s.match(/（/g) || []).length, c2 = (s.match(/）/g) || []).length
-  if (c1 !== c2) return ''
+  if (c1 !== c2) { why('unpaired'); return '' }
   return s
 }
 
@@ -209,7 +254,19 @@ function clipMean(s, max) {
   return ''
 }
 
-function buildEntry(glosses) {
+/**
+ * 生成一条词条的「词性 + 释义」。
+ * @param glosses 该词在所有源表里的原始释义行
+ * @param cap     合并后整条释义的字数上限（词书卡用 MAX_MEAN，词典用 MAX_MEAN_FULL）
+ * @param maxSenses 最多收几个义项（防极少数词拉出 20 多义的字墙）
+ * @param stat    可选：统计"义项为什么被丢"，见 cleanSense
+ * @param relaxed 可选：启用「词典层」清洗档位（见 cleanSense）。
+ *                只有 extra-words / word-senses 两层能开 —— 共享表必须保持严格档，
+ *                否则会多出条目、行号位移，老用户已背记录错位（README「行序校验」）。
+ */
+function buildEntry(glosses, cap, maxSenses, stat, relaxed) {
+  const limit = cap || MAX_MEAN
+  const senseCap = maxSenses || 0
   let pos = ''
   const senses = []
 
@@ -221,8 +278,9 @@ function buildEntry(glosses) {
       if (m && POS_MAP[m[1]]) pos = POS_MAP[m[1]]
     }
     for (const chunk of splitSenses(stripPos(g))) {
-      const s = cleanSense(chunk)
+      const s = cleanSense(chunk, stat, relaxed)
       if (!s || covered(s, senses)) continue
+      if (senseCap && senses.length >= senseCap) break
       senses.push(s)
     }
   }
@@ -231,15 +289,29 @@ function buildEntry(glosses) {
   for (const s of senses) {
     if (!m) { m = s; continue }
     const next = m + '；' + s
-    if (next.length > MAX_MEAN) break
+    if (next.length > limit) break
     m = next
   }
 
-  // 全部义项都被过滤掉（多见于全是音译人名的条目）：退回第一条释义，截断保底
+  // 全部义项都被过滤掉（多见于全是音译人名的条目）：退回第一条释义，截断保底。
+  // ⚠️ 取"第一个非空"片段（relaxed 档）：stripPos 会把行首的词性标记换成 SEP，
+  //    切完第一个片段是空串 —— 直接取 [0] 等于拿空串去截断，必然什么也救不回来
+  //    （socks ← n. 袜子（sock的复数） 就是这样被整条丢掉的）。
+  //    词书共享表沿用旧的 [0] 口径（严格档），就是为了不动行成员。
   if (!m) {
     for (const g of ordered) {
-      const raw = trimPunct(normalizeSpace(splitSenses(stripPos(g))[0] || ''))
-      const clipped = clipMean(raw, MAX_MEAN)
+      const chunks = splitSenses(stripPos(g))
+      let raw = trimPunct(normalizeSpace(chunks[0] || ''))
+      if (relaxed) {
+        raw = dropSpace(raw)
+        if (!raw) {
+          for (const c of chunks) {
+            const x = dropSpace(trimPunct(normalizeSpace(c)))
+            if (x) { raw = x; break }
+          }
+        }
+      }
+      const clipped = clipMean(raw, limit)
       if (clipped) { m = clipped; break }
     }
   }
@@ -410,11 +482,17 @@ fs.readFileSync(path.join(OUT, 'common-words.js'), 'utf8')
   })
 
 const extraRows = []
+const dropped = []   // 释义被清洗剔光的候选词：留个诊断出口，方便回头调规则
+const dropStat = {}
 for (const [w, e] of all) {
   if (keptWordSet.has(w) || commonWordSet.has(w)) continue
-  const built = buildEntry(e.glosses)
-  if (!built.m) continue            // 释义被清洗规则剔光了（多为音译人名 / 缩写），不收录
+  const built = buildEntry(e.glosses, 0, 0, dropStat, true)
+  if (!built.m) { dropped.push({ w, glosses: e.glosses }); continue }
   extraRows.push({ w, pos: built.pos, m: built.m, s: freqScore(w) })
+}
+if (dropped.length) {
+  console.log(`[extra] 释义被剔光 ${dropped.length} 条（丢因：${JSON.stringify(dropStat)}），抽样：`)
+  dropped.slice(0, 12).forEach(d => console.log(`   ${d.w} ← ${d.glosses[0]}`))
 }
 // ---------------------------------------------------------------- 日常短词 / 口语 / 缩略语
 //
@@ -441,6 +519,33 @@ console.log(`[extra] 日常短词 / 口语 / 缩略语补 ${everydayHit} 条（�
 // 按词频排：查词命中多条时，靠前的更可能是用户想查的那个（与共享表同一口径）
 extraRows.sort((a, b) => a.s - b.s || (a.w < b.w ? -1 : 1))
 console.log(`[extra] 查词补充词库 ${extraRows.length} 条（候选 ${all.size}，已剔共享表 ${keptWordSet.size} / 常用词 ${commonWordSet.size}）`)
+
+// ---------------------------------------------------------------- 词典完整义项表（word-senses）
+//
+// 同一批候选词，按**同一套清洗规则**再出一份「不截断」的版本，只给查词 / 点读 / 词条页用。
+//
+// 为什么要分成两份，而不是直接把 MAX_MEAN 放宽：
+//   共享表的一行 = 一张**背诵卡**，释义要短、要能一眼扫完（20 字）。
+//   词典要回答的是"这个词到底有几个意思"（light 源表 22 个义项）。
+//   把两者绑在一起，就只能二选一：放宽 → 背诵卡变成一堵墙；
+//   不放宽 → 界面上永远只看得到前四五个义项（用户实测反馈「一词多义显示不全」）。
+//   用户这次特意点明「说的是单词库，不是词书」，正好就是这两个消费方的区别。
+//
+// 只收「被截断」的词：完整版跟短版一模一样的就不重复存了，省体积。
+// 和 extra-words.js 一样**不进任何词书**，不产生行号，不碰老用户的学习进度。
+const sensesRows = []
+for (const [w, e] of all) {
+  // short 用严格档：它必须与共享表里那条完全一致（词条页拿它当"短版"对比，
+  //                 判定"这个词到底还有没有更多义项可展开"）。
+  // full  用词典档：回答"这个词一共几个意思"，不受 20 字上限约束。
+  const short = buildEntry(e.glosses, MAX_MEAN)
+  const full = buildEntry(e.glosses, MAX_MEAN_FULL, MAX_SENSES, null, true)
+  if (!full.m || full.m === short.m) continue
+  sensesRows.push({ w, pos: full.pos, m: full.m, s: freqScore(w) })
+}
+sensesRows.sort((a, b) => a.s - b.s || (a.w < b.w ? -1 : 1))
+console.log(`[senses] 词典完整义项 ${sensesRows.length} 条`
+  + `（另有 ${all.size - sensesRows.length} 条短版已是全量，不重复导出）`)
 
 // lv 不落文件：运行时按「所在行 / 总行数」切四档即可（行已按词频排好序）
 const lvOf = (i, n) => {
@@ -521,6 +626,41 @@ export const EXTRA_COUNT = ${extraRows.length}
 export const EXTRA_RAW = \`${noShot(extraRaw)}\`
 `
 
+// ---------------------------------------------------------------- 词典完整义项表
+//
+// 与上面两张表同源、同清洗规则，唯一区别是**释义不截断**：
+// 短版（extra / lexicon）供背诵卡与搜索列表用，这一份供查词 / 点读 / 词条页用。
+//
+// 行格式：word|pos|完整释义（多个义项用全角分号隔开，与短版一致）
+//
+// ⚠️ 只收录"短版被截断"的词（上面的日志会打印条数），
+//    所以这个文件不是全量词表，缺一个词不代表本地不认识 —— 要查词请先走 utils/dict.js。
+// 词条来源与许可见 _vocab/README.md。
+const sensesRaw = '\n' + sensesRows.map(r => `${r.w}|${r.pos}|${r.m}`).join('\n') + '\n'
+const sensesKB = Buffer.byteLength(sensesRaw) / 1024
+
+const sensesJs = `// data/word-senses.js - 词典完整义项表（**自动生成，请勿手改**）
+// 生成脚本：_vocab/build.js（node _vocab/build.js）
+//
+// 存在理由（用户实测反馈「有些一词多义显示不全」）：
+//   源表一个词往往带七八个义项，而词书那张共享表的一行 = 一张背诵卡，
+//   释义最多只能留 20 字 —— 于是界面上永远只看得到前四五个意思。
+//   这里按同一套清洗规则另出一份不截断的版本，专供查词 / 点读 / 词条页显示。
+//
+// 为什么不直接放宽 MAX_MEAN：
+//   共享表的行号 = 用户的学习进度索引，而放宽释义会让背诵卡变成一堵字墙。
+//   两个消费方的需求本来就冲突，所以拆成两份，各自按自己的口径出数据。
+//
+// 只收「短版被截断」的词：完整版跟短版一样的就不重复存了，省体积。
+// 因此本文件**不是**全量词表 —— 判断"本地认不认识这个词"要走 dict.lookup()。
+//
+// 行格式：word|pos|完整释义（与共享表一致，义项之间用全角分号）
+// 词条来源与许可见 _vocab/README.md。
+export const SENSES_COUNT = ${sensesRows.length}
+
+export const SENSES_RAW = \`${noShot(sensesRaw)}\`
+`
+
 // ---------------------------------------------------------------- 规模快照
 // 设置页（在分包 pkgManage 里）的彩蛋要显示「本地装了多少东西」，
 // 但为了几个数字去 import 174KB 的语料，会把语料再复制一份进分包 —— 得不偿失。
@@ -553,16 +693,19 @@ export const BUILD_INFO = {
 fs.writeFileSync(path.join(OUT, 'lexicon-data.js'), lexiconJs, 'utf8')
 fs.writeFileSync(path.join(OUT, 'bookdata.js'), bookdataJs, 'utf8')
 fs.writeFileSync(path.join(OUT, 'extra-words.js'), extraJs, 'utf8')
+fs.writeFileSync(path.join(OUT, 'word-senses.js'), sensesJs, 'utf8')
 fs.writeFileSync(path.join(OUT, 'build-info.js'), buildInfoJs, 'utf8')
 
 const s1 = Buffer.byteLength(lexiconJs) / 1024
 const s2 = Buffer.byteLength(bookdataJs) / 1024
 const s3 = Buffer.byteLength(buildInfoJs) / 1024
 const s4 = Buffer.byteLength(extraJs) / 1024
+const s5 = Buffer.byteLength(sensesJs) / 1024
 console.log(`\n[out] lexicon-data.js ${s1.toFixed(1)}KB（${keptRows.length} 词条）`)
 console.log(`[out] bookdata.js ${s2.toFixed(1)}KB`)
 console.log(`[out] 合计 ${(s1 + s2).toFixed(1)}KB`)
 console.log(`[out] extra-words.js ${s4.toFixed(1)}KB（${extraRows.length} 条，只用于查词）`)
+console.log(`[out] word-senses.js ${s5.toFixed(1)}KB（${sensesRows.length} 条，词典完整义项）`)
 console.log(`[out] build-info.js ${s3.toFixed(1)}KB（句库 ${sentenceCount} 条，版本 ${APP_VERSION}）`)
 
 console.log('\n[sample] 最常考前 8 个词条：')
