@@ -1,22 +1,20 @@
 # _tools/gen-avatar.py - 生成「我的」页默认头像（uniapp/static/avatar-default.jpg）
 #
-# 为什么要有这个脚本：
-#   默认头像原来复用的是 static/mascot.jpg —— 那是张 800x480 的横版看板娘线稿。
-#   头像在 profile.vue 里是 110rpx 的正圆（mode="aspectFill"）：横图会被按短边放大、
-#   再取中间一块正方形，结果是人物在圆里又小又偏，光环和蝴蝶结还被切掉
-#   （对照图见 _tools/_scratch/avatar-before-after.py）。这种"能看见、但不像头像"的问题
-#   不看真机根本发现不了，所以这里干脆做一张专门的方形头像图。
-#   原画用 static/icons/icon-1024.png（与应用图标同源的正方形构图），裁成正方形、
-#   让「脸」落在正圆中心，再压成 512x512 的 jpg。
+# 为什么要有这个脚本（两代原因的叠加）：
+#   ① 最早默认头像复用的是 static/mascot.jpg —— 800x480 横图，塞进 110rpx 正圆后
+#      人物又小又偏（光环、蝴蝶结都被切掉），于是改成专门裁一张方形头像，把脸摆在圆心。
+#   ② 2026-10-11 用户反馈：那张裁切版「显示偏大」—— 裁切本身就是放大，画面被顶到圆的
+#      边缘，头顶蝴蝶结的尖、右上光环、左下围裙全落在圆外。要求「原框尽可能显示图片的全部」。
+#      所以现在改成 **整幅等比缩进去、一刀不裁**：把原画缩到外框的 FIT 比例，
+#      居中贴在方形画布上，四周补一圈取自原画四角的底色（JPEG 没有透明通道，
+#      补画面自己的浅蓝比补白更不突兀）。
+#   配合 profile.vue 的 mode="aspectFit"：默认图与用户自选的图，圆框里呈现的都是
+#   「完整的一幅」，而不是「被裁过的一块」。
+#
+#   注意：改这里只影响默认头像。用户自己选的头像走的是 utils/... 的本地文件，
+#   那个由 profile.vue 的 chooseAvatar() 负责，跟本脚本无关。
 #
 # 用法：python gen-avatar.py      （输出 ../../uniapp/static/avatar-default.jpg）
-#
-# 尺寸怎么来的（对着原画量的）：
-#   1024x1024 原画里，人物笔画范围约 x 0..986 / y 109..1023（左下角身体被画布裁掉）；
-#   脸（含腮红）大致在 x 300..620 / y 380..650，脸心约 (430, 500)。
-#   取 780x780 的方框、圆心 (450, 465)，即方框里那个内切圆（= 圆形头像实际可见范围）
-#   刚好把脸摆在圆心、头发和领结都留住，只切掉右上蝴蝶结的尖儿和左下角身体。
-#   换原画/换构图就调下面三个常量，然后看一眼 _tools/_scratch/preview-avatar.py 的预览图。
 from PIL import Image
 import os
 
@@ -24,26 +22,46 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, '..', 'uniapp', 'static', 'icons', 'icon-1024.png')
 OUT = os.path.join(HERE, '..', 'uniapp', 'static', 'avatar-default.jpg')
 
-CROP_SIDE = 780           # 裁切方框边长（原画像素）
-CROP_CX = 450             # 方框中心 x（对齐"脸心偏右一点点"，把蝴蝶结多留一点）
-CROP_CY = 465             # 方框中心 y
-OUT_SIZE = 512            # 输出边长（头像最大就显示 158px 物理像素，512 足够 3x 屏）
+FIT = 0.86          # 画面占外框的比例；剩下的当留白（太满就又是"偏大"）
+OUT_SIZE = 512      # 头像最大只显示 158px 物理像素，512 足够 3x 屏
 QUALITY = 88
+
+
+def bg_color(im):
+    """取原画四角 8x8 的平均色当留白底色 —— 原画背景是浅蓝渐变，
+    补它自己的颜色，接缝几乎看不出来（补白会有一圈白边）。"""
+    w, h = im.size
+    k = 8
+    pts = [(0, 0), (w - k, 0), (0, h - k), (w - k, h - k)]
+    rs = gs = bs = 0
+    for x, y in pts:
+        patch = im.crop((x, y, x + k, y + k))
+        r, g, b = patch.resize((1, 1), Image.BOX).getpixel((0, 0))
+        rs += r
+        gs += g
+        bs += b
+    n = len(pts)
+    return (rs // n, gs // n, bs // n)
 
 
 def main():
     if not os.path.exists(SRC):
         raise SystemExit('找不到原画：' + SRC)
     im = Image.open(SRC).convert('RGB')
-    side = min(CROP_SIDE, im.width, im.height)
-    l = max(0, min(im.width - side, CROP_CX - side // 2))
-    t = max(0, min(im.height - side, CROP_CY - side // 2))
-    box = (l, t, l + side, t + side)
-    out = im.crop(box).resize((OUT_SIZE, OUT_SIZE), Image.LANCZOS)
-    out.save(OUT, quality=QUALITY, optimize=True, progressive=True)
-    print('crop %s -> %s  %dx%d  %.1fKB'
-          % (box, os.path.relpath(OUT, os.path.join(HERE, '..')),
-             OUT_SIZE, OUT_SIZE, os.path.getsize(OUT) / 1024))
+    # 原画是非正方时取中间的正方（现在是 1024x1024，这一步是防呆）
+    side = min(im.width, im.height)
+    l = (im.width - side) // 2
+    t = (im.height - side) // 2
+    square = im.crop((l, t, l + side, t + side))
+
+    inner = int(round(OUT_SIZE * FIT))
+    canvas = Image.new('RGB', (OUT_SIZE, OUT_SIZE), bg_color(square))
+    off = (OUT_SIZE - inner) // 2
+    canvas.paste(square.resize((inner, inner), Image.LANCZOS), (off, off))
+    canvas.save(OUT, quality=QUALITY, optimize=True, progressive=True)
+    print('fit %dx%d -> %d/%d  原画 %dx%d  底色 %s  %dx%d  %.1fKB'
+          % (side, side, inner, OUT_SIZE, im.width, im.height,
+             bg_color(square), OUT_SIZE, OUT_SIZE, os.path.getsize(OUT) / 1024))
 
 
 if __name__ == '__main__':

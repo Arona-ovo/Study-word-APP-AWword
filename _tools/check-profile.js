@@ -6,9 +6,13 @@
 //  2) settings.js 与 profile.vue 两处默认值一致（两者各存一份，容易改漏一边）
 //  3) 老存档迁移：昵称仍为「学习者」或为空 → 自动改成 arona
 //  4) 用户自定义过的昵称不被迁移覆盖
-//  5) 默认头像必须指向 static/avatar-default.jpg（正方形、体积可控），
-//     不能再指回 800x480 的静态横图 mascot.jpg —— 头像框是 110rpx 正圆 + aspectFill，
+//  5) 默认头像必须指向 static/avatar-default.jpg（正方形、体积可控、整幅缩进不裁切），
+//     不能再指回 800x480 的静态横图 mascot.jpg —— 头像框是 110rpx 正圆，
 //     横图取中间方形后人物又小又偏、在圆里看不清脸，这种问题肉眼不看真机根本发现不了
+//  6) 头像是能换的（用户反馈「用户不能改图片」）：
+//     入口在编辑资料里 + 头像本身可点；走 chooseImage → saveFile 落本机 → profile.avatar；
+//     并且给了「恢复默认头像」（settings.set 是深合并，恢复默认必须显式写空串）
+//  7) 显示模式必须是 aspectFit（原框尽可能显示图片的全部），不能是 aspectFill
 
 const fs = require('fs');
 const path = require('path');
@@ -103,13 +107,64 @@ if (fs.existsSync(avPath)) {
   const sz = jpegSize(buf);
   assert(!!sz, '是合法 JPEG（FFD8 + SOF 段可解析）');
   if (sz) {
-    eq(sz.w, sz.h, '宽高相等（圆形头像用正方形，方形图不会被 aspectFill 裁）');
+    eq(sz.w, sz.h, '宽高相等（圆形头像用正方形）');
     assert(sz.w >= 256, '边长 ' + sz.w + 'px ≥ 256（110rpx 在 3x 屏约 158 物理像素）');
+    // 「整幅缩进不裁切」得能验：画面四周必须有一圈同色留白。
+    // 直接解 JPEG 像素太重，这里退一步查生成脚本的契约 ——
+    // 脚本一旦被改回 crop（旧写法），这几条就会红。
+    const gen = fs.readFileSync(path.join(__dirname, 'gen-avatar.py'), 'utf8');
+    assert(/FIT\s*=/.test(gen) && /canvas\.paste/.test(gen),
+      'gen-avatar.py 是「等比缩进 + 居中贴到方形画布」（不是裁切）');
+    assert(!/\.crop\(\s*box\s*\)/.test(gen) && !/CROP_SIDE/.test(gen),
+      'gen-avatar.py 里没有残留的裁切逻辑（CROP_SIDE / crop(box)）');
+    const fit = Number((/FIT\s*=\s*([\d.]+)/.exec(gen) || [])[1]);
+    assert(fit > 0.7 && fit < 0.98, 'FIT=' + fit + ' 在 0.7~0.98 之间（太小看不见人、太大又顶到圆边）');
   }
   const kb = Math.round(buf.length / 1024);
   if (kb > 0 && kb < 120) ok('体积 ' + kb + 'KB（应在 1-120KB，随包进 APK）');
   else bad('体积异常 ' + kb + 'KB（应在 1-120KB）');
 }
+
+console.log('== 6. 头像是能换的 ==');
+// 用户反馈：「用户不能改图片」。以前编辑资料里只有昵称 + 签名，头像压根没有入口，
+// 而左上角那张图也只是个 <image>，点了什么都不会发生。
+assert(/@tap="chooseAvatar"/.test(vueClean), '头像本身可点（@tap="chooseAvatar"）');
+assert(/class="field field-tap"[\s\S]{0,200}@tap="chooseAvatar"/.test(vueClean),
+  '编辑资料里有「头像」那一行，点整行也能换（光靠小圆图，新用户想不到去点）');
+assert(/\$t\('头像'\)/.test(vueClean), '那一行有「头像」标签');
+// 显示模式：原框尽可能显示图片的全部
+assert(/<image class="avatar" :src="avatarSrc" mode="aspectFit" \/>/.test(vueClean),
+  '大头像用 mode="aspectFit"（完整显示，不裁切）');
+assert(!/class="avatar"[^>]*aspectFill/.test(vueClean),
+  '大头像不再用 aspectFill（那是"偏大/被裁"的直接原因）');
+// 选图链路
+const chooseBody = vueClean.match(/chooseAvatar\(\) \{([\s\S]*?)\n    \},/);
+assert(!!chooseBody, '能抠出 chooseAvatar 方法体');
+if (chooseBody) {
+  const b = chooseBody[1];
+  assert(/uni\.chooseImage\(/.test(b), '走系统选图 chooseImage（不自己造相册）');
+  assert(/sourceType:\s*\[[^\]]*'album'/.test(b) && /'camera'/.test(b), '相册与拍照都给（端上二选一）');
+  assert(/uni\.saveFile\(/.test(b), '选完 saveFile 落到本机（临时路径重启后会没）');
+  assert(/fail:\s*\(\)\s*=>\s*\{[^}]*\}/.test(b), '用户取消选图要静默，不能弹错');
+  assert(/setAvatar\(/.test(b), '存好之后交给 setAvatar 落盘');
+}
+const setBody = vueClean.match(/\n    setAvatar\(path\) \{([\s\S]*?)\n    \},/);
+assert(!!setBody, '能抠出 setAvatar 方法体');
+if (setBody) {
+  assert(/settings\.set\(\{ profile: \{ avatar: p \} \}\)/.test(setBody[1]), 'setAvatar 写 profile.avatar');
+  assert(/this\.refresh\(\)/.test(setBody[1]), '写完立刻 refresh（avatarSrc 是 computed，靠它跟着变）');
+}
+assert(/\bt\('已更新头像'\)/.test(vueClean), '换完给一句反馈（不然用户不知道成没成）');
+// 恢复默认：settings.set 是深合并，必须显式写空串
+const resetBody = vueClean.match(/resetAvatar\(\) \{([\s\S]*?)\n    \},/);
+assert(!!resetBody, '能抠出 resetAvatar 方法体');
+if (resetBody) {
+  assert(/avatar: ''/.test(resetBody[1]),
+    '恢复默认显式写 avatar: \'\'（深合并下"删 key"删不掉 —— 项目约定 14）');
+  assert(!/delete\s/.test(resetBody[1]), '不是靠 delete 删字段');
+}
+assert(/v-if="profile\.avatar"[\s\S]{0,120}@tap="resetAvatar"/.test(vueClean),
+  '换过才显示「恢复默认头像」（没换过时那一行是死的，反而让人以为默认图被改了）');
 
 console.log('');
 console.log(fail === 0 ? '全部通过 ✓' : ('失败 ' + fail + ' 项 ✗'));

@@ -61,7 +61,7 @@
 ├── main.js / App.vue        # 入口 + 全局样式（设计令牌与原 DESIGN.md 一致）
 ├── pages.json               # 路由 + tabBar(4 项带图标) + 窗口样式（替代原 app.json）
 ├── manifest.json            # 应用配置（App 打包在此配置）
-├── static/avatar-default.jpg  # 「我的」页默认头像（512x512 正方形，_tools/gen-avatar.py 生成）
+├── static/avatar-default.jpg  # 「我的」页默认头像（512x512 正方形，整幅缩进不裁切，_tools/gen-avatar.py 生成）
 ├── static/mascot.jpg        # 看板娘横版原画（现只给仓库根 README 当 Logo，App 内不再引用）
 ├── static/mascot/           # 启动页阿罗娜七表情（smile/tongue/hi/nervous/sad/angry/shocked，按学习状态切换，见 pages/cover）
 ├── static/                  # 默认头像 / 看板娘 / icons/ 应用图标 / tabbar/ 底部导航图标（scripts/gen-tab-icons.py 生成）
@@ -1000,6 +1000,26 @@ uni-app 的 App 端原生容器**默认锁在 light**，只写 CSS 是跟不动�
 
 模板改动后可用 `_tools/check-tpl-balance.js <file.vue>` 校验标签配平  
 （注意要用 `lastIndexOf('</template>')` 取外层结束标签，页面里还有 `<template v-if>` 片段）。
+
+### 「我的」页：昵称 / 签名 / 头像
+
+- 「编辑资料」内联展开，昵称（≤20）与个性签名（≤40）走 `draft`，点「保存」才 `settings.set` 落盘
+- **头像是能换的**（2026-10-11）：两个入口 —— 左上角那张图本身可点，编辑资料里也有一行
+  「头像 · 相册 / 拍照 ›」（整行可点）。只把图做成可点的话，新用户根本想不到去点它，
+  用户反馈的「用户不能改图片」就是这么来的
+- 链路：`uni.chooseImage`（album + camera）→ `uni.saveFile` 落到本机持久目录
+  （`tempFilePaths` 重启后可能被清）→ `settings.set({ profile: { avatar } })` → `refresh()`。
+  选图**立即生效**，不跟昵称一起提交：它是立刻可见的图，选完还要再点「保存」反而奇怪；
+  取消选图静默（`fail` 里什么都不做）
+- 「恢复默认头像」只在换过之后出现。⚠️ `settings.set()` 是**深合并**（项目约定 14），
+  恢复默认必须**显式写 `avatar: ''`**，靠删 key 是删不掉的
+- 显示模式 `mode="aspectFit"`：无论默认图还是用户自选的图，圆框里都是「完整的一幅」。
+  ⚠️ 别改回 `aspectFill` —— 那是「默认图片显示偏大/被裁」的直接原因
+- 默认图 `static/avatar-default.jpg` 由 `_tools/gen-avatar.py` 生成，**整幅等比缩到 86%
+  居中贴到 512 方布上**（四周补一圈取自原画四角的浅蓝底色）。历史上它先是复用横版
+  mascot.jpg，后来改成"裁一张把脸摆圆心的方图"（裁切=放大 → 用户反馈偏大），
+  现在是"整幅缩进去不裁切"。改这里只影响默认图，用户自选的头像与脚本无关
+- 校验：`_tools/check-profile.js`（7 组）
 
 ## 五之三、首页自定义（跳转 / 小组件 / 拖拽收纳）
 
