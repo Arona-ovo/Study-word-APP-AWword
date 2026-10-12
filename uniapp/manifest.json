@@ -27,7 +27,10 @@
         },
         "distribute" : {
             "android" : {
-                "permissions" : [ "<uses-permission android:name=\"android.permission.INTERNET\"/>" ],
+                "permissions" : [
+                    "<uses-permission android:name=\"android.permission.INTERNET\"/>",
+                    "<uses-permission android:name=\"android.permission.QUERY_ALL_PACKAGES\"/>"
+                ],
                 "schemes" : [ "awword" ],
                 "packageName" : "com.AWword"
             },

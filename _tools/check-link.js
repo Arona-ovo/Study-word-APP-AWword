@@ -72,6 +72,9 @@ console.log('\n[7] 包名与 Android 包可见性（对接文档 11.1 / 11.2）'
 is(/"packageName"\s*:\s*"com\.AWword"/.test(mf), 'manifest 钉住了 packageName = com.AWword（发布后不许再改）');
 is(/<queries>[\s\S]*?<package\s+android:name="com\.pwstudy\.app"\s*\/>[\s\S]*?<\/queries>/.test(read('AndroidManifest.xml')),
    'AndroidManifest.xml 的 <queries> 里声明了 com.pwstudy.app（targetSdk>=30 才看得到对方）');
+// 双保险：<queries> 只对新装/重装的包生效，已经躺在用户手机里的老 APK 吃不到 ——
+// QUERY_ALL_PACKAGES 是同一件事的另一条路（PWstudy 侧也是这么做的）
+is(/QUERY_ALL_PACKAGES/.test(mf), 'manifest 声明了 QUERY_ALL_PACKAGES（包可见性的兜底）');
 
 if (fail) {
   console.error('\n存在 ' + fail + ' 项失败');

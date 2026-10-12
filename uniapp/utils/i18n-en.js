@@ -37,6 +37,8 @@ export default {
     'Once linked, its study tasks can send you here to review, and your minutes and word count go back to its today automatically. Skipping it changes nothing here — reviewing, practice and revision all work the same.',
   '未检测到 PWstudy': 'PWstudy not detected',
   '装上之后再回到这一页，关联入口会自动出现': 'Install it and come back — the link option shows up here automatically',
+  '它最近还唤起过我们，只是系统查询不到 —— 用新版安装包重新装一次就好': 'It sent you over recently, the system query just can\'t see it — reinstall from a fresh build and it will show up',
+  '仍然查不到 —— 如果确实装了，多半是系统不让查（Android 11+），重新打包安装后恢复': 'Still not found — if it really is installed, the system is probably hiding it (Android 11+). Rebuild and reinstall to fix it',
   // ⚠️ 设置页那颗「重新检测」按钮用的就是性能检测那一条（全局唯一，别再抄一份）
   '去 PWstudy': 'Open PWstudy',
   '从那边挑一组任务过来背，背完自动回到这里': 'Pick a task over there and study it — you\'ll come right back afterwards',

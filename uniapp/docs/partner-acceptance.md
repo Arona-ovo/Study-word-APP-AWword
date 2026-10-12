@@ -40,7 +40,55 @@
 
 ---
 
-## 二、必须 6 条的落点
+## 二、「明明装了却显示未检测到」—— 排查与兜底（2026-10-12 真机）
+
+现象：PWstudy 那边显示已关联、点「去背单词」能直接跳过来，AWword 这边却一直显示"未检测到 PWstudy"。
+
+### 先排除包可见性
+
+从 `unpackage/release/apk/AWword-1.1beta.apk` 里解出来的：
+
+```
+targetSdkVersion = 28     minSdkVersion = 21
+```
+
+**Android 11 的包可见性限制只对 `targetSdk >= 30` 生效**，28 的应用在 Android 11+ 上仍能查到全部已装应用 ——
+所以这条**不是**原因（`<queries>` 与 `QUERY_ALL_PACKAGES` 都已就位，纯粹是给以后升级 targetSdk 占位）。
+
+### 真正的嫌疑：包名对不上
+
+我们用 `plus.runtime.isApplicationExist({ pname: 'com.pwstudy.app' })` 查。对面实际装上去的包名
+若不是 `com.pwstudy.app`（HBuilderX 里手填了别的 / 用的是标准基座 `io.dcloud.*`），这里就是 false。
+
+自查（手机开 USB 调试）：
+
+```bash
+adb shell pm list packages | findstr /i pwstudy
+adb shell pm list packages | findstr /i dcloud
+# 或者直接问系统：AWword 到底能不能看见它
+adb shell dumpsys package com.pwstudy.app | findstr /i "versionCode firstInstallTime"
+```
+
+### 已经加的三档兜底（`utils/partner.js` → `installed()`）
+
+| 档 | 判据 | 覆盖什么 |
+|---|---|---|
+| ① | `isApplicationExist({ pname: 'com.pwstudy.app' })` | 包名正确时的正常路径 |
+| ② | `isApplicationExist({ action: VIEW, datauri: 'pwstudy://' })` | **包名不对但 scheme 仍是 pwstudy**（标准基座、改包名打包） |
+| ③ | 它最近真的把我们唤起过（`seenAt`，14 天有效） | 系统查询被拦 / 包名 scheme 都不对 —— 但它跳得过来就是跳得过来 |
+
+③ 由 `link.js` 的 `consume()` 在认领 `awword://study` 时记一笔，**纯 JS、不需要重新打包**（发 wgt 热更新也生效）。
+用户只要从 PWstudy 跳过来一次，设置页就会显示已装。
+
+设置页也跟着改了：查不到时会换一句说法（"它最近还唤起过我们…"），「重新检测」点了仍查不到会给 toast 说明可能原因，
+不再让人对着一个没反应的按钮反复点。
+
+> ⚠️ ①②两档涉及原生配置（`<queries>` / `QUERY_ALL_PACKAGES`），只有**重新云打包**才生效；
+> ③ 不需要。所以最短修复路径是：先发 wgt，让用户从 PWstudy 跳一次。
+
+---
+
+## 三、必须 6 条的落点
 
 | 条 | 落地 | 文件 |
 |---|---|---|
@@ -56,7 +104,7 @@
 
 ---
 
-## 三、真机自测最短路径
+## 四、真机自测最短路径
 
 ```bash
 # 1) 未装 PWstudy

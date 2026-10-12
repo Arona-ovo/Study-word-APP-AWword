@@ -46,8 +46,13 @@ function defaults() {
     //   state: undecided 还没决定 | linked 已关联 | declined 明确不用
     //   askedCount / lastAskAt 是防骚扰用的（最多自动问 3 次、两次之间至少隔 2 天）
     //   lastSyncAt / lastWords 是"链路真的通着"的证据 —— 设置页靠它回答"上次同步是什么时候"
+    //   seenAt  本地兜底字段：对面**真的把我们唤起过**的时间（见 partner.installed() 的第三档判定）。
+    //           系统查询可能被 Android 11+ 的包可见性拦掉，但"它跳得过来"这件事骗不了人。
     // ⚠️ 这里的数字含义见 utils/partner.js，改动要和那边一起改。
-    partner: { v: 1, state: 'undecided', askedCount: 0, lastAskAt: 0, linkedAt: 0, lastSyncAt: 0, lastWords: 0 },
+    partner: {
+      v: 1, state: 'undecided', askedCount: 0, lastAskAt: 0,
+      linkedAt: 0, lastSyncAt: 0, lastWords: 0, seenAt: 0
+    },
     // 外观：主题色 / 背景（key 见 utils/theme.js 的 ACCENTS 与 BACKGROUNDS）
     theme: {
       accent: 'blue',      // 主题色

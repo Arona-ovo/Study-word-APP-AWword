@@ -54,7 +54,7 @@ if (!readRaw('utils/partner.js')) bad('utils/partner.js 不存在');
 else ok('utils/partner.js 存在');
 is(/partner:\s*\{[^}]*state:\s*'undecided'/.test(setSrc),
   "settings 默认块带 partner.state = 'undecided'（未决定，不是默认就关联）");
-['state', 'isLinked', 'installed', 'practicing', 'shouldAsk', 'markAsked', 'link', 'unlink', 'noteSync', 'syncAgo']
+['state', 'isLinked', 'installed', 'seen', 'noteSeen', 'practicing', 'shouldAsk', 'markAsked', 'link', 'unlink', 'noteSync', 'syncAgo']
   .forEach((f) => {
     is(new RegExp('export\\s+function\\s+' + f + '\\s*\\(').test(pjs), 'partner.js 导出 ' + f + '()');
   });
@@ -90,7 +90,14 @@ console.log('\n== 4. 取消关联不能删数据 ==');
 
 console.log('\n== 5. 同步回执（否则通道断了没人知道） ==');
 is(/partner\.noteSync\(/.test(linkSrc), 'link.js 送出战果时调了 noteSync()（设置页才答得出"上次同步"）');
+is(/partner\.noteSeen\(/.test(linkSrc), '被对面唤起时记一笔 seenAt（系统查询被包可见性拦掉时的兜底证据）');
 is(/export\s+function\s+syncAgo/.test(pjs), 'partner.js 提供 syncAgo()');
+
+console.log('\n== 5b. 检测不到对面的兜底（Android 11+ 包可见性）==');
+is(/isApplicationExist\(\{\s*action:[\s\S]{0,120}datauri/.test(pjs),
+  '包名查不到时改查 scheme（第二档）');
+is(/return\s+seen\(\)/.test(pjs), '最末一档退回"它唤起过我们"');
+is(/SEEN_TTL_MS\s*=/.test(pjs), '唤起记录有有效期（卸了就不该一直当证据）');
 
 console.log('\n== 6. 首次询问的接线（home.vue） ==');
 is(/import\s+\*\s+as\s+partner\s+from\s+'\.\.\/\.\.\/utils\/partner\.js'/.test(home), 'home.vue 引入了 partner');
@@ -110,7 +117,7 @@ is(/__partnerTimer/.test(home), '定时器有句柄、离开首页时清掉');
 
 console.log('\n== 7. 设置页的常驻入口（四种状态、四个动作） ==');
 is(/import\s+\*\s+as\s+partner\s+from\s+'\.\.\/\.\.\/\.\.\/utils\/partner\.js'/.test(page), 'settings.vue 引入了 partner');
-['refreshPartner', 'doLink', 'doDecline', 'askUnlink', 'goPartner'].forEach((f) => {
+['refreshPartner', 'recheckPartner', 'doLink', 'doDecline', 'askUnlink', 'goPartner'].forEach((f) => {
   is(new RegExp('\\n\\s{4}' + f + '\\s*\\(').test(page), 'settings.vue 有 ' + f + '()');
 });
 is(/pn\.installed/.test(page) && /pn\.state\s*===\s*'linked'/.test(page) && /pn\.state\s*===\s*'declined'/.test(page),
@@ -119,6 +126,7 @@ is(/k\s*===\s*'partner'/.test(page), "收起态也要有一句话状态（secHin
 is(/pn\.state\s*===\s*'declined'\s*\?\s*\$t\('重新关联'\)/.test(page), '已关闭状态下给「重新关联」（一次误点不会永久失去）');
 is(/action:\s*'unlink'/.test(page) && /act\s*===\s*'unlink'/.test(page), '「取消关联」走了二次确认并真的落账');
 is(/v-if="!pn\.installed"[\s\S]{0,900}\$t\('重新检测'\)/.test(page), '未安装时只留「重新检测」（不给点了没反应的按钮）');
+is(/pn\.seen\s*\?[\s\S]{0,120}\$t\(/.test(page), '查不到但"它唤起过我们"时换一句说法（不是干巴巴一句"没装"）');
 is(/void this\.__lang[\s\S]{0,400}今天 \{min\} 分钟 · \{words\} 词/.test(page), '已关联状态行说的是 i18n 占位符句子（不是裸拼中文）');
 is(/this\.refreshPartner\(\)/.test(page), 'onShow → refresh() 每次重查系统（刚装/刚卸都要看得到）');
 
@@ -133,6 +141,7 @@ is(/backToPartner/.test(practice), '手动「回去」仍然是同一个 finish 
 console.log('\n== 9. 运行时：状态机真跑一遍 ==');
 const mem = {};
 let installedFlag = false;
+let schemeFlag = false;   // "系统能查到接得住 pwstudy:// 的 Activity" 与否
 const opened = [];
 const toasts = [];
 global.uni = {
@@ -143,7 +152,12 @@ global.uni = {
 };
 global.plus = {
   runtime: {
-    isApplicationExist: (o) => (installedFlag && o && o.pname === 'com.pwstudy.app'),
+    // 真机上 Android 11+ 会拦掉 pname 查询（一律 false），这里两档都能开，方便验兜底
+    isApplicationExist: (o) => {
+      if (o && o.pname) return !!installedFlag
+      if (o && o.datauri) return !!schemeFlag
+      return false
+    },
     openURL: (u) => { opened.push(String(u)); return true; },
     launchApplication: () => true
   }
@@ -164,6 +178,20 @@ const partnerMod = load('utils/partner.js', {
 const linkMod = load('utils/link.js', { partner: partnerMod, plus: global.plus });
 
 const ask = (pract) => partnerMod.shouldAsk({ installed: partnerMod.installed(), practicing: !!pract });
+
+// —— 检测的三档判定（真机上最常出问题的一处）——
+installedFlag = false;
+schemeFlag = false;
+settingsMod.set({ partner: { seenAt: 0 } });
+eq(partnerMod.installed(), false, '包名查不到、也没人唤起过 → 未检测到');
+schemeFlag = true;
+eq(partnerMod.installed(), true, '包名查不到但接得住 pwstudy:// → 仍算装了（第二档）');
+schemeFlag = false;
+partnerMod.noteSeen();
+eq(partnerMod.installed(), true, '系统查询全失败、但它真唤起过我们 → 也算装了（第三档，最硬）');
+settingsMod.set({ partner: { seenAt: Date.now() - 20 * 86400000 } });
+eq(partnerMod.installed(), false, '唤起记录超过 14 天 → 不再当证据（可能早卸了）');
+settingsMod.set({ partner: { seenAt: 0 } });
 
 // —— 只装 AWword：一切不可见 ——
 installedFlag = false;
@@ -378,12 +406,24 @@ const svm = Object.assign({}, St.data ? St.data() : {}, St.methods || {});
 // pn 是模板四态的唯一数据源；__lang 是 $t 的语言依赖标记
 svm.__lang = 1;
 
+// 系统查不到（Android 11+ 包可见性），但它刚把用户送过来过 → 界面不能再说"未检测到"
 installedFlag = false;
+partnerMod.noteSeen();
+svm.refreshPartner();
+eq(svm.pn.installed, true, '系统查不到但它唤起过我们 → 界面算已装');
+eq(svm.pn.seen, true, 'pn.seen 同步给模板（未检测到时会换一句说法）');
+
+settingsMod.set({ partner: { seenAt: 0 } });
 partnerMod.unlink();   // 先落到 declined，再看四种分支各自怎么写 pn
 svm.refreshPartner();
 eq(svm.pn.installed, false, 'pn.installed = false（没检测到 PWstudy）');
 eq(svm.secHint('partner'), '未检测到', '收起态一句话 = 未检测到');
 
+installedFlag = false;
+settingsMod.set({ partner: { seenAt: 0 } });
+toasts.length = 0;
+svm.recheckPartner();
+eq(toasts.length, 1, '「重新检测」仍查不到 → 说清可能原因（不是点了没反应）');
 installedFlag = true;
 svm.refreshPartner();
 eq(svm.pn.installed, true, '装了 → pn.installed = true');

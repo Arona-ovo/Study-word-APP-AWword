@@ -84,9 +84,12 @@ export function practicing(pages) {
 function blank() {
   return {
     v: PROTOCOL_V, state: 'undecided',
-    askedCount: 0, lastAskAt: 0, linkedAt: 0, lastSyncAt: 0, lastWords: 0
+    askedCount: 0, lastAskAt: 0, linkedAt: 0, lastSyncAt: 0, lastWords: 0, seenAt: 0
   }
 }
+
+// "它唤起过我们"这条证据的有效期：超过 14 天就当没这回事（可能早卸了）
+export const SEEN_TTL_MS = 14 * 24 * 3600 * 1000
 
 export function state() {
   try {
@@ -110,22 +113,48 @@ export function isLinked() {
 /* ==================== 检测对方装没装 ==================== */
 
 /**
- * 伙伴 App 是否已安装。
- * 只支持 App 端 —— H5 / 小程序压根没有"检测已安装应用"这回事，直接 false。
+ * 伙伴 App 是否已安装。只支持 App 端 —— H5 / 小程序压根没有"检测已安装应用"，直接 false。
  *
- * ⚠️ Android 11（API 30）起有包可见性限制：targetSdk >= 30 的应用必须在 manifest 里
- *    声明 <queries> 才看得到别的包，否则这里一律 false（表现为永远"未检测到"）。
- *    uniapp/AndroidManifest.xml 已经补了那条声明，别删（文档 11.2）。
+ * 三档判定，从准到粗，任何一档命中就算装了：
+ *   ① 按包名查（最准，也是最容易失效的一档）
+ *   ② 查"有没有 Activity 接得住 pwstudy://"（Android 11+ 上包名查询被拦时，这条常被放行）
+ *   ③ 它最近真的把我们唤起过（见 noteSeen）—— 系统查询说没装，可它明明跳得过来
+ *
+ * 为什么要叠到三档：Android 11（API 30）起有包可见性限制，targetSdk >= 30 的应用
+ * 默认**看不见**别的已安装应用，① 会一律 false —— 表现就是"对面都能跳过来，这边
+ * 却一直显示未检测到"。manifest 侧的 <queries> 与 QUERY_ALL_PACKAGES 都要**重新云打包**
+ * 才生效，已经装在用户手机上的老 APK 永远吃不到，所以运行时必须有后两档兜底。
  */
 export function installed() {
+  const p = partnerOf()
   // #ifdef APP-PLUS
   try {
-    if (typeof plus !== 'undefined' && plus.runtime && typeof plus.runtime.isApplicationExist === 'function') {
-      return !!plus.runtime.isApplicationExist({ pname: partnerOf().pkg })
+    const rt = (typeof plus !== 'undefined' && plus.runtime) ? plus.runtime : null
+    if (rt && typeof rt.isApplicationExist === 'function') {
+      if (rt.isApplicationExist({ pname: p.pkg })) return true
+      try {
+        if (rt.isApplicationExist({
+          action: 'android.intent.action.VIEW',
+          datauri: p.scheme + '://'
+        })) return true
+      } catch (e) {}
     }
   } catch (e) {}
   // #endif
-  return false
+  return seen()
+}
+
+/**
+ * 「它唤起过我们」—— 由 utils/link.js 在被 pwstudy:// 唤起时记一笔。
+ * 这是最硬的一条证据：系统可以不让查，但跳转发生过就是发生过。
+ */
+export function seen() {
+  const at = Number(state().seenAt) || 0
+  return !!at && Date.now() - at < SEEN_TTL_MS
+}
+
+export function noteSeen() {
+  return write({ seenAt: Date.now() })
 }
 
 /* ==================== 该不该自动问 ==================== */

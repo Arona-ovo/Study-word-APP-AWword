@@ -743,11 +743,11 @@
         <view class="row" v-if="!pn.installed">
           <view class="row-main">
             <text class="row-title">{{ $t('未检测到 PWstudy') }}</text>
-            <text class="row-desc">{{ $t('装上之后再回到这一页，关联入口会自动出现') }}</text>
+            <text class="row-desc">{{ pn.seen ? $t('它最近还唤起过我们，只是系统查询不到 —— 用新版安装包重新装一次就好') : $t('装上之后再回到这一页，关联入口会自动出现') }}</text>
           </view>
         </view>
         <view class="pn-actions" v-if="!pn.installed">
-          <view class="pn-btn" @tap="refreshPartner">{{ $t('重新检测') }}</view>
+          <view class="pn-btn" @tap="recheckPartner">{{ $t('重新检测') }}</view>
         </view>
 
         <!-- ② 已关联：先把"链路真的通着"的证据摆出来，再给退出口 -->
@@ -978,7 +978,7 @@ export default {
       },
       // 伙伴 App（PWstudy）的关联状态：四种展示形态共用这一个对象
       // （见 utils/partner.js —— 意愿存 settings.partner）
-      pn: { installed: false, state: 'undecided', min: 0, words: 0, sync: 'never', syncN: 0 },
+      pn: { installed: false, seen: false, state: 'undecided', min: 0, words: 0, sync: 'never', syncN: 0 },
       // ---------- 数据导出 / 导入（换手机迁移） ----------
       // busy 期间行上显示一行进度文案（打包中 / 正在查找备份…），避免"点了没反应"
       backupBusy: false,
@@ -1785,6 +1785,8 @@ export default {
         const ago = partner.syncAgo()
         this.pn = {
           installed: partner.installed(),
+          // 系统查询说没装、但它最近唤起过我们（Android 11+ 的包可见性）：界面要给个说法
+          seen: partner.seen(),
           state: partner.state().state,
           min: partner.todayMin(),
           words: partner.todayWords(),
@@ -1792,6 +1794,19 @@ export default {
           syncN: ago.n
         }
       } catch (e) {}
+    },
+    /**
+     * 「重新检测」：查完还要给句话 —— 点了没反应是最让人怀疑"是不是坏了"的体验。
+     * 仍查不到时说明可能原因，而不是只把按钮留着让人反复点。
+     */
+    recheckPartner() {
+      this.refreshPartner()
+      if (!this.pn.installed) {
+        uni.showToast({
+          title: t('仍然查不到 —— 如果确实装了，多半是系统不让查（Android 11+），重新打包安装后恢复'),
+          icon: 'none', duration: 3000
+        })
+      }
     },
     doLink() {
       try { partner.link() } catch (e) {}

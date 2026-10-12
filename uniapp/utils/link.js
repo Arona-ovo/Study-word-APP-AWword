@@ -132,6 +132,9 @@ export function consume(url, go) {
     linked: lk !== '0',
     startAt: Date.now()
   };
+  // 记一笔"对面真的把我们唤起过"：系统查询（isApplicationExist）可能被 Android 11+ 的
+  // 包可见性拦掉，但这条跳转发生过就是发生过 —— 设置页据此不再显示"未检测到"。
+  try { partner.noteSeen() } catch (e) {}
   const nav = go || function (u) { uni.navigateTo({ url: u }); };
   try {
     // from=pwstudy 只是给页面一个标记（练习页读它显示来路横幅）
