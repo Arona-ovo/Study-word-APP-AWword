@@ -7,7 +7,16 @@
     <view class="stage">
       <view class="ring"></view>
       <view class="mascot-wrap">
-        <image class="mascot" :src="mascotSrc" mode="aspectFill" />
+        <!-- 底层：与原生启动图同一张脸，保证 splash 淡出时看不出换图 -->
+        <image class="mascot" :src="baseSrc" mode="aspectFill" />
+        <!-- 上层：按学习状态选的表情，解码完成后淡入盖住底层（直接换 src 是硬切） -->
+        <image
+          class="mascot mascot-mood"
+          :class="{ show: moodShown }"
+          :src="moodSrc"
+          mode="aspectFill"
+          @load="onMoodLoad"
+        />
       </view>
     </view>
 
@@ -38,17 +47,49 @@ const MASCOTS = {
   shocked: '/static/mascot/arona-shocked.jpg' // 断签 14 天以上 → 震惊
 }
 
+// 底层固定那张脸：必须与**原生启动图**（static/splash/*.9.png）里画的是同一张。
+// 原生 splash 淡出后露出来的就是 cover 这个圆圈，两张一致才是"没换过图"；
+// 之后才按学习状态把表情**淡入**盖上来。
+// ⚠️ 改这里要同时改 _tools/gen-splash.py 的 MASCOT（check-cover-mascot.js 第 4 组盯）。
+const BASE_MOOD = 'hi'
+
+const AUTO_ENTER_MS = 2400   // 自动进入首页（与底部进度条动画同步）
+const SWAP_DELAY_MS = 900    // 换脸时机：等开场文字动画（0.25s~1s）走完再换
+const FADE_MS = 600          // 交叉淡入时长（与样式 .mascot-mood 的 transition 一致）
+const LOAD_FALLBACK_MS = 400 // @load 没来时的兜底（缓存命中可能不触发）
+
 export default {
   data() {
-    return { mascotSrc: MASCOTS.hi }
+    return {
+      baseSrc: MASCOTS[BASE_MOOD],
+      moodSrc: MASCOTS[BASE_MOOD], // 先与底层同图（避免空 src），需要换时才改
+      moodShown: false,
+      moodLoaded: false,
+      swapReady: false
+    }
   },
   onLoad() {
-    this.mascotSrc = MASCOTS[this.pickMood()] || MASCOTS.hi
-    // 2.4 秒后自动进入首页，与底部进度条动画同步
-    this.timer = setTimeout(() => this.enter(), 2400)
+    // ⚠️ 首帧必须是底层那张（= 原生启动图），表情只能**淡入**，
+    //    不能在 onLoad 里直接改掉 src —— 那会让用户看到"圆圈里跳了两张脸"。
+    this.moodSrc = MASCOTS[this.pickMood()] || MASCOTS[BASE_MOOD]
+    if (this.moodSrc === this.baseSrc) {
+      this.moodShown = true // 表情正好就是底层那张：不必淡入
+    }
+    this._swapTimer = setTimeout(() => {
+      this.swapReady = true
+      this.maybeShowMood()
+    }, SWAP_DELAY_MS)
+    // 兜底：@load 命中缓存时可能不触发，别让脸一直卡在底层
+    this._loadTimer = setTimeout(() => {
+      this.moodLoaded = true
+      this.maybeShowMood()
+    }, SWAP_DELAY_MS + LOAD_FALLBACK_MS)
+    this.timer = setTimeout(() => this.enter(), AUTO_ENTER_MS)
   },
   onUnload() {
     clearTimeout(this.timer)
+    clearTimeout(this._swapTimer)
+    clearTimeout(this._loadTimer)
   },
   methods: {
     // 按练习记录选表情（越具体的判断越靠前）：
@@ -84,10 +125,22 @@ export default {
         return 'hi' // 存储异常时兜底，不能让启动页卡住
       }
     },
+    // 上层表情图解码完成 —— 换脸的第二个条件（第一个是开场动画走完）
+    onMoodLoad() {
+      this.moodLoaded = true
+      this.maybeShowMood()
+    },
+    // 两个条件都满足才淡入：① 开场动画走完 ② 新图已解码（否则会淡入出一张空白）
+    maybeShowMood() {
+      if (this.moodShown || !this.swapReady || !this.moodLoaded) return
+      this.$nextTick(() => { this.moodShown = true })
+    },
     enter() {
       if (this.entered) return
       this.entered = true
       clearTimeout(this.timer)
+      clearTimeout(this._swapTimer)
+      clearTimeout(this._loadTimer)
       uni.switchTab({ url: '/pages/home/home' })
     }
   }
@@ -147,6 +200,7 @@ export default {
 }
 
 .mascot-wrap {
+  position: relative; /* 上层表情图要叠在底层那张上 */
   width: 320rpx; height: 320rpx;
   border-radius: 50%;
   background: #ffffff;
@@ -160,6 +214,17 @@ export default {
 }
 
 .mascot { width: 100%; height: 100%; }
+
+/* 上层表情图：默认全透明，等「开场动画走完 + 图已解码」才淡入盖住底层。
+   直接换 src 是硬切（用户会看到圆圈里先后两张脸），所以必须叠一层做过渡。
+   ⚠️ 600ms 与脚本里的 FADE_MS 是一对，改一个要改另一个（check-cover-mascot.js 盯）。 */
+.mascot-mood {
+  position: absolute;
+  left: 0; top: 0;
+  opacity: 0;
+  transition: opacity 600ms ease;
+}
+.mascot-mood.show { opacity: 1; }
 
 .brand {
   display: flex; flex-direction: column; align-items: center;

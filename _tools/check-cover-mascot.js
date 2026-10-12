@@ -1,10 +1,13 @@
 // _tools/check-cover-mascot.js - 校验启动页阿罗娜表情按学习状态切换（只读）
 // 断言：
-//   1. cover.vue 圆框绑定的 mascotSrc 来自 MASCOTS 映射（不再写死单图）
-//   2. pickMood 调真实 engine 的 history/streak/overview/dateStr，按 9 种状态选 7 种表情
-//   3. 七张表情图真实存在于 static/mascot/，体积可控（<120KB）
-//   4. 各学习状态下引擎读数与预期表情一致（用真实 engine 计算）
-const { load } = require('./lib/load');
+//   1. cover.vue 圆框是**两层图**：底层 baseSrc（= 原生启动图那张）+ 上层 moodSrc（状态表情）
+//   2. 换脸必须是**淡入**，不是直接改 src（直接改 = 用户看到圆圈里跳了两张脸）
+//   3. pickMood 调真实 engine 的 history/streak/overview/dateStr，按 9 种状态选 7 种表情
+//   4. 七张表情图真实存在于 static/mascot/，体积可控（<120KB）
+//   5. 各学习状态下引擎读数与预期表情一致（用真实 engine 计算）
+//   6. 原生启动图（gen-splash.py 的 MASCOT）与 cover 底层图是**同一张**
+//   7. 换脸时序真跑：首帧不换、动画没走完不换、图没解码不换、@load 不来有兜底
+const { load, loadCode } = require('./lib/load');
 const fs = require('fs');
 const path = require('path');
 
@@ -21,8 +24,16 @@ function eq(actual, expect, label) {
 console.log('[1] cover.vue 源码契约');
 const src = fs.readFileSync(path.join(ROOT, 'pages', 'cover', 'cover.vue'), 'utf8')
   .replace(/^\s*\/\/.*$/gm, '');
-if (/:src="mascotSrc"/.test(src)) ok('圆框 image 绑定 mascotSrc');
-else bad('圆框 image 未绑定 mascotSrc');
+if (/:src="baseSrc"/.test(src)) ok('底层 image 绑定 baseSrc（= 原生启动图那张脸）');
+else bad('底层 image 未绑定 baseSrc');
+if (/:src="moodSrc"/.test(src)) ok('上层 image 绑定 moodSrc（按状态选的表情）');
+else bad('上层 image 未绑定 moodSrc');
+// ⚠️ 老写法是 data 里 mascotSrc: MASCOTS.hi、onLoad 里再赋一次 —— 同一次启动渲染两张脸，
+//    用户看到的就是"圆圈里的图片变成两种"。这条把硬切钉死。
+if (!/this\.mascotSrc\s*=/.test(src)) ok('不再直接改写同一个 src（那是硬切）');
+else bad('仍在 onLoad 里直接改 src —— 用户会看到两张脸');
+if (/moodSrc:\s*MASCOTS\[BASE_MOOD\]/.test(src)) ok('moodSrc 初值不是 pickMood 结果（首帧不许直接上表情）');
+else bad('moodSrc 初值就是状态表情（首帧会跟原生启动图不一致）');
 if (!/src="\/static\/mascot\.jpg"/.test(src)) ok('不再写死 /static/mascot.jpg');
 else bad('仍写死 /static/mascot.jpg');
 if (/pickMood/.test(src)) ok('存在 pickMood');
@@ -38,6 +49,28 @@ for (const mood of ['smile', 'tongue', 'hi', 'nervous', 'sad', 'angry', 'shocked
 }
 if (/catch \(e\)/.test(src)) ok('pickMood 有异常兜底');
 else bad('pickMood 缺异常兜底（存储异常不能卡启动页）');
+
+// ---- 换脸必须是淡入，且要在自动进首页之前淡完 ----
+const numOf = (name) => Number((new RegExp('const\\s+' + name + '\\s*=\\s*(\\d+)').exec(src) || [])[1]);
+const AUTO_ENTER = numOf('AUTO_ENTER_MS');
+const SWAP_DELAY = numOf('SWAP_DELAY_MS');
+const FADE = numOf('FADE_MS');
+const LOAD_FB = numOf('LOAD_FALLBACK_MS');
+if (AUTO_ENTER > 0 && SWAP_DELAY > 0 && FADE > 0 && LOAD_FB > 0)
+  ok('换脸时序是四个具名常量（' + SWAP_DELAY + ' 起换 / 淡 ' + FADE + ' / 兜底 +' + LOAD_FB + ' / ' + AUTO_ENTER + ' 进首页）');
+else bad('换脸时序常量缺失（AUTO_ENTER_MS / SWAP_DELAY_MS / FADE_MS / LOAD_FALLBACK_MS）');
+if (SWAP_DELAY >= 600 && SWAP_DELAY <= 1500) ok('换脸时机在开场动画之后（' + SWAP_DELAY + 'ms）');
+else bad('换脸时机 ' + SWAP_DELAY + 'ms 不对：太早会压住开场动画，太晚淡不完');
+if (SWAP_DELAY + FADE < AUTO_ENTER) ok('淡入在自动进首页之前完成（' + (SWAP_DELAY + FADE) + ' < ' + AUTO_ENTER + '）');
+else bad('淡入没结束就被切进首页（' + (SWAP_DELAY + FADE) + ' >= ' + AUTO_ENTER + '）');
+const fadeCss = Number((/transition:\s*opacity\s*(\d+)ms/.exec(src) || [])[1]);
+if (fadeCss === FADE) ok('样式过渡时长与 FADE_MS 一致（' + FADE + 'ms）');
+else bad('样式过渡 ' + fadeCss + 'ms 与 FADE_MS(' + FADE + ') 不一致');
+if (/\.mascot-mood\s*\{[^}]*opacity:\s*0/.test(src) && /\.mascot-mood\.show\s*\{[^}]*opacity:\s*1/.test(src))
+  ok('上层默认透明、加 .show 才显示（淡入不是硬切）');
+else bad('上层图不是 opacity 0→1 的淡入写法');
+if (/@load="onMoodLoad"/.test(src) && /onMoodLoad\(\)\s*\{/.test(src)) ok('上层图解码完成才淡入（@load）');
+else bad('缺 @load → onMoodLoad（图没解码完就淡入会露出空白）');
 
 // ---------- 第 2 组：七张表情图存在且体积可控 ----------
 console.log('[2] static/mascot 表情图');
@@ -142,5 +175,84 @@ eq(mood(), 'angry', '断签 3 天');
 store.reset();
 setDay(15, 10, 6);
 eq(mood(), 'shocked', '断签 14 天');
+
+// ---------- 第 4 组：原生启动图与 cover 底层图必须是同一张脸 ----------
+// 原生 splash 一淡出，露出来的就是 cover 这个圆圈。两张不一致的话，
+// 用户看到的就是"圆圈里的图片变成两种"（哪怕 cover 内部已经改成淡入了）。
+console.log('[4] 原生启动图 ↔ cover 底层图 同一张脸');
+const genPath = path.join(__dirname, 'gen-splash.py');
+const genSrc = fs.existsSync(genPath) ? fs.readFileSync(genPath, 'utf8') : '';
+const genJoin = (/MASCOT\s*=\s*os\.path\.join\(([^)]*)\)/.exec(genSrc) || [])[1] || '';
+const genFile = (/'([^']*arona[^']*)'/.exec(genJoin) || [])[1] || '';
+const baseMood = (/const\s+BASE_MOOD\s*=\s*'([^']+)'/.exec(src) || [])[1] || '';
+const baseRel = (new RegExp(baseMood + ":\\s*'([^']+)'").exec(src) || [])[1] || '';
+const baseFile = (/\/static\/mascot\/([^']+)/.exec(baseRel) || [])[1] || '';
+if (genFile && baseFile) eq(path.basename(genFile), baseFile, 'gen-splash.py 的 MASCOT 与 cover 底层图');
+else bad('读不到 MASCOT（gen-splash.py: ' + (genFile || '?') + ' / cover 底层: ' + (baseFile || '?') + '）');
+
+// ---------- 第 5 组：换脸时序真跑 ----------
+console.log('[5] 换脸时序（真跑 cover.vue 的 script）');
+const coverRaw = fs.readFileSync(path.join(ROOT, 'pages', 'cover', 'cover.vue'), 'utf8');
+const coverScript = (/<script>([\s\S]*?)<\/script>/.exec(coverRaw) || [])[1] || '';
+let switched = null;
+global.uni.switchTab = (o) => { switched = (o || {}).url; };
+
+const timers = [];
+const Cover = loadCode(coverScript, {
+  history: engine.history, streak: engine.streak, overview: engine.overview, dateStr: engine.dateStr,
+  // 不真等：定时器收进队列，想让时间走到哪一刻就跑到哪一刻
+  setTimeout: (fn, ms) => { const t = { fn, ms, done: false, id: timers.length + 1 }; timers.push(t); return t.id; },
+  clearTimeout: (id) => { const t = timers.find((x) => x.id === id); if (t) t.done = true; },
+  uni: global.uni
+}, 'cover.vue').default;
+const runUntil = (ms) => {
+  timers.filter((t) => !t.done && t.ms <= ms).sort((a, b) => a.ms - b.ms)
+    .forEach((t) => { t.done = true; t.fn(); });
+};
+const boot = () => {
+  timers.length = 0;
+  const vm = Object.assign({}, Cover.data(), Cover.methods, { $nextTick: (fn) => fn() });
+  vm.onLoad = Cover.onLoad; // onLoad 是与 methods 平级的生命周期，不在 methods 里
+  return vm;
+};
+
+// 场景一：今天练过（→ smile，与底层的 hi 不同）—— 最常见的路径
+store.reset();
+setDay(0, 10, 8);
+let cv = boot();
+cv.onLoad();
+eq(cv.moodShown, false, '首帧不显示表情（圆圈里只有底层那张，与原生启动图一致）');
+eq(cv.baseSrc, '/static/mascot/arona-hi.jpg', '底层 = 原生启动图那张');
+eq(cv.moodSrc, '/static/mascot/arona-smile.jpg', '上层已备好目标表情');
+runUntil(SWAP_DELAY - 1);
+eq(cv.moodShown, false, '开场动画没走完就不换（' + (SWAP_DELAY - 1) + 'ms）');
+runUntil(SWAP_DELAY);
+eq(cv.moodShown, false, '时间到了但图没解码 → 仍不淡入（否则会淡入出一张空白）');
+cv.onMoodLoad();
+eq(cv.moodShown, true, '解码完成 → 淡入');
+
+// 场景二：@load 一直不来（命中缓存可能不触发）→ 兜底要顶上，脸不能卡在底层
+store.reset();
+setDay(0, 10, 8);
+cv = boot();
+cv.onLoad();
+runUntil(SWAP_DELAY + LOAD_FB + 1);
+eq(cv.moodShown, true, '@load 没来时有兜底（脸不会一直卡在底层）');
+
+// 场景三：表情正好就是底层那张（新用户 → hi）→ 不必淡入
+store.reset();
+cv = boot();
+cv.onLoad();
+eq(cv.moodSrc, cv.baseSrc, '新用户：上下两层同图');
+eq(cv.moodShown, true, '同图时不走淡入（也不可能出现两张脸）');
+
+// 场景四：自动进首页那条没被动过
+store.reset();
+setDay(0, 10, 8);
+cv = boot();
+cv.onLoad();
+eq(timers[timers.length - 1].ms, AUTO_ENTER, '仍是 ' + AUTO_ENTER + 'ms 后自动进首页');
+runUntil(AUTO_ENTER);
+eq(switched, '/pages/home/home', '到点自动进首页');
 
 process.exit(fail ? 1 : 0);
