@@ -36,8 +36,9 @@
 <script>
 import { history, streak, overview, dateStr } from '../../utils/engine.js'
 
-// 启动页阿罗娜表情：按学习状态选图（static/mascot/ 下七张同构图不同表情）
+// 启动页阿罗娜表情：按学习状态选图（static/mascot/ 下同构图不同表情）
 const MASCOTS = {
+  none: '/static/mascot/arona-none.jpg',      // 无嘴待机脸：底层默认（见 BASE_MOOD）
   smile: '/static/mascot/arona-smile.jpg',    // 今天练过 → 开心笑
   tongue: '/static/mascot/arona-tongue.jpg',  // 今天全对 / 连击满 7 天 → 吐舌庆祝
   hi: '/static/mascot/arona-hi.jpg',          // 初次见面 / 连击未断等你来 → 惊讶 o 嘴
@@ -47,11 +48,13 @@ const MASCOTS = {
   shocked: '/static/mascot/arona-shocked.jpg' // 断签 14 天以上 → 震惊
 }
 
-// 底层固定那张脸：必须与**原生启动图**（static/splash/*.9.png）里画的是同一张。
-// 原生 splash 淡出后露出来的就是 cover 这个圆圈，两张一致才是"没换过图"；
-// 之后才按学习状态把表情**淡入**盖上来。
-// ⚠️ 改这里要同时改 _tools/gen-splash.py 的 MASCOT（check-cover-mascot.js 第 4 组盯）。
-const BASE_MOOD = 'hi'
+// 底层默认那张脸（**无嘴**待机版）：圆圈浮现时先是无嘴，之后状态表情淡入盖上来
+// —— 无嘴 → 有嘴的过渡只有嘴部在动，视觉最自然（七种状态表情全都有嘴，
+//     所以任何状态下都会走淡入，不存在"两层同图"）。
+// ⚠️ 原生启动图（static/splash/*.9.png）现在**只画渐变背景、不画任何图案**（_tools/gen-splash.py）：
+//    .9.png 的图案是固定像素、cover 是 rpx 布局，屏幕一宽圆圈必然错位（用户实测"跳一下"）。
+//    所以圆圈/脸/文字全部由本页绘制：圆圈 stageIn 浮现 → 表情淡入。
+const BASE_MOOD = 'none'
 
 const AUTO_ENTER_MS = 2400   // 自动进入首页（与底部进度条动画同步）
 const SWAP_DELAY_MS = 900    // 换脸时机：等开场文字动画（0.25s~1s）走完再换
@@ -188,6 +191,10 @@ export default {
   position: relative;
   width: 340rpx; height: 340rpx;
   display: flex; align-items: center; justify-content: center;
+  /* 原生启动图只画渐变背景（图案全交给本页），圆圈在这里浮现——
+     不能"啪"地出现，那样 splash → cover 仍是一次硬切 */
+  opacity: 0;
+  animation: stageIn 0.6s ease 0.15s forwards;
 }
 
 .ring {
@@ -291,6 +298,10 @@ export default {
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(36rpx); }
   to { opacity: 1; transform: translateY(0); }
+}
+@keyframes stageIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
 }
 @keyframes float {
   0%, 100% { transform: translateY(0); }

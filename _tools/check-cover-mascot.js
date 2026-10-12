@@ -5,8 +5,10 @@
 //   3. pickMood 调真实 engine 的 history/streak/overview/dateStr，按 9 种状态选 7 种表情
 //   4. 七张表情图真实存在于 static/mascot/，体积可控（<120KB）
 //   5. 各学习状态下引擎读数与预期表情一致（用真实 engine 计算）
-//   6. 原生启动图（gen-splash.py 的 MASCOT）与 cover 底层图是**同一张**
-//   7. 换脸时序真跑：首帧不换、动画没走完不换、图没解码不换、@load 不来有兜底
+//   6. 原生启动图（gen-splash.py）**只画渐变背景**，不画圆圈/脸/文字 ——
+//      .9.png 图案是固定像素、cover 是 rpx 布局，屏幕一宽必然错位（用户实测"圆圈跳一下"）
+//   7. cover 底层 = 无嘴待机图（无嘴 → 有嘴的过渡只有嘴部在动，最自然），圆圈 stageIn 浮现
+//   8. 换脸时序真跑：首帧不换、动画没走完不换、图没解码不换、@load 不来有兜底
 const { load, loadCode } = require('./lib/load');
 const fs = require('fs');
 const path = require('path');
@@ -71,10 +73,14 @@ if (/\.mascot-mood\s*\{[^}]*opacity:\s*0/.test(src) && /\.mascot-mood\.show\s*\{
 else bad('上层图不是 opacity 0→1 的淡入写法');
 if (/@load="onMoodLoad"/.test(src) && /onMoodLoad\(\)\s*\{/.test(src)) ok('上层图解码完成才淡入（@load）');
 else bad('缺 @load → onMoodLoad（图没解码完就淡入会露出空白）');
+// 原生启动图只有背景 → 圆圈必须"浮现"，不能首帧就整块出现
+if (/animation:\s*stageIn/.test(src) && /@keyframes stageIn/.test(src)) ok('圆圈 stageIn 浮现（背景衔接后内容淡入）');
+else bad('圆圈缺 stageIn 浮现动画（splash 只有背景时，圆圈会"啪"地出现）');
 
 // ---------- 第 2 组：七张表情图存在且体积可控 ----------
 console.log('[2] static/mascot 表情图');
 const EXPECT = {
+  none: 'arona-none.jpg',
   smile: 'arona-smile.jpg', tongue: 'arona-tongue.jpg', hi: 'arona-hi.jpg',
   nervous: 'arona-nervous.jpg', sad: 'arona-sad.jpg',
   angry: 'arona-angry.jpg', shocked: 'arona-shocked.jpg'
@@ -176,19 +182,29 @@ store.reset();
 setDay(15, 10, 6);
 eq(mood(), 'shocked', '断签 14 天');
 
-// ---------- 第 4 组：原生启动图与 cover 底层图必须是同一张脸 ----------
-// 原生 splash 一淡出，露出来的就是 cover 这个圆圈。两张不一致的话，
-// 用户看到的就是"圆圈里的图片变成两种"（哪怕 cover 内部已经改成淡入了）。
-console.log('[4] 原生启动图 ↔ cover 底层图 同一张脸');
+// ---------- 第 4 组：原生启动图只留背景（防圆圈错位）+ 底层是无嘴图 ----------
+// .9.png 的图案是固定像素、cover 的圆圈是 rpx 布局：1212px 宽的屏上前者 ≈490px、后者 ≈549px
+// （差 12%；命中 xhdpi 图则差 40%）—— 用户实测"第一张跟第二张之间圆圈错位/跳一下"。
+// 所以 splash 只画渐变，图案全交给 cover；这条防止以后有人往启动图上加回图案。
+console.log('[4] 原生启动图 ↔ cover 的分工');
 const genPath = path.join(__dirname, 'gen-splash.py');
 const genSrc = fs.existsSync(genPath) ? fs.readFileSync(genPath, 'utf8') : '';
-const genJoin = (/MASCOT\s*=\s*os\.path\.join\(([^)]*)\)/.exec(genSrc) || [])[1] || '';
-const genFile = (/'([^']*arona[^']*)'/.exec(genJoin) || [])[1] || '';
+if (!genSrc) {
+  bad('读不到 gen-splash.py');
+} else {
+  const genCode = genSrc.replace(/^[ \t]*#.*$/gm, ''); // 剥 python 注释，注释里提到关键词不算
+  if (/MASCOT|arona|draw_spaced|ImageDraw|ImageFont/.test(genCode))
+    bad('gen-splash.py 又开始画图案了（MASCOT/文字/绘图）—— 会跟 cover 的 rpx 圆圈错位');
+  else ok('启动图只画渐变背景，图案全交给 cover 页');
+  for (const pair of [['#f2f7ff', '(242, 247, 255)'], ['#e0ecff', '(224, 236, 255)'], ['#cfe0ff', '(207, 224, 255)']]) {
+    if (src.includes(pair[0]) && genSrc.includes(pair[1])) ok('渐变色两边一致 ' + pair[0]);
+    else bad('渐变色不一致：cover ' + (src.includes(pair[0]) ? '有' : '无') + ' / splash ' + (genSrc.includes(pair[1]) ? '有' : '无') + ' ' + pair[0]);
+  }
+}
 const baseMood = (/const\s+BASE_MOOD\s*=\s*'([^']+)'/.exec(src) || [])[1] || '';
 const baseRel = (new RegExp(baseMood + ":\\s*'([^']+)'").exec(src) || [])[1] || '';
 const baseFile = (/\/static\/mascot\/([^']+)/.exec(baseRel) || [])[1] || '';
-if (genFile && baseFile) eq(path.basename(genFile), baseFile, 'gen-splash.py 的 MASCOT 与 cover 底层图');
-else bad('读不到 MASCOT（gen-splash.py: ' + (genFile || '?') + ' / cover 底层: ' + (baseFile || '?') + '）');
+eq(baseFile, 'arona-none.jpg', 'cover 底层 = 无嘴待机图（无嘴 → 有嘴过渡最自然）');
 
 // ---------- 第 5 组：换脸时序真跑 ----------
 console.log('[5] 换脸时序（真跑 cover.vue 的 script）');
@@ -222,7 +238,7 @@ setDay(0, 10, 8);
 let cv = boot();
 cv.onLoad();
 eq(cv.moodShown, false, '首帧不显示表情（圆圈里只有底层那张，与原生启动图一致）');
-eq(cv.baseSrc, '/static/mascot/arona-hi.jpg', '底层 = 原生启动图那张');
+eq(cv.baseSrc, '/static/mascot/arona-none.jpg', '底层 = 无嘴待机图');
 eq(cv.moodSrc, '/static/mascot/arona-smile.jpg', '上层已备好目标表情');
 runUntil(SWAP_DELAY - 1);
 eq(cv.moodShown, false, '开场动画没走完就不换（' + (SWAP_DELAY - 1) + 'ms）');
@@ -239,12 +255,15 @@ cv.onLoad();
 runUntil(SWAP_DELAY + LOAD_FB + 1);
 eq(cv.moodShown, true, '@load 没来时有兜底（脸不会一直卡在底层）');
 
-// 场景三：表情正好就是底层那张（新用户 → hi）→ 不必淡入
+// 场景三：新用户（→ hi，有嘴）——底层是无嘴图，所以同样走淡入
 store.reset();
 cv = boot();
 cv.onLoad();
-eq(cv.moodSrc, cv.baseSrc, '新用户：上下两层同图');
-eq(cv.moodShown, true, '同图时不走淡入（也不可能出现两张脸）');
+eq(cv.moodSrc, '/static/mascot/arona-hi.jpg', '新用户目标表情 = hi');
+if (cv.moodSrc !== cv.baseSrc) ok('状态表情全有嘴，永远不与无嘴底层同图 → 全走淡入');
+else bad('状态表情与无嘴底层同图（无嘴 → 有嘴的过渡就不成立了）');
+runUntil(SWAP_DELAY + LOAD_FB + 1);
+eq(cv.moodShown, true, '新用户的 hi 也会淡入');
 
 // 场景四：自动进首页那条没被动过
 store.reset();

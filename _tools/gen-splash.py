@@ -1,53 +1,44 @@
-# _tools/gen-splash.py - 生成 Android 原生启动图（与 pages/cover/cover.vue 首屏同色同构）
+# _tools/gen-splash.py - 生成 Android 原生启动图（**只画渐变背景，不画任何图案**）
 #
-# ⚠️ 为什么是 **.9.png**（九宫格）而不是普通 png：
+# ⚠️ 为什么只有背景、没有圆圈/脸/文字（2026-10-12 教训）：
+#   曾经在这张图上画了「圆头像 + 品牌文字 + 进度槽」，想跟 cover 页无缝衔接。
+#   但 .9.png 的图案区是**不可拉伸的固定像素**（xxhdpi 内容宽 1080），
+#   而 cover 页的圆圈是 **rpx 布局**（340rpx = 屏幕宽 × 340/750）：
+#     · 1212px 宽的屏幕上：splash 圆圈 ≈ 490px，cover 圆圈 ≈ 549px（差 12%）
+#     · 若设备命中 xhdpi（内容宽 720），差 40%
+#   屏幕越宽差得越多 → 用户实测「第一张跟第二张之间圆圈错位/跳一下」。
+#   位图图案的绝对尺寸不可能跟上每台屏幕的宽度，这是死结 ——
+#   所以图案（圆圈、脸、文字、进度条）**全部交给 cover 页自己画并淡入**，
+#   原生启动图只保留一张被拉伸也看不出来的**渐变背景**：两边衔接只剩背景，
+#   而背景是平滑渐变，fitXY 拉伸无感（check-cover-mascot.js 第 4 组守这条）。
+#
+# ⚠️ 仍必须 **.9.png**（九宫格）而不是普通 png：
 #   云打包时启动图会被**铺满整屏**（fitXY）。普通 png 的比例只要和屏幕对不上，
 #   整张图就被拉长/压扁 —— 实测事故：图是 1080x1882（比例 0.574），
-#   手机是 1212x2616（比例 0.463），纵向被拉长约 24%，
-#   圆头像变椭圆、字母被抻长（用户反馈"第一次打开软件图片是被拉伸的"）。
-#   Android 官方与 uni-app 文档给的解法就是 .9.png：
-#     "推荐使用 .9.png 来适配不同分辨率……它可以指定特定的区域进行拉伸而不失真"
-#     —— https://uniapp.dcloud.net.cn/collocation/manifest  （App Splashscreen 一节）
-#
-#   所以这里把画面拆成三块：
-#     · 图案（圆头像 + 品牌文字）：**不可拉伸** → 圆永远是圆，字不被抻长
-#     · 图案上方留白：不可拉伸 → 图案距顶固定（与 cover 页 pad_top 一致）
-#     · 图案与底部进度槽之间：**可拉伸** → 屏幕高出来的部分全在这里吸收
-#     · 底部进度槽 + 底边留白：不可拉伸 → 进度槽距底固定（与 cover 页 bottom 一致）
-#   横向同理：左右两条边缘可拉伸，含图案的中间段不可拉伸。
+#   手机是 1212x2616（比例 0.463），纵向被拉长约 24%
+#   （用户反馈"第一次打开软件图片是被拉伸的"）。
+#   渐变内容 + 全幅可拉伸 = 任意比例屏幕都无感。
 #
 #   9-patch 的四条黑边（画在图像最外一圈 1px，其余边缘像素必须透明）：
-#     上边 = 可水平拉伸的列；左边 = 可垂直拉伸的行
+#     上边、左边 = 可拉伸区（全幅，因为画面里没有任何不许变形的东西）
 #     右边、下边 = padding 区（官方要求"拉满"，不拉满部分设备会显示灰边）
 #
-# 用法：python gen-splash.py        （输出到 ../uniapp/static/splash/）
+# 用法：python gen-splash.py        （输出到 ../uniapp/static/splash/，需重新云打包生效）
 #
 # 尺寸取自 uni-app 官方 manifest 说明：hdpi 480x800 / xhdpi 720x1280 / xxhdpi 1080x1920
 # （这里指的是**内容区**，落盘文件会各方向 +2px 放黑边）
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image
 import math
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, '..', 'uniapp', 'static', 'splash')
 SCRATCH = os.path.join(HERE, '_scratch')
-MASCOT = os.path.join(HERE, '..', 'uniapp', 'static', 'mascot', 'arona-hi.jpg')
-FONT_BOLD = 'C:/Windows/Fonts/georgiab.ttf'
-FONT_REG = 'C:/Windows/Fonts/georgia.ttf'
 
-DESIGN_W = 750            # 设计稿基准宽度（rpx）
+# 渐变与 cover 页 .cover 的第一组 CSS 声明同色同角度
+# （CSS: linear-gradient(165deg, #f2f7ff 0%, #e0ecff 52%, #cfe0ff 100%)）
 GRAD_COLORS = [(0.00, (242, 247, 255)), (0.52, (224, 236, 255)), (1.00, (207, 224, 255))]
-GRAD_DEG = 165            # CSS: linear-gradient(165deg, ...)
-
-BRAND = (29, 79, 216)
-INK = (23, 32, 26)
-
-# 图案下方到底边之间那段是"可拉伸"的，但进度槽上下要不许拉：
-# 与 cover 页 bottom:100rpx + 进度槽高 4rpx 对齐
-BOTTOM_RESERVE_RPX = 104
-
-# 黑线判定阈值：与纯渐变背景差多少才算"这里画了东西"
-DIFF_THRESHOLD = 4
+GRAD_DEG = 165            # CSS 角度：0deg = to top，顺时针为正
 
 
 def lerp(a, b, t):
@@ -78,106 +69,6 @@ def make_gradient(w, h):
         for x in range(lw):
             px[x, y] = grad_color(((x * dx + y * dy) - lo) / span)
     return small.resize((w, h), Image.BILINEAR)
-
-
-def text_w(draw, s, font, ls):
-    """带字距的文本宽度"""
-    if not s:
-        return 0
-    w = sum(draw.textlength(ch, font=font) for ch in s)
-    return w + ls * (len(s) - 1)
-
-
-def draw_spaced(draw, cx, y, s, font, fill, ls):
-    """居中 + 字距绘制"""
-    w = text_w(draw, s, font, ls)
-    x = cx - w / 2
-    for ch in s:
-        draw.text((x, y), ch, font=font, fill=fill)
-        x += draw.textlength(ch, font=font) + ls
-    return w
-
-
-def circle_mask(size, ss):
-    m = Image.new('L', (size * ss, size * ss), 0)
-    ImageDraw.Draw(m).ellipse((0, 0, size * ss - 1, size * ss - 1), fill=255)
-    return m.resize((size, size), Image.LANCZOS)
-
-
-def render_content(w, h, ss=2):
-    """画出内容图（不含黑边），返回 (RGB 图, 图案包围盒 [x0,y0,x1,y1])"""
-    S = (w / DESIGN_W) * ss       # rpx -> px（含超采样倍率）
-    W, H = w * ss, h * ss
-    bg = make_gradient(W, H)
-    img = bg.copy()
-
-    def R(v):                     # rpx → px
-        return v * S
-
-    pad_top = R(180)
-    stage = R(340)
-    ring_bw = max(2, round(R(3)))
-    mascot = R(320)
-    cx = W / 2
-    halo = R(18)                  # 光晕模糊半径：包围盒要把它算进去
-
-    # ---- 光晕：ring 内侧的柔和品牌色投影（近似 cover 的 box-shadow）
-    sh = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-    ImageDraw.Draw(sh).ellipse(
-        (cx - stage / 2, pad_top + R(8), cx + stage / 2, pad_top + stage + R(8)),
-        fill=(46, 107, 255, 60))
-    sh = sh.filter(ImageFilter.GaussianBlur(halo))
-    img = Image.alpha_composite(img.convert('RGBA'), sh).convert('RGB')
-
-    # ---- 吉祥物（圆形裁剪 + 白底圆）
-    face = Image.open(MASCOT).convert('RGB')
-    side = min(face.size)
-    face = face.crop(((face.width - side) // 2, (face.height - side) // 2,
-                      (face.width + side) // 2, (face.height + side) // 2))
-    msz = int(round(mascot))
-    face = face.resize((msz, msz), Image.LANCZOS)
-    img.paste(face, (int(round(cx - msz / 2)), int(round(pad_top + (stage - mascot) / 2))),
-              circle_mask(msz, ss))
-
-    d = ImageDraw.Draw(img)
-
-    # ---- 外圈
-    d.ellipse((cx - stage / 2, pad_top, cx + stage / 2, pad_top + stage),
-              outline=(46, 107, 255, 102), width=ring_bw)
-
-    # ---- 品牌文字
-    y = pad_top + stage + R(72)
-    f_name = ImageFont.truetype(FONT_BOLD, max(8, round(R(46))))
-    draw_spaced(d, cx, y, 'ENGLISH TRAINER', f_name, BRAND, R(10))
-    y += round(R(46) * 1.2) + R(36)
-
-    d.line((cx - R(64) / 2, y, cx + R(64) / 2, y), fill=(46, 107, 255, 97), width=max(1, round(R(2))))
-    y += R(32)
-
-    f_en = ImageFont.truetype(FONT_REG, max(7, round(R(20))))
-    draw_spaced(d, cx, y, 'FUJIAN \u00b7 TRANSLATION PRACTICE', f_en, (29, 79, 216), R(5))
-
-    # ---- 底部进度槽（cover 页那条进度条的空槽，位置一致，便于动画接管）
-    by = H - R(100) - R(4)
-    d.rounded_rectangle((cx - R(240) / 2, by, cx + R(240) / 2, by + max(2, round(R(4)))),
-                        radius=max(1, round(R(2))), fill=(46, 107, 255, 46))
-
-    img = img.resize((w, h), Image.LANCZOS)
-    bg = bg.resize((w, h), Image.LANCZOS)
-
-    # ---- 量"图案"到底占了哪块（与纯渐变比差异），供 9-patch 划不可拉伸区。
-    #      ⚠️ 裁剪边界要比进度槽顶再往上退几像素：LANCZOS 缩放在色块边界会有
-    #      振铃（overshoot），进度槽顶边会让它上面 1~2 行也出现超过阈值的差异，
-    #      结果图案包围盒一路顶到画面底部，"可拉伸区"就空了（踩过这个坑）。
-    progress_top = int(round(h - (BOTTOM_RESERVE_RPX / DESIGN_W) * w))
-    diff = ImageChops.difference(img, bg).convert('L')
-    mask = diff.point(lambda v: 255 if v > DIFF_THRESHOLD else 0)
-    cut = max(1, progress_top - 4)
-    bbox = mask.crop((0, 0, w, cut)).getbbox() or (0, 0, w, cut)
-    # 图案边缘可能有半透明的抗锯齿像素，往回收 2px 安全余量
-    bbox = (max(0, bbox[0] - 2), max(0, bbox[1] - 2),
-            min(w, bbox[2] + 2), min(cut, bbox[3] + 2))
-    return img, bbox, progress_top, halo * (w / DESIGN_W)
 
 
 def add_ninepatch(img, x_stretch, y_stretch):
@@ -282,30 +173,15 @@ def render_ninepatch(path, out_w, out_h):
     return out
 
 
-def build(w, h, out_path, ss=2):
-    S = (w / DESIGN_W) * ss
-    img, bbox, progress_top, halo = render_content(w, h, ss)
-    x0, y0, x1, y1 = bbox
-    pattern_bottom = y1          # bbox 已经挖掉进度槽那一段了（见 render_content）
-    # 上边：左右两条边缘可水平拉伸，中间（含图案）不拉伸
-    x_stretch = []
-    if x0 > 0:
-        x_stretch.append((0, x0))
-    if x1 < w:
-        x_stretch.append((x1, w))
-    # 左边：**只有**图案与进度槽之间那段可垂直拉伸
-    y_stretch = [(pattern_bottom, progress_top)] if progress_top > pattern_bottom else []
-    nine = add_ninepatch(img, x_stretch, y_stretch)
+def build(w, h, out_path):
+    """整幅都是平滑渐变 → 全幅可拉伸，任何屏幕比例都无感"""
+    img = make_gradient(w, h)
+    nine = add_ninepatch(img, [(0, w)], [(0, h)])
     nine.save(out_path, 'PNG', optimize=True)
     return {
         'file': os.path.basename(out_path),
         'content': (w, h),
         'file_size': nine.size,
-        'bbox': bbox,
-        'stretch_x': x_stretch,
-        'stretch_y': y_stretch,
-        'progress_top': progress_top,
-        'halo': halo,
         'bytes': os.path.getsize(out_path),
     }
 
@@ -315,15 +191,11 @@ def main():
     targets = [('splash-hdpi.9.png', 480, 800),
                ('splash-xhdpi.9.png', 720, 1280),
                ('splash-xxhdpi.9.png', 1080, 1920)]
-    info = []
     for name, w, h in targets:
         r = build(w, h, os.path.join(OUT, name))
-        info.append(r)
-        print('  \u2713 %-24s 内容 %dx%d → 文件 %dx%d  %d KB'
+        print('  \u2713 %-24s 内容 %dx%d \u2192 文件 %dx%d  %d KB\uff08\u7eaf\u6e10\u53d8\u80cc\u666f\uff0c\u65e0\u56fe\u6848\uff09'
               % (r['file'], r['content'][0], r['content'][1],
                  r['file_size'][0], r['file_size'][1], r['bytes'] // 1024))
-        print('      图案包围盒 %s  垂直可拉伸 %s（图案底 %d / 进度槽顶 %d）'
-              % (r['bbox'], r['stretch_y'], r['bbox'][3], r['progress_top']))
 
     # ---- 本地预览：按常见机型的屏幕尺寸把 xxhdpi 那张渲染出来，肉眼核对不变形
     os.makedirs(SCRATCH, exist_ok=True)

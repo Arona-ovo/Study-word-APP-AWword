@@ -12,18 +12,23 @@
 //   1) icons 必须挂在 app-plus.distribute.icons.{android,ios}（不是 distribute.android.icons）
 //   2) 图标文件存在、是 png、像素尺寸与官方要求一致（mdpi 48 / hdpi 72 / xhdpi 96 / xxhdpi 144 / xxxhdpi 192）
 //   3) splashscreen 启动图必须是 **.9.png（九宫格）**，尺寸 = 官方内容尺寸 + 2（外圈 1px 黑线），
-//      且黑线结构合法、拉伸区没盖到图案上
+//      且黑线结构合法；**启动图只画渐变背景、全幅可拉伸**（图案全交给 cover 页画并淡入）
 //   4) app-plus.splashscreen 的三个关闭策略开关取值合法
 //   5) 启动图别用 jpg 改名（magic number 必须是 PNG）
 //
-// ⚠️ 第 3 组为什么这么严（实测事故）：
-//   启动图会被**铺满整屏**（fitXY）。普通 png 的比例只要和手机屏幕对不上，整张图就被拉长 ——
-//   图 1080x1882（比例 0.574）遇上 1212x2616 的手机（比例 0.463），纵向被拉长约 24%，
-//   圆头像变竖椭圆、字母被抻长。用户反馈："第一次打开软件，图片是被拉伸的"。
-//   官方解法就是 .9.png（"指定特定的区域进行拉伸而不失真"）：
-//     https://uniapp.dcloud.net.cn/collocation/manifest  → App Splashscreen
-//   所以我们用 gen-splash.py 把画面拆成：图案区**不可拉伸**、四周留白可拉伸。
-//   下面的断言守的就是这件事 —— 黑线画错一点，用户那边就是"圆变椭圆"。
+// ⚠️ 第 3 组为什么这么严（两次实测事故）：
+//   ① 启动图会被**铺满整屏**（fitXY）。普通 png 的比例只要和手机屏幕对不上，整张图就被拉长 ——
+//      图 1080x1882（比例 0.574）遇上 1212x2616 的手机（比例 0.463），纵向被拉长约 24%，
+//      圆头像变竖椭圆、字母被抻长。用户反馈："第一次打开软件，图片是被拉伸的"。
+//      官方解法就是 .9.png（"指定特定的区域进行拉伸而不失真"）：
+//        https://uniapp.dcloud.net.cn/collocation/manifest  → App Splashscreen
+//   ② 后来又在启动图上画了"圆头像 + 文字 + 进度槽"想跟 cover 页无缝衔接，
+//      但 .9.png 图案区是**固定像素**、cover 的圆圈是 **rpx 布局**（随屏宽缩放）——
+//      1212px 宽的屏上前者 ≈490px、后者 ≈549px（差 12%，命中 xhdpi 图差 40%），
+//      用户实测"第一张跟第二张之间圆圈错位/跳一下"。位图图案跟不上每台屏幕的宽度，是死结。
+//   2026-10-12 起的定案：启动图**只画渐变背景**（拉伸无感），圆圈/脸/文字全部由 cover 页
+//   绘制并淡入（check-cover-mascot.js 第 4 组守另一头）。所以这里的黑线契约是
+//   "上边/左边各一整段（全幅可拉伸）" —— 如果以后往启动图上加回图案，这里会红。
 const fs = require('fs');
 const path = require('path');
 const png = require('./lib/png');
@@ -120,27 +125,14 @@ if (style === 'default') {
       bottom[0][0] === 0 && bottom[0][1] === size.w - 2,
       k + ' 右边/下边黑线拉满（否则部分设备显示灰边）');
 
-    // 上边黑线必须**分成左右两段**：中间那段（含图案）是刻意留的不可拉伸区。
-    // 如果画成一整条 = 等同于没做 9-patch，图案照样被横向拉扁。
-    assert(top.length >= 2, k + ' 上边黑线分左右两段（中间含图案 → 横向不拉伸），实际 ' + top.length + ' 段');
-    // 左边黑线应当只有一段（图案区 + 底部进度槽区都不可拉伸）
-    assert(left.length === 1, k + ' 左边黑线只有一段（图案区与底部进度槽区都不拉伸），实际 ' + left.length + ' 段');
-
-    if (top.length >= 2 && left.length === 1) {
-      const cw = size.w - 2, chh = size.h - 2;
-      const xSum = top.reduce((a, r) => a + (r[1] - r[0]), 0);
-      const ySum = left.reduce((a, r) => a + (r[1] - r[0]), 0);
-      // 两端都得留出足够余量：一边可拉伸区太小的话，宽屏/长屏上拉伸量全挤在几条线里
-      assert(xSum >= 20, k + ' 横向可拉伸区 ' + xSum + 'px（左右两条边加起来 ≥20px）');
-      assert(ySum >= 100, k + ' 纵向可拉伸区 ' + ySum + 'px ≥100（屏幕高出来的部分靠它吸收）');
-      // 但也不能"整条都是可拉伸" —— 那就等于没做 9-patch，图案照样变形
-      assert(xSum < cw * 0.6, k + ' 横向可拉伸区占内容宽 ' + Math.round(xSum / cw * 100) + '%（<60%）');
-      assert(ySum < chh * 0.6, k + ' 纵向可拉伸区占内容高 ' + Math.round(ySum / chh * 100) + '%（<60%）');
-      // 不可拉伸那部分就是"最矮能撑到多少"：超出短屏高度就会被压缩 → 图案变形
-      const fixed = chh - ySum;
-      assert(fixed <= chh * 0.85, k + ' 不可拉伸高 ' + fixed + 'px 占内容高 '
-        + Math.round(fixed / chh * 100) + '%（<85%，否则 16:9 这类短屏上会被压缩变形）');
-    }
+    // 上边/左边黑线必须是**一整段**（全幅可拉伸）：启动图只画渐变背景，
+    // 画面里没有任何不可拉伸的图案（图案全交给 cover 页，防圆圈错位）。
+    // 整幅可拉伸 + 平滑渐变 = 任意屏幕比例都无感；
+    // 若以后往启动图上加回图案，这里会红（check-cover-mascot.js 第 4 组也会红）。
+    assert(top.length === 1 && top[0][0] === 0 && top[0][1] === size.w - 2,
+      k + ' 上边黑线一整段（纯渐变背景全幅可拉伸），实际 ' + top.length + ' 段');
+    assert(left.length === 1 && left[0][0] === 0 && left[0][1] === size.h - 2,
+      k + ' 左边黑线一整段（纯渐变背景全幅可拉伸），实际 ' + left.length + ' 段');
 
     // 四条边除黑线外必须透明，否则 aapt 认不出黑线
     ['top', 'left', 'right', 'bottom'].forEach(edge => {
