@@ -58,8 +58,37 @@ assert(/\{\{ updateDesc \}\}/.test(sv) && /\{\{ updateBtn \}\}/.test(sv),
 assert(/updater\.installWgt\(/.test(sv) && /updater\.openReleasePage\(\)/.test(sv), '装包与打开发布页都接到 updater');
 assert(/skipThis\(\)/.test(sv), '用户点「以后再说」会记一笔（这个版本不再重复提示）');
 const en = fs.readFileSync(path.join(ROOT, 'utils/i18n-en.js'), 'utf8');
-for (const k of ['检查更新', 'GitHub 上的最新版', '有新版本 {v}', '发现新版本 {v}', '已经是最新版']) {
+for (const k of ['检查更新', 'GitHub 上的最新版', '有新版本 {v}', '发现新版本 {v}', '已经是最新版',
+  '不再提示', '更新']) {
   assert(en.indexOf("'" + k + "'") >= 0, '英文表有「' + k + '」');
+}
+
+// ---------- 第 2b 组：红点 + 首页弹窗的接入点 ----------
+console.log('== 2b. 红点与更新弹窗 ==');
+const hm = fs.readFileSync(path.join(ROOT, 'pages/home/home.vue'), 'utf8');
+const pf = fs.readFileSync(path.join(ROOT, 'pages/profile/profile.vue'), 'utf8');
+assert(/updater\.hasPending\(\)/.test(pf), '「我的」页读 hasPending() 决定红点');
+assert(/class="menu-dot"/.test(pf) && /v-if="updateDot"/.test(pf), '「设置」那行有红点元素');
+assert(/\.menu-dot \{/.test(pf), '红点有样式（不然是个不显示的空 view）');
+assert(/onShow[\s\S]{0,300}updateDot = updater\.hasPending\(\)/.test(pf), '切回「我的」会重读红点状态');
+assert(/utils\/updater\.js/.test(hm), '首页引入了 updater');
+assert(/maybeUpdateAsk\(\)/.test(hm) && /onShow[\s\S]{0,900}maybeUpdateAsk\(\)/.test(hm), '首页 onShow 会问一次');
+assert(/if \(updateAsked\) return/.test(hm), '本次进程只弹一次（切 tab 回来不重复骚扰）');
+assert(/guide\.show \|\| this\.partnerAsk\.show/.test(hm), '引导 / 关联询问在场时不抢弹窗');
+assert(/@confirm="onUpdateConfirm"/.test(hm) && /@cancel="onUpdateCancel"/.test(hm), '弹窗两个按钮都接了');
+assert(/:confirm-text="\$t\('更新'\)"/.test(hm) && /:cancel-text="\$t\('不再提示'\)"/.test(hm),
+  '两个按钮的文案是「更新」/「不再提示」');
+assert(/onUpdateCancel[\s\S]{0,200}skipThis\(\)/.test(hm), '「不再提示」真的记了一笔 skip');
+assert(/onUpdateConfirm[\s\S]{0,600}installWgt\(/.test(hm), '点「更新」真的去装包（不是只关弹窗）');
+// ⚠️ 这三个方法必须在 methods 里。写在 onShow / onHide 旁边是**组件选项顶层**，
+// Vue 不会把它挂到实例上 → this.maybeUpdateAsk is not a function（2026-10-13 就这么栽的：
+// 生命周期与 methods 是平级的，不是它的子项）。
+const hmMethods = (/methods:\s*\{/.exec(hm) || null);
+assert(!!hmMethods, '首页有 methods');
+const hmFrom = hmMethods ? hmMethods.index : 0;
+for (const fn of ['maybeUpdateAsk', 'onUpdateConfirm', 'onUpdateCancel']) {
+  assert(new RegExp('\\n {4}' + fn + '\\(').test(hm.slice(hmFrom)),
+    fn + ' 定义在 methods 里（不是挂在生命周期旁边）');
 }
 
 // ---------- 第 3 组：运行时真跑 ----------
@@ -305,6 +334,55 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   st.onConfirmYes(true);
   eq(opened, 1, 'apk 点确认 → 打开发布页（App 内不静默装整包）');
   eq(installs.length, 1, 'apk 不走 wgt 安装通道');
+
+  // ---------- 第 5 组：真跑红点 / 弹窗的生命周期 ----------
+  // 红点最怕两件事：① 该出现时不出现 ② 装完新版本后**永远摘不掉**。
+  // 后者尤其恶心（用户更新完还天天看见红点），必须有一条断言盯着。
+  console.log('');
+  console.log('== 5. 真跑红点生命周期 ==');
+  const st6 = {};
+  const uni6 = {
+    getStorageSync: (k) => (k in st6 ? st6[k] : ''),
+    setStorageSync: (k, v) => { st6[k] = v; },
+    removeStorageSync: (k) => { delete st6[k]; },
+    showToast: () => {},
+    downloadFile: () => {}
+  };
+  const set6 = load('utils/settings.js', { uni: uni6 });
+  // 用 mount() 而不是直接 load：uni.request 走的是全局 stub（handler 那一套），
+  // 自己传 uni 会把 request 顶掉 → check() 直接 TypeError
+  const u6 = mount({ settings: set6 });
+  eq(u6.hasPending(), false, '一开始没有红点');
+
+  handler = () => ({ assets: [{ name: 'AWword-' + NEWER + '.wgt', browser_download_url: 'http://x/' + NEWER + '.wgt' }] });
+  await u6.check();
+  eq(u6.hasPending(), true, '查到新版本 → 有红点');
+  const info6 = u6.pendingInfo();
+  eq(info6 && info6.versionText, NEWER, '弹窗拿得到版本号');
+  eq(info6 && info6.kind, 'wgt', '弹窗拿得到类型（决定正文走哪条文案）');
+  eq(info6 && info6.url, 'http://x/' + NEWER + '.wgt', '弹窗拿得到下载直链（点「更新」要能用）');
+
+  // 红点必须扛得住 App 重启：换一个模块实例（模拟冷启动）再读，还在
+  const u6b = mount({ settings: set6 });
+  eq(u6b.hasPending(), true, 'App 重启后红点还在（落在 storage，不是内存变量）');
+
+  // 「不再提示」
+  u6.skipThis();
+  eq(u6.hasPending(), false, '点「不再提示」→ 红点消失');
+
+  // 装完新版本（本机版本号升上去）→ 红点自己消失，不需要任何手动清理。
+  // 先清掉上一步的 skip：不然"不再提示"仍然生效，这里就验不到"装完自动消失"了。
+  set6.set({ updater: { skip: '' } });
+  u6.noteUpdate({ version: u6.parseVersion(NEWER), kind: 'wgt', url: 'http://x' });
+  eq(u6.hasPending(), true, '（重新记一笔，准备验"装完自动消失"）');
+  const u6c = mount({ settings: set6, BUILD_INFO: { version: FAR + '.9', versionCode: 999 } });
+  eq(u6c.hasPending(), false, '装完新版本 → 红点自己消失（版本号不再比本机新）');
+
+  // 坏数据不许把红点逻辑搞崩
+  set6.set({ updater: { pending: '{ 这不是 json' } });
+  eq(u6.hasPending(), false, '坏 JSON → 当没有红点（不抛、不误报）');
+  set6.set({ updater: { pending: '{"kind":"wgt"}' } });     // 缺版本号
+  eq(u6.hasPending(), false, '没有版本号的标记 → 当没有红点');
 
   console.log('');
   console.log(fail === 0 ? '在线更新全部通过 ✓' : '失败 ' + fail + ' 项 ✗');

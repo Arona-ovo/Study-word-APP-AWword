@@ -450,6 +450,18 @@ console.log('== 17. 没有完全匹配 → 也要问 AI ==');
     FloatTabbar: {}, FloatNavbar: {}, WidgetProgress: {}, WidgetFavorites: {}, WidgetStreak: {},
     WidgetChart: {}, WidgetGoal: {}, WidgetUsage: {}, WidgetWorddrill: {}, WidgetChat: {},
     AppCardBlocks: {}, AppDialog: {}, OnboardingMask: {},
+    // 首页新增的更新弹窗（utils/updater.js）：给**真模块 + 内存 storage**，
+    // 不给空壳 —— 空壳会让 hasPending() 整条路径跳过，将来真出问题这里照绿（假绿）
+    updater: (function () {
+      const box = {};
+      const u = {
+        getStorageSync: (k) => (k in box ? box[k] : ''),
+        setStorageSync: (k, v) => { box[k] = v; },
+        removeStorageSync: (k) => { delete box[k]; },
+        getStorageInfoSync: () => ({ keys: Object.keys(box) })
+      };
+      return load('utils/updater.js', { uni: u, settings: load('utils/settings.js', { uni: u }) });
+    })(),
     // 搜索历史：首页注册了组件 + 引了模块，缺桩的话脚本加载即崩
     SearchHistory: {}, searchHistory: { list: () => [], add: () => true, remove: () => true, clear: () => true }
   }, 'home.vue').default;

@@ -446,6 +446,19 @@
       @confirm="onPartnerAsk"
       @cancel="partnerAsk.show = false"
     />
+
+    <!-- 新版本提示。两个按钮必须都是明确动作：
+         「更新」真去装；「不再提示」记一笔 skip，这个版本不再出现。
+         不能只有一个「知道了」—— 那等于替用户决定不更新。 -->
+    <app-dialog
+      :show="updateAsk.show"
+      :title="updateTitle"
+      :content="updateContent"
+      :confirm-text="$t('更新')"
+      :cancel-text="$t('不再提示')"
+      @confirm="onUpdateConfirm"
+      @cancel="onUpdateCancel"
+    />
   </view>
 </template>
 
@@ -473,6 +486,10 @@ import WidgetWorddrill from '../../components/home-widgets/widget-worddrill.vue'
 import WidgetChat from '../../components/home-widgets/widget-chat.vue'
 import AppCardBlocks from '../../components/app-card-blocks.vue'
 import AppDialog from '../../components/app-dialog/app-dialog.vue'
+
+// 新版本弹窗本次进程只问一次（tab 页常驻，onShow 会反复触发 ——
+// 切个 tab 回来又弹一遍等于骚扰）。模块级而不是 data：跨 onShow 记住。
+let updateAsked = false
 import * as homeLayout from '../../utils/home-layout.ts'
 import * as pageDoc from '../../utils/page-doc.js'
 import * as pageCommand from '../../utils/page-command.js'
@@ -480,6 +497,7 @@ import * as intent from '../../utils/intent.js'
 import * as pageAgent from '../../services/page-agent.js'
 import * as cardSpec from '../../utils/card-spec.js'
 import { speak as speakAny } from '../../services/voice.js'
+import * as updater from '../../utils/updater.js'
 import * as onboarding from '../../utils/onboarding.js'
 import * as partner from '../../utils/partner.js'
 import OnboardingMask from '../../components/onboarding-mask.vue'
@@ -593,6 +611,9 @@ export default {
       // 关联 PWstudy 的首次询问（三选一）。和 detect 一样是"可选增强"：
       // 没装 / 已关联 / 明确关掉 / 正在练习，任何一种情况都不弹。
       partnerAsk: { show: false },
+      // 新版本提示弹窗（utils/updater.js 的 pending 标记驱动）
+      updateAsk: { show: false },
+      updateTitle: '',
       dragIndex: -1,
       dragDy: 0,
       dragStartY: 0,
@@ -623,6 +644,16 @@ export default {
     }
   },
   computed: {
+    /** 更新弹窗的正文：热更和整包必须说清楚差别（一个不动数据、一个要下整包） */
+    updateContent() {
+      void this.updateTitle
+      const info = updater.pendingInfo()
+      if (!info) return ''
+      return info.kind === 'apk'
+        ? t('这次要下载完整安装包')
+        : t('下载后自动安装并重启，不动你的学习数据')
+    },
+
     /** 首次询问的三个选项：接受 / 稍后 / 拒绝，一个都不能少 */
     partnerAskItems() {
       void this.__lang
@@ -827,7 +858,10 @@ export default {
     // 要不要问一句"和 PWstudy 打通吗"。内部自己判条件（装没装 / 问过几次 / 在不在练习），
     // 最多问 3 次、两次之间至少隔 2 天，练习中一次都不弹。
     this.maybePartnerAsk()
+    // 有新版本 → 弹一句（放在最后：不跟引导 / 关联询问抢）
+    this.maybeUpdateAsk()
   },
+
   onHide() {
     if (this.searchTimer) { clearTimeout(this.searchTimer); this.searchTimer = 0 }
     // 推荐条的延迟收起定时器也一并清掉，回来时重新由 focus 驱动
@@ -861,6 +895,39 @@ export default {
     return false
   },
   methods: {
+    // ---------- 新版本提示弹窗 ----------
+    // 启动那次自检只负责"查到"，把结果落到 storage（updater.noteUpdate），
+    // 弹不弹由首页决定 —— 引导 / 关联询问同时在场时不抢，下次进首页再问。
+    maybeUpdateAsk() {
+      if (updateAsked) return                    // 本次进程已经问过，不重复烦人
+      if (this.guide.show || this.partnerAsk.show || this.delConfirm.show) return
+      if (!updater.hasPending()) return
+      updateAsked = true
+      this.updateTitle = t('发现新版本 {v}', { v: updater.pendingInfo().versionText })
+      this.updateAsk = { show: true }
+    },
+    onUpdateConfirm() {
+      this.updateAsk = { show: false }
+      const info = updater.pendingInfo()
+      if (!info) return
+      if (info.kind === 'apk') {
+        // 整包不在 App 内静默装（合规 + 老基座风险），交给浏览器
+        const r = updater.openReleasePage()
+        if (r === 'copied') uni.showToast({ title: t('链接已复制，粘贴到浏览器打开'), icon: 'none' })
+        else if (r === 'failed') uni.showToast({ title: t('打不开，请手动访问 GitHub'), icon: 'none' })
+        return
+      }
+      uni.showToast({ title: t('正在下载更新…'), icon: 'none', duration: 3000 })
+      updater.installWgt(info.url).catch(() => {
+        // 装不上（下载中断 / 基座不配套）必须给退路，不能卡在"更新中"
+        uni.showToast({ title: t('没更新成，可去 GitHub 手动下载'), icon: 'none' })
+      })
+    },
+    // 「不再提示」= 这个版本以后都别问了（不是"下次再说"：那是设置页里那颗按钮的语义）
+    onUpdateCancel() {
+      this.updateAsk = { show: false }
+      try { updater.skipThis() } catch (e) {}
+    },
     // ---------- 关联 PWstudy（可选增强）----------
     // 三个硬规矩：可跳过、可关闭、不绝不打断正在进行的事。
     // 所以它是"延迟 1.2 秒 + 已有弹窗让路 + 正在练习不弹"这三件小事叠出来的。

@@ -118,11 +118,13 @@ export async function check() {
   const apk = pick(/\.apk$/i)
   if (apk && cmpVersion(apk.version, cur) > 0) {
     latest = { kind: 'apk', version: apk.version, url: apk.url, name: apk.name }
+    noteUpdate(latest)
     return latest
   }
   const wgt = pick(/\.wgt$/i)
   if (wgt && cmpVersion(wgt.version, cur) > 0) {
     latest = { kind: 'wgt', version: wgt.version, url: wgt.url, name: wgt.name }
+    noteUpdate(latest)
     return latest
   }
   latest = { kind: 'none' }
@@ -156,8 +158,86 @@ export function noteChecked() {
 /** 用户点了"以后再说"：这个版本本次不再提示（下次发新版本还是会提示） */
 export function skipThis() {
   try {
-    settings.set({ updater: { skip: (latest && latest.version ? latest.version.join('.') : '') } })
+    const v = latest && latest.version ? latest.version.join('.') : ''
+    settings.set({ updater: { skip: v } })
+    // 红点也一起收掉 —— "以后再说"的意思就是这个版本别再在我眼前晃
+    if (!v || v === pendingVersion()) clearPending()
   } catch (e) {}
+}
+
+// ---------- 待更新标记（首页弹窗 / 「我的 → 设置」红点用它）----------
+//
+// 为什么不直接用模块级的 latest：它是内存变量，App 一重启就没了。
+// 自检有 12 小时节流，重启后那段时间根本不会发请求，红点会莫名其妙消失。
+// 所以要落到 storage，让"有新版本"这件事**跨进程、跨天**地留着。
+//
+// ⚠️ 存 JSON 字符串而不是对象：settings.set() 是**深合并**（项目约定 14），
+// 存对象的话清不掉（写 null 会被合并忽略）。字符串是整体覆盖，干净。
+
+/** 记一笔"发现新版本" */
+export function noteUpdate(r) {
+  try {
+    const v = r && r.version ? r.version.join('.') : ''
+    if (!v) return
+    settings.set({
+      updater: { pending: JSON.stringify({ v: v, kind: String(r.kind || ''), url: String(r.url || '') }) }
+    })
+  } catch (e) {}
+}
+
+export function clearPending() {
+  try { settings.set({ updater: { pending: '' } }) } catch (e) {}
+}
+
+/** 解析待更新标记（坏数据当没有） */
+function pendingRaw() {
+  try {
+    const u = (settings.get() || {}).updater || {}
+    const s = String(u.pending || '')
+    if (!s) return null
+    const o = JSON.parse(s)
+    if (!o || !o.v) return null
+    // 用户点过"不再提示"的版本 → 不再算待更新
+    if (String(o.v) === String(u.skip || '')) return null
+    return o
+  } catch (e) {
+    return null
+  }
+}
+
+function pendingVersion() {
+  const o = pendingRaw()
+  return o ? String(o.v) : ''
+}
+
+/**
+ * 有没有"该提示用户"的待更新版本。
+ * ⚠️ 这里要重新比一次版本号：装上新版本之后，标记里那个版本号就不再比本机新了，
+ * 红点会自动消失 —— 不用在装完后手动清（那一步很容易漏，漏了就是永远摘不掉的红点）。
+ */
+export function hasPending() {
+  try {
+    const o = pendingRaw()
+    if (!o) return false
+    const cur = parseVersion(localVersion())
+    if (!cur) return false
+    const v = parseVersion(String(o.v))
+    return !!v && cmpVersion(v, cur) > 0
+  } catch (e) {
+    return false
+  }
+}
+
+/** 待更新的详情（弹窗要点"更新"时得知道是热更还是整包、链接是什么） */
+export function pendingInfo() {
+  const o = pendingRaw()
+  if (!o) return null
+  return {
+    version: parseVersion(String(o.v)) || [],
+    versionText: String(o.v),
+    kind: String(o.kind || ''),
+    url: String(o.url || '')
+  }
 }
 
 /**
@@ -191,6 +271,7 @@ export function installWgt(url) {
         if (!res || res.statusCode !== 200) { reject(new Error('download')); return }
         plus.runtime.install(res.tempFilePath, { force: true }, () => {
           // 装完必须重启才生效（uni-app 的 wgt 更新规矩）
+          clearPending()
           try { plus.runtime.restart() } catch (e) {}
           resolve(true)
         }, (e) => reject(e || new Error('install')))

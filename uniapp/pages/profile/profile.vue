@@ -111,6 +111,9 @@
       </view>
       <view class="menu-item" @tap="go('/pkgManage/pages/settings/settings')">
         <text class="menu-title">{{ $t('设置') }}</text>
+        <!-- 有新版本可更新时的红点。只在真的有更新时才出现（入口类 UI 不藏起来，
+             但也不该凭空挂一个假的） -->
+        <view v-if="updateDot" class="menu-dot"></view>
         <text class="menu-arrow">›</text>
       </view>
     </view>
@@ -124,6 +127,7 @@
 <script>
 import { t } from '../../utils/i18n.js';
 import * as settings from '../../utils/settings'
+import * as updater from '../../utils/updater.js'
 import * as wordbook from '../../utils/wordbook'
 import * as auth from '../../services/auth'
 import { hideNativeTabBar, syncTabbar } from '../../utils/nav.js'
@@ -140,6 +144,8 @@ export default {
   mixins: [tabSlideMixin('profile')],
   data() {
     return {
+      // 「设置」入口的红点：有新版本待更新（utils/updater.js 的 pending 标记）
+      updateDot: false,
       profile: { avatar: '', nickname: DEFAULT_NICKNAME, account: '', bio: '' },
       overview: { mastered: 0, streak: 0, wrongCount: 0 },
       editing: false,
@@ -167,6 +173,9 @@ export default {
   onShow() {
     hideNativeTabBar()
     syncTabbar(this)
+    // 红点每次进「我的」都重读：装完新版本后 pending 会自动失效（版本号不再比本机新），
+    // 红点自己就消失了 —— 不需要在别处再记一笔"已经看过"。
+    this.updateDot = updater.hasPending()
     this.refresh()
     // 订阅登录态：登录页登录成功后这里能立刻更新（不依赖页面重新加载）
     if (!this.__authOff) {
@@ -489,6 +498,17 @@ export default {
 .menu-title { font-size: 30rpx; color: var(--ink-1, #17201a); }
 
 .menu-arrow { font-size: 32rpx; color: #c8cdc9; }
+
+/* 「设置」入口的更新红点：8px 实心圆点，不写数字 ——
+   它只表达"这儿有新东西"，具体是几版用户点进去看（设置页那两行有文字角标）。 */
+.menu-dot {
+  flex-shrink: 0;
+  width: 16rpx;
+  height: 16rpx;
+  margin-right: 10rpx;
+  border-radius: 50%;
+  background: #e5484d;
+}
 
 .menu-main { flex: 1; min-width: 0; }
 

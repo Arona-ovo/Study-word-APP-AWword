@@ -54,7 +54,10 @@ function defaults() {
       linkedAt: 0, lastSyncAt: 0, lastWords: 0, seenAt: 0
     },
     // 在线更新（utils/updater.js）：lastCheckAt 是自检节流用，skip 是"这个版本以后再说"
-    updater: { lastCheckAt: 0, skip: '' },
+    // pending = "发现过的新版本"标记（JSON 字符串：{v,kind,url}），首页弹窗与
+    // 「我的 → 设置」红点都读它。必须是字符串 —— settings.set 是深合并，
+    // 存对象的话清不掉（写 null 会被合并忽略）。
+    updater: { lastCheckAt: 0, skip: '', pending: '' },
     // 外观：主题色 / 背景（key 见 utils/theme.js 的 ACCENTS 与 BACKGROUNDS）
     theme: {
       accent: 'blue',      // 主题色

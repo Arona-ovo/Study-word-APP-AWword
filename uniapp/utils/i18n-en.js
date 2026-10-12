@@ -1329,5 +1329,8 @@ export default {
   '没检查成，可去 GitHub 手动下载': 'Check failed — you can grab it from GitHub',
   '没更新成，可去 GitHub 手动下载': 'Update failed — you can grab it from GitHub',
   '链接已复制，粘贴到浏览器打开': 'Link copied — paste it into a browser',
-  '打不开，请手动访问 GitHub': 'Cannot open it — please visit GitHub manually'
+  '打不开，请手动访问 GitHub': 'Cannot open it — please visit GitHub manually',
+  // 首页新版本弹窗（两个按钮）+ 「我的 → 设置」红点
+  '更新': 'Update',
+  '不再提示': "Don't ask again"
 };
