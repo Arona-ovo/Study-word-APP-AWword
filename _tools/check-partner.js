@@ -58,7 +58,8 @@ is(/partner:\s*\{[^}]*state:\s*'undecided'/.test(setSrc),
   .forEach((f) => {
     is(new RegExp('export\\s+function\\s+' + f + '\\s*\\(').test(pjs), 'partner.js 导出 ' + f + '()');
   });
-is(/pkg:\s*'com\.pwstudy\.app'/.test(pjs), "伙伴包名 = 'com.pwstudy.app'（与 PWstudy 侧 manifest 一致）");
+is(/pkg:\s*'com\.pwstudy\.app'/.test(pjs), "协议包名 = 'com.pwstudy.app'（与 PWstudy 侧 manifest 一致）");
+is(/pkgs:\s*\[[^\]]*'com\.PWstudy'/.test(pjs), "包名是一组、含真机变体 'com.PWstudy'（HBuilderX 里手滑填的那个）");
 is(/scheme:\s*'pwstudy'/.test(pjs), "伙伴 scheme = 'pwstudy'");
 
 console.log('\n== 2. 三态流转（取消必须落到 declined） ==');
@@ -140,6 +141,8 @@ is(/backToPartner/.test(practice), '手动「回去」仍然是同一个 finish 
 
 console.log('\n== 9. 运行时：状态机真跑一遍 ==');
 const mem = {};
+// 桩只认真机变体 com.PWstudy、不认协议包名 com.pwstudy.app ——
+// installed() 若只会查一个包名，下面这些测试就全得红
 let installedFlag = false;
 let schemeFlag = false;   // "系统能查到接得住 pwstudy:// 的 Activity" 与否
 const opened = [];
@@ -152,9 +155,10 @@ global.uni = {
 };
 global.plus = {
   runtime: {
-    // 真机上 Android 11+ 会拦掉 pname 查询（一律 false），这里两档都能开，方便验兜底
+    // 真机上 Android 11+ 会拦掉 pname 查询（一律 false），这里两档都能开，方便验兜底；
+    // pname 只认 com.PWstudy（真机变体）—— 逼着被测代码把注册表里那组包名逐个试完
     isApplicationExist: (o) => {
-      if (o && o.pname) return !!installedFlag
+      if (o && o.pname) return !!installedFlag && o.pname === 'com.PWstudy'
       if (o && o.datauri) return !!schemeFlag
       return false
     },
@@ -183,9 +187,9 @@ const ask = (pract) => partnerMod.shouldAsk({ installed: partnerMod.installed(),
 installedFlag = false;
 schemeFlag = false;
 settingsMod.set({ partner: { seenAt: 0 } });
-eq(partnerMod.installed(), false, '包名查不到、也没人唤起过 → 未检测到');
+eq(partnerMod.installed(), false, '一组包名全查不到、也没人唤起过 → 未检测到');
 schemeFlag = true;
-eq(partnerMod.installed(), true, '包名查不到但接得住 pwstudy:// → 仍算装了（第二档）');
+eq(partnerMod.installed(), true, '包名全查不到但接得住 pwstudy:// → 仍算装了（第二档）');
 schemeFlag = false;
 partnerMod.noteSeen();
 eq(partnerMod.installed(), true, '系统查询全失败、但它真唤起过我们 → 也算装了（第三档，最硬）');
@@ -198,7 +202,7 @@ installedFlag = false;
 eq(partnerMod.installed(), false, '没装 PWstudy → installed() = false');
 eq(ask(false), false, '没装 → 不该问');
 installedFlag = true;
-eq(partnerMod.installed(), true, '装了 → installed() = true');
+eq(partnerMod.installed(), true, '协议包名查不到、但真机变体 com.PWstudy 在 → installed() = true');
 settingsMod.set({ partner: { v: 1, state: 'undecided', askedCount: 0, lastAskAt: 0, linkedAt: 0, lastSyncAt: 0, lastWords: 0 } });
 eq(ask(false), true, '装了 + 从未问过 → 该问');
 eq(ask(true), false, '练习中不弹窗');

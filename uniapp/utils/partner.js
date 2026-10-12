@@ -33,7 +33,11 @@ export const PARTNERS = {
   pwstudy: {
     id: 'pwstudy',
     name: 'PWstudy',
-    pkg: 'com.pwstudy.app',   // Android 包名：检测安装 + 唤起（与它 manifest 里的 packageName 一致）
+    // Android 包名**一组**而不是一个：真机上确实装着 com.PWstudy（HBuilderX 打包界面里
+    // 手滑填的），协议里对外宣称的仍是 com.pwstudy.app —— 检测与唤起把两个都试一遍。
+    // ⚠️ 将来 PWstudy 定稿包名后，这里要同步收敛成一个，别越积越多。
+    pkgs: ['com.pwstudy.app', 'com.PWstudy'],
+    pkg: 'com.pwstudy.app',   // 协议包名（与它 manifest 里的 packageName 一致）
     scheme: 'pwstudy'         // 它自己的 scheme
   }
 }
@@ -113,25 +117,44 @@ export function isLinked() {
 /* ==================== 检测对方装没装 ==================== */
 
 /**
- * 伙伴 App 是否已安装。只支持 App 端 —— H5 / 小程序压根没有"检测已安装应用"，直接 false。
- *
- * 三档判定，从准到粗，任何一档命中就算装了：
- *   ① 按包名查（最准，也是最容易失效的一档）
- *   ② 查"有没有 Activity 接得住 pwstudy://"（Android 11+ 上包名查询被拦时，这条常被放行）
- *   ③ 它最近真的把我们唤起过（见 noteSeen）—— 系统查询说没装，可它明明跳得过来
- *
- * 为什么要叠到三档：Android 11（API 30）起有包可见性限制，targetSdk >= 30 的应用
- * 默认**看不见**别的已安装应用，① 会一律 false —— 表现就是"对面都能跳过来，这边
- * 却一直显示未检测到"。manifest 侧的 <queries> 与 QUERY_ALL_PACKAGES 都要**重新云打包**
- * 才生效，已经装在用户手机上的老 APK 永远吃不到，所以运行时必须有后两档兜底。
+ * 在系统里真正查得到的那一个包名（查不到返回 ''）。
+ * 检测与唤起都用它 —— 拿错包名去 launchApplication 只会白屏一下然后失败。
  */
-export function installed() {
+function knownPkg() {
   const p = partnerOf()
+  const list = (p.pkgs && p.pkgs.length) ? p.pkgs : [p.pkg]
   // #ifdef APP-PLUS
   try {
     const rt = (typeof plus !== 'undefined' && plus.runtime) ? plus.runtime : null
     if (rt && typeof rt.isApplicationExist === 'function') {
-      if (rt.isApplicationExist({ pname: p.pkg })) return true
+      for (let i = 0; i < list.length; i++) {
+        try { if (rt.isApplicationExist({ pname: list[i] })) return list[i] } catch (e) {}
+      }
+    }
+  } catch (e) {}
+  // #endif
+  return ''
+}
+
+/**
+ * 伙伴 App 是否已安装。只支持 App 端 —— H5 / 小程序压根没有"检测已安装应用"，直接 false。
+ *
+ * 三档判定，从准到粗，任何一档命中就算装了：
+ *   ① 逐个试注册表里的包名（协议包名 + 真机上出现过的变体）
+ *   ② 查"有没有 Activity 接得住 pwstudy://"（包名全错但 scheme 还在时，这条常被放行）
+ *   ③ 它最近真的把我们唤起过（见 noteSeen）—— 系统查询说没装，可它明明跳得过来
+ *
+ * 为什么要叠到三档：包名变体（真机踩过：HBuilderX 里填成 com.PWstudy）和
+ * Android 11+ 包可见性（targetSdk >= 30 时 pname 查询一律 false）都会让第①档哑掉，
+ * 而 manifest 侧的修复都要**重新云打包**才生效，已经装在用户手机上的 APK 永远吃不到。
+ */
+export function installed() {
+  const p = partnerOf()
+  if (knownPkg()) return true
+  // #ifdef APP-PLUS
+  try {
+    const rt = (typeof plus !== 'undefined' && plus.runtime) ? plus.runtime : null
+    if (rt && typeof rt.isApplicationExist === 'function') {
       try {
         if (rt.isApplicationExist({
           action: 'android.intent.action.VIEW',
@@ -257,24 +280,24 @@ export function syncAgo() {
  * 主动唤起 PWstudy（设置页「去 PWstudy」）。
  * 必须是用户点的 —— 自动跳到别的 App 会把人从学习状态里拽出来（文档 11.5）。
  *
- * 先试 launchApplication（按包名起，最稳）；不支持再退回 scheme。
- * 都不行时返回 false，由调用方说一句人话提示。
+ * 先用 knownPkg() 拿"系统里真查得到的那个包名"去 launchApplication（最稳，直达主界面）；
+ * 包名一个都没中就退回 scheme。都不行返回 false，由调用方说一句人话提示。
  */
 export function openPartner() {
   const p = partnerOf()
   // #ifdef APP-PLUS
   try {
-    if (typeof plus !== 'undefined' && plus.runtime && typeof plus.runtime.launchApplication === 'function') {
-      plus.runtime.launchApplication({ pname: p.pkg }, function () {}, function () {})
-      return true
-    }
-  } catch (e) {}
-  // #endif
-  // #ifdef APP-PLUS
-  try {
-    if (typeof plus !== 'undefined' && plus.runtime && typeof plus.runtime.openURL === 'function') {
-      plus.runtime.openURL(p.scheme + '://')
-      return true
+    const rt = (typeof plus !== 'undefined' && plus.runtime) ? plus.runtime : null
+    if (rt) {
+      const pkg = knownPkg()
+      if (pkg && typeof rt.launchApplication === 'function') {
+        rt.launchApplication({ pname: pkg })
+        return true
+      }
+      if (typeof rt.openURL === 'function') {
+        rt.openURL(p.scheme + '://')
+        return true
+      }
     }
   } catch (e) {}
   // #endif

@@ -55,10 +55,26 @@ targetSdkVersion = 28     minSdkVersion = 21
 **Android 11 的包可见性限制只对 `targetSdk >= 30` 生效**，28 的应用在 Android 11+ 上仍能查到全部已装应用 ——
 所以这条**不是**原因（`<queries>` 与 `QUERY_ALL_PACKAGES` 都已就位，纯粹是给以后升级 targetSdk 占位）。
 
-### 真正的嫌疑：包名对不上
+### 真正的嫌犯已落网：包名对不上（HBuilderX 截图实锤）
 
-我们用 `plus.runtime.isApplicationExist({ pname: 'com.pwstudy.app' })` 查。对面实际装上去的包名
-若不是 `com.pwstudy.app`（HBuilderX 里手填了别的 / 用的是标准基座 `io.dcloud.*`），这里就是 false。
+PWstudy 的云打包界面里，Android 包名填的是 **`com.PWstudy`**，而我们查的是
+`plus.runtime.isApplicationExist({ pname: 'com.pwstudy.app' })` —— 名字对不上，查询就是 false。
+跳转能用是因为 scheme（`pwstudy://` / `awword://`）跟包名无关，所以"跳得过来却查不到"完全自洽。
+
+### 修复：AWword 侧认一组包名（`utils/partner.js`）
+
+```
+pkgs: ['com.pwstudy.app', 'com.PWstudy']   // 协议包名 + 真机变体
+```
+
+`installed()` 与 `openPartner()` 都改为逐个试 `pkgs`（`knownPkg()` 返回系统里真查得到的那个，
+唤起时用它去 `launchApplication`，拿错包名只会白屏一下然后失败）。
+
+两条收尾路线（二选一，也可以都做）：
+- **PWstudy 侧改回 `com.pwstudy.app`** 重新云打包 —— 与它自己 manifest 里的 `packageName`、
+  交接文档 4.4 都对齐，协议最干净；缺点是老包要卸载重装。
+- **维持 `com.PWstudy`** —— AWword 这边已经认它，什么都不用做；
+  但 PWstudy 自己 manifest 里的 `packageName` 字段要与打包界面保持一致，别再分叉。
 
 自查（手机开 USB 调试）：
 
