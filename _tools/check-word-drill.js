@@ -365,10 +365,25 @@ function wipe() {
   });
   // dict / tts 用最薄的桩：这条断言只关心作答方式，不关心释义与朗读。
   // （反过来，凡是要验释义/朗读的断言都必须用真模块，不能用桩 —— 见 MEMORY 的假绿纪律）
+
+  // 断点续练（utils/study-resume.js）：给真模块 + 内存版 storage。
+  // 用真模块而不是空壳 —— finish() 每答一题都会调 saveResume()，
+  // 给空壳等于把这条路径整段跳过，页面里真出问题这里也照绿（假绿）。
+  const resumeMem = {};
+  const resumeStub = load('utils/study-resume.js', {
+    uni: {
+      getStorageSync: (k) => (k in resumeMem ? resumeMem[k] : ''),
+      setStorageSync: (k, v) => { resumeMem[k] = v; },
+      removeStorageSync: (k) => { delete resumeMem[k]; },
+      getStorageInfoSync: () => ({ keys: Object.keys(resumeMem) })
+    }
+  });
+
   const drillScript = (/<script[^>]*>([\s\S]*?)<\/script>/.exec(pv) || [])[1] || '';
   const drillPage = loadCode(drillScript, {
     t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && v[k] != null ? String(v[k]) : m)),
     engine, iplus1, wordbook, wordSession: ws, srs, settings: settingsMod,
+    resume: resumeStub,
     dict: { lookup: () => ({}) },
     barsSyncColors: () => true,
     sync: {}, tts: { speakAuto: () => {}, stop: () => {} },
@@ -682,6 +697,7 @@ function wipe() {
     const drillPage2 = loadCode(drillScript, {
       t: (s, v) => String(s).replace(/\{(\w+)\}/g, (m2, kk) => (v && v[kk] != null ? String(v[kk]) : m2)),
       engine, iplus1, wordbook, wordSession: ws, srs, settings: settingsMod,
+      resume: resumeStub,
       dict: { lookup: () => ({}) },
       barsSyncColors: () => true,
       sync: { recordStudy: () => {}, mirrorFavorite: () => {}, unmirrorFavorite: () => {} },

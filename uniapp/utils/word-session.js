@@ -329,6 +329,37 @@ export function modeAt(streak, modes) {
   return seq[i];
 }
 
+/**
+ * 从快照恢复会话时的验证：快照里记的是"上次那组词"和"练到哪了"，
+ * 但两次进入之间词书可能被换掉、词条可能被删 —— 拿一份对不上的快照直接灌进去，
+ * 轻则队列里出现空题（`byId[id]` 是 undefined → current() 返回 null → 页面空白），
+ * 重则进度条分母和队列对不上。所以恢复前必须逐个 id 校验，对不上就整份作废。
+ * 返回 null = 这份快照不能用（调用方退回"重新组一组"）。
+ */
+function validSnapshot(deck, snap) {
+  if (!snap || typeof snap !== 'object') return null;
+  const byId = {};
+  (deck || []).forEach(x => { byId[x.id] = x });
+  const queue = Array.isArray(snap.queue) ? snap.queue : null;
+  if (!queue) return null;
+  // 队列里每个 id 都得在这组题里，且不能重复
+  const seen = {};
+  for (let i = 0; i < queue.length; i++) {
+    const id = queue[i];
+    if (!byId[id] || seen[id]) return null;
+    seen[id] = true;
+  }
+  // 每个词的闯关状态也必须是这份 deck 里的（多出来的直接丢，不整份作废）
+  const state = {};
+  (deck || []).forEach(x => {
+    const s = snap.state && snap.state[x.id];
+    state[x.id] = s
+      ? { streak: Math.max(0, Number(s.streak) || 0), need: Math.max(1, Number(s.need) || CONFIRM_TIMES) }
+      : { streak: 0, need: snap.review ? 1 : CONFIRM_TIMES };
+  });
+  return { queue: queue.slice(), state: state, modes: snap.modes, review: !!snap.review };
+}
+
 export function createConfirmSession(deck, opts) {
   const review = !!(opts && opts.review);
   // ⚠️ 必须是 let：setModes() 会在用户中途换作答方式时重新赋值。
@@ -338,13 +369,26 @@ export function createConfirmSession(deck, opts) {
   let modes = (opts && opts.modes && opts.modes.length) ? opts.modes : CONFIRM_MODES;
   const byId = {};
   (deck || []).forEach(x => { byId[x.id] = x });
-  const state = {};
+  let state = {};
   (deck || []).forEach(x => {
     state[x.id] = { streak: 0, need: review ? 1 : CONFIRM_TIMES };
   });
   let queue = (deck || []).map(x => x.id);
   let done = 0;      // 已确认记住的词数（页面进度条的分子）
   let answered = 0;  // 总作答次数
+
+  // 断点续练：把上次那份快照灌回来（study-resume.js 负责存/取）。
+  // 只在**刚创建时**生效一次 —— 之后的状态变化由调用方重新 snapshot() 存盘。
+  const restored = validSnapshot(deck, opts && opts.saved);
+  if (restored) {
+    queue = restored.queue;
+    state = restored.state;
+    if (restored.modes && restored.modes.length) modes = restored.modes.slice();
+    done = Math.max(0, Number(opts.saved.done) || 0);
+    answered = Math.max(0, Number(opts.saved.answered) || 0);
+    // done 不能超过这组词的总数（快照被改坏时的兜底，进度条不会溢出）
+    done = Math.min(done, (deck || []).length);
+  }
 
   // 重新排队：插到队列第 3 位（隔两个词再出现）；队列只剩它时就是立即重来
   function requeue(id) {
@@ -426,6 +470,30 @@ export function createConfirmSession(deck, opts) {
 
     isDone() {
       return queue.length === 0;
+    },
+
+    /**
+     * 断点续练快照（纯 JSON，给 study-resume.js 存盘用）。
+     * 存 queue 而不是"当前第几题"：确认会话的队列是**会重排**的
+     * （答错 / 记错了都会把该词插回第 3 位），光记下标恢复不出"谁还没过"。
+     */
+    snapshot() {
+      return {
+        queue: queue.slice(),
+        state: Object.keys(state).reduce((o, id) => {
+          o[id] = { streak: state[id].streak, need: state[id].need };
+          return o;
+        }, {}),
+        modes: modes.slice(),
+        review: review,
+        done: done,
+        answered: answered
+      };
+    },
+
+    /** 这一场是不是从上次接着练的（页面据此提示"已回到上次进度"） */
+    resumed() {
+      return !!restored;
     }
   };
 }

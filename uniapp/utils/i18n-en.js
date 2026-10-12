@@ -222,6 +222,10 @@ export default {
   // ---------- 刷单词（独立背单词页 pkgStudy/pages/word-drill + 首页「刷单词」卡） ----------
   // 注：「刷单词（背词义）」那条随首页重复入口一起删了，入口只留下面这张卡
   '刷单词': 'Word drill',
+  // 断点续练（utils/study-resume.js）：背单词 / 句子练习两个页共用这两条
+  '接着上次：还剩 {n} 个词': 'Picked up where you left off · {n} words to go',
+  '接着上次：第 {n} 题': 'Picked up where you left off · question {n}',
+  '重新开始': 'Start over',
   '选义': 'Pick meaning',
   '拼写': 'Spell it',
   '自评': 'Self-grade',

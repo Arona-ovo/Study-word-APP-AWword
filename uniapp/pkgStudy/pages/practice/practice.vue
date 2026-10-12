@@ -26,6 +26,14 @@
 
     <!-- 答题流程 -->
     <block v-if="!finished">
+      <!-- 断点续练提示：这一组是接着上次做的。
+           必须说出来 —— 进度条不是从 0 开始，不说会以为出了错；
+           想从头来点「重新开始」（restart 会先清掉断点）。 -->
+      <view v-if="resumeHint" class="pl-banner weak">
+        <text class="pl-txt">{{ resumeHint }}</text>
+        <view class="pl-go" @tap="restart">{{ $t('重新开始') }}</view>
+      </view>
+
       <!-- 顶部两条进度。
            上面「已做」：累计作答次数，从零开始累加、不带分母（同一个词/同一句反复
            确认也照记；改判不回退）。进度条按"每做完一轮（= 本组题量）"循环填充。
@@ -293,6 +301,7 @@ import * as session from '../../../utils/session'
 import * as iplus1 from '../../../utils/iplus1'
 import * as wordbook from '../../../utils/wordbook'
 import * as wordSession from '../../../utils/word-session'
+import * as resume from '../../../utils/study-resume.js'
 import * as judge from '../../../utils/judge'
 import * as tts from '../../../services/voice'
 import { barsSyncColors } from '../../../utils/theme.js'
@@ -369,6 +378,8 @@ export default {
       answerText: '',
       // 两条进度条的颜色模式（设置页「两条进度条同色系」）：sync / split
       barsSync: true,
+      // 「接着上次」提示：非空说明这一组是从断点恢复的
+      resumeHint: '',
       finished: false,
       empty: false,
       emptyText: '',
@@ -482,6 +493,8 @@ export default {
     // 页面销毁：先置 alive=false，让还在跑的出题（可能正卡在 AI 请求上）
     // 走 shouldStop 提前收尾，回来也不会再朗读题目
     this.alive = false
+    // 兜底存一次断点（做题中途直接退出、还没点「下一题」的那种）
+    this.saveResume()
     this.clearAnswerTimer()
     tts.stop()
     // 搜索里的 AI 兜底可能还挂着定时器 → 一起收干净
@@ -531,6 +544,44 @@ export default {
       }
     },
 
+    /**
+     * 试着从上次的断点恢复一组题。
+     * 返回 true = 恢复成功，调用方直接返回（别再走出题链路）；
+     * false = 没有可用断点，正常出题。
+     *
+     * 题目整份存下来（而不是只存下标重新生成）：AI 出题慢且每次结果不同，
+     * 只存下标的话恢复出来的就是另一组题，"续练"名存实亡。
+     */
+    restore(source) {
+      const snap = resume.load(resume.KIND.practice, this.bookId, source)
+      if (!snap) return false
+      const qs = snap.items
+      if (!qs || !qs.length) return false
+      // 下标越界（快照被改坏 / 题量变过）→ 这份断点作废，正常重新出题
+      const idx = Math.max(0, Math.min(qs.length - 1, Number(snap.idx) || 0))
+      this.source = source
+      this.questions = qs
+      this.correctCount = Math.max(0, Number(snap.correctCount) || 0)
+      this.answerCount = Math.max(0, Number(snap.answerCount) || 0)
+      this.finished = false
+      this.empty = false
+      this.resumeHint = t('接着上次：第 {n} 题', { n: idx + 1 })
+      this.syncBars()
+      this.setupQuestion(idx)
+      return true
+    },
+
+    /** 存一份断点（每答一题存一次，理由同背单词页：进程被回收那次最需要兜住） */
+    saveResume() {
+      if (!this.questions || !this.questions.length) return
+      resume.save(resume.KIND.practice, this.bookId, this.source, {
+        items: this.questions,
+        idx: this.idx,
+        correctCount: this.correctCount,
+        answerCount: this.answerCount
+      })
+    },
+
     async start(source) {
       // 当前词书一个词都没有（如刚新建的自建词书）→ 明确提示，避免空转
       if (source !== 'review' && !wordbook.bookWords(this.bookId).length) {
@@ -539,6 +590,10 @@ export default {
         this.emptyText = t('当前词书还没有词汇，请到「词库 → 导入单词」粘贴单词或用 AI 生成')
         return
       }
+      // 断点续练：这一组上次没做完 → 直接把题目和进度都拿回来，不重新出题。
+      // 不重新出题是有意的：① AI 出题要等几秒，每次回来都重造既慢又费 token；
+      // ② 重新生成的题会**换掉**，用户"上次做到第 4 题"的感觉就落空了。
+      if (this.restore(source)) return
       // 每组题量 = 该词书的「每日学会题量」目标（词库详情 → 每日目标 可调）
       const size = this.sessionSize()
       let qs = []
@@ -1086,13 +1141,19 @@ export default {
       if (n >= this.questions.length) {
         tts.stop()
         this.finished = true
+        // 这一组做完了 → 断点作废，下次进来重新出一组
+        resume.clear(resume.KIND.practice, this.bookId, this.source)
       } else {
         this.setupQuestion(n)
+        // 每前进一题存一次：下次打开（或进程被回收后）从这里接着练
+        this.saveResume()
       }
     },
 
     restart() {
       this.clearAnswerTimer()
+      // 「再来一组」= 用户明确不要旧进度 → 先清断点，否则 start() 又把它读回来了
+      resume.clear(resume.KIND.practice, this.bookId, this.source)
       this.start('daily')
     },
 

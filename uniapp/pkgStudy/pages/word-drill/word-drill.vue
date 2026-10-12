@@ -18,6 +18,14 @@
            下面「记住」：确认达标的词数，有上限（= 组词数）。
            两条的颜色由设置页「两条进度条同色系」决定：sync = 浅版 + 主题色，
            split = 主题色 + 绿色（见 .wd-top.sync / .wd-top.split）。 -->
+      <!-- 断点续练提示：这一组是接着上次练的。
+           必须说出来 —— 用户看到进度条不是从 0 开始，不说会以为出了错。
+           想从头来点「再来一组」（restart 会清掉断点）。 -->
+      <view v-if="resumeHint" class="wd-resume">
+        <text class="wd-resume-t">{{ resumeHint }}</text>
+        <text class="wd-resume-x" @tap="restart">{{ $t('重新开始') }}</text>
+      </view>
+
       <view class="wd-top" :class="barsSync ? 'sync' : 'split'">
         <view class="wd-bar done">
           <text class="wd-bar-k">{{ $t('已做') }}</text>
@@ -246,6 +254,7 @@ import * as engine from '../../../utils/engine'
 import * as iplus1 from '../../../utils/iplus1'
 import * as wordbook from '../../../utils/wordbook'
 import * as wordSession from '../../../utils/word-session.js'
+import * as resume from '../../../utils/study-resume.js'
 import * as srs from '../../../utils/srs.js'
 import * as dict from '../../../utils/dict'
 import * as settings from '../../../utils/settings'
@@ -363,7 +372,9 @@ export default {
       answerTimer: 0,
       speaking: false,
       favOn: false,
-      bookSet: {}
+      bookSet: {},
+      // 「接着上次」提示：非空说明这一组是从断点恢复的（顶部显示一行小字）
+      resumeHint: ''
     }
   },
 
@@ -401,6 +412,9 @@ export default {
   },
   onUnload() {
     this.alive = false
+    // 兜底存一次：中途换过作答方式、但一题没答就退出时，前面的 saveResume 没跑过。
+    // 每答一题都已经存了，这里只是补上"没答题的改动"那一类。
+    this.saveResume()
     this.clearAnswerTimer()
     tts.stop()
     // 搜索里的 AI 兜底可能还挂着定时器 → 一起收干净
@@ -471,10 +485,20 @@ export default {
       // 多次确认会话：复习首答对即算记住（need=1）；日常 / 新词要连过三关。
       // 三关的题型序列按用户挑的作答方式起头、其余轮转（选拼写就 写→认→想），
       // 这样既尊重选择，又保证同一个词不会三遍考同一种提取方式。
+      //
+      // 断点续练：先看有没有这一组（同词书 + 同来源）没练完的快照，有就灌回会话 ——
+      // 队列、每个词的连对次数、已记住数一起还原，用户回到上次那个词而不是从头再来。
+      // 原先一退出就重置（2026-10-12 用户反馈）。快照对不上时 createConfirmSession
+      // 会自己放弃它，那就当全新一组。
+      const saved = resume.load(resume.KIND.drill, this.bookId, source)
       this.session = wordSession.createConfirmSession(deck, {
         review: source === 'review',
-        modes: wordSession.buildModeSequence(this.mode)
+        modes: wordSession.buildModeSequence(this.mode),
+        saved: saved
       })
+      this.resumeHint = (saved && this.session.resumed())
+        ? t('接着上次：还剩 {n} 个词', { n: this.session.progress().total - this.session.progress().done })
+        : ''
       this.seenTimes = {}
       this.doneCount = 0
       this.answerCount = 0
@@ -719,6 +743,8 @@ export default {
       }
       this.syncBars()
       this.knownCount = this.doneCount
+      // 进度变了就存一次断点：下一次打开（或进程被系统回收后）从这里接着练
+      this.saveResume()
 
       this.resultTitle = status === 'pass'
         ? (res && res.done ? t('记住了') : t('答对了，还差 {n} 关', { n: res ? Math.max(1, res.need - res.streak) : 1 }))
@@ -843,6 +869,8 @@ export default {
       if (this.session) this.doneCount = this.session.progress().done
       this.syncBars()
       this.knownCount = this.doneCount
+      // 改判也改变了场次进度（该词被重新排队）→ 一并存盘
+      this.saveResume()
       this.result = { pass: false, partial: false, score: 0 }
       this.resultTitle = t('记错了，稍后再来一遍')
       this.toneClass = 'bad'
@@ -936,7 +964,28 @@ export default {
 
     // 本组总结：多次确认机制下，组结束 = 所有词都确认完成（X / X 恒满），
     // 有信息量的是总作答次数与答错次数（体现重复巩固的量）
+    /**
+     * 存一份断点（每答一题都存，不只是退出时存）。
+     * 只存"退出时"的话，进程被系统直接回收（切后台被杀、闪退）那一次就丢了 ——
+     * 那恰恰是最需要兜住的场景。一题一次写入量很小，不值得为省这点 IO 冒险。
+     */
+    saveResume() {
+      if (!this.session || !this.questions || !this.questions.length) return
+      const s = this.session.snapshot()
+      resume.save(resume.KIND.drill, this.bookId, this.source, {
+        items: this.questions.map(x => x.id),
+        queue: s.queue,
+        state: s.state,
+        modes: s.modes,
+        review: s.review,
+        done: s.done,
+        answered: s.answered
+      })
+    },
+
     finishSummary() {
+      // 这一组练完了 → 断点作废，下次进来重新组一组
+      resume.clear(resume.KIND.drill, this.bookId, this.source)
       const c = wordSession.counts(this.bookId)
       const n = this.counts.pass + this.counts.partial + this.counts.fail
       this.summaryText = t('共作答 {a} 次 · 答错 {b} 次', { a: n, b: this.counts.fail })
@@ -957,6 +1006,8 @@ export default {
 
     restart() {
       if (!this.alive) return
+      // 「再来一组」= 用户明确不要旧进度 → 先清断点，否则 start() 又把它读回来了
+      resume.clear(resume.KIND.drill, this.bookId, this.source)
       this.start(this.source)
     },
 
@@ -971,6 +1022,32 @@ export default {
 /* 顶部双进度：两条同分母，上面「已练」下面「记住」。
    不用全局的 .topbar —— 那是练习页的横排布局，这里要竖着放两条。 */
 .wd-top { margin-bottom: 24rpx; }
+
+/* 「接着上次」一行：左边说明，右边「重新开始」。
+   只用主题色文字 + 细边框，不抢进度条的视觉重心 —— 它是提示不是按钮组。 */
+.wd-resume {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18rpx;
+  padding: 12rpx 20rpx;
+  border-radius: 16rpx;
+  border: 1rpx solid var(--line);
+  background: rgba(var(--surface-rgb), 0.45);
+}
+
+.wd-resume-t {
+  flex: 1;
+  font-size: 24rpx;
+  color: var(--text-2);
+}
+
+.wd-resume-x {
+  flex-shrink: 0;
+  padding-left: 20rpx;
+  font-size: 24rpx;
+  color: var(--accent);
+}
 
 .wd-bar { display: flex; align-items: center; }
 .wd-bar + .wd-bar { margin-top: 14rpx; }
