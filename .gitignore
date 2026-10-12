@@ -41,3 +41,7 @@ _scratch/
 .DS_Store
 Thumbs.db
 .git-msg-tmp.txt
+
+# ---- git 内部临时目录（filter-branch 等重写历史时产生，跑完本该自动删） ----
+# 留在工作区根会被 `git add -A` 误收进仓库，所以显式忽略。
+.git-rewrite/

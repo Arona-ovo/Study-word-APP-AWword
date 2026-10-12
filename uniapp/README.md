@@ -217,6 +217,28 @@
 - 校验：`_tools/check-native-assets.js` 第 3 组（逐像素读黑线：两段上边线、一段左边线、右下拉满、边缘透明、  
   可拉伸区占比）
 
+### 「启动界面选项」那两个勾怎么选
+
+`manifest.json` → `app-plus.splashscreen` 现在是
+`alwaysShowBeforeRender: true` / `waiting: false` / `autoclose: true` / `delay: 0`。
+**这个组合是对的，别顺手改**：
+
+- **「等待首页渲染完毕后再关闭Splash图」→ 保持勾选**（`alwaysShowBeforeRender: true`）。
+  官方文档原话：不勾 = 首页**加载完成**就关（不等于渲染完成），
+  "此时首页可能没有完成渲染，在部分设备可能会闪一下白屏，**不推荐使用**"。
+  本项目尤其不能关：首页是 `pages/cover/cover`（自定义启动页），启动时要装载词库
+  （3893 词条 + 检索表）+ 读设置 + 恢复主题背景，有实打实的初始化工作量 ——
+  原生启动图一关而 cover 还没画出来就是白屏一闪。
+  勾选时 `autoclose` 不起作用（引擎检测到渲染完自动关）；启动超过 10 秒会强制关闭，这是引擎兜底。
+- **「启动界面显示等待雪花」→ 保持不勾**（`waiting: false`）。
+  那个雪花 / 等待圈是 H5+ 内置的系统 loading，画在启动图**上面**。
+  本项目的启动图是纯渐变背景（`gen-splash.py` 只画渐变，图案全部交给 cover 页），
+  "等待感"由 cover 自己那套阿罗娜表情淡入负责 —— 打开它等于在渐变背景上叠一个系统转圈，
+  两套视觉体系打架，还接不上 cover 的动画。
+- 可选（HBuilderX 5.0+）：启动图底部是 `#CFE0FF` 淡蓝，若某些机型启动瞬间
+  **系统导航栏闪白**，可配 `distribute.splashscreen.androidNavigationBarColor` 取相近色。目前未配。
+- 和 `softinputMode` 一样：**这些是 manifest 级配置，云打包才生效，真机运行（标准基座）不生效**。
+
 **注意**：
 
 - **整句朗读走系统 TTS**（Android `TextToSpeech` / H5 `speechSynthesis`），一次合成整句，**无需联网**；  
