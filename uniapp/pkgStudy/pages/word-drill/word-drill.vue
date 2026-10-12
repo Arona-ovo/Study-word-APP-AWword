@@ -7,6 +7,7 @@
       :title="$t('刷单词')"
       :book-id="bookId"
       :locked="!canSearch"
+      :prefill="searchPrefill"
     />
 
     <block v-if="!finished">
@@ -385,6 +386,15 @@ export default {
     if (this.$refs.search) this.$refs.search.collapse()
   },
 
+  // 返回键 / 返回手势：搜索面板开着 → 先收面板，不是退出整页。
+  // 刷到一半退出去，进度虽然落了盘，但用户要重新进组、找到刚才的位置 —— 太伤（用户实测反馈）。
+  // return true = 这次返回已被消化（与首页 onBackPress 同一约定）；小程序端没有此钩子，不受影响。
+  onBackPress() {
+    const s = this.$refs && this.$refs.search
+    if (s && s.handleBack()) return true
+    return false
+  },
+
   onHide() {
     this.clearAnswerTimer()
     tts.stop()
@@ -406,6 +416,19 @@ export default {
     canSearch() {
       if (this.finished) return true
       return !!this.answered
+    },
+
+    /**
+     * 打开搜索时预填的词：这一关答完，用户抬头查的十有八九就是刚考的这个。
+     * 只在结果已揭晓（canSearch）后给 —— "想得起 / 写得出"这种只摆中文释义的关，
+     * 英文词还没考出来，绝不能从这里提前递出去（组件那边 locked 还拦一道，双保险）。
+     */
+    searchPrefill() {
+      try {
+        if (this.finished || !this.canSearch) return ''
+        const it = this.session && this.session.current()
+        return String((it && it.w) || '').trim()
+      } catch (e) { return '' }
     }
   },
 

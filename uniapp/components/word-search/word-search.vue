@@ -212,7 +212,11 @@ export default {
     // 现在能不能搜（页面判定：本题是否已经出结果）
     locked: { type: Boolean, default: false },
     // 锁着的时候点它给的解释（不说清楚，用户只会以为顶栏坏了）
-    lockHint: { type: String, default: '' }
+    lockHint: { type: String, default: '' },
+    // 打开搜索时预填的词（页面传：当前正在背的词 / 当前句的目标词）。
+    // 用户刚答完题抬头查词，十有八九查的就是刚考的这个 —— 别让人再拼一遍。
+    // 只在输入框为空时填，想查别的直接在框里改就行。
+    prefill: { type: String, default: '' }
   },
   data() {
     return {
@@ -329,6 +333,21 @@ export default {
       }
       this.active = true
       this.autofocus = true
+      // 预填当前正在背的词并**直接搜**：点开就能看到释义，不想查这个词
+      // 在框里改就行（不清空、不关面板）。只填不搜的话用户还得再按一次回车。
+      const pre = String(this.prefill || '').trim()
+      if (pre && !this.keyword) this.onInput(pre)
+    },
+
+    /**
+     * 页面 onBackPress 调它：搜索面板开着 → 收起并吞掉这次返回。
+     * 不拦的话返回键直接把做题页退了 —— 当场的学习进度跟着没（用户实测反馈）。
+     * 返回 true = 这次返回已被消化（与首页 onBackPress 同一约定）。
+     */
+    handleBack() {
+      if (!this.active) return false
+      this.close()
+      return true
     },
 
     onFocus() { this.autofocus = true },

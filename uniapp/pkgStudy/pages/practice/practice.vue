@@ -8,6 +8,7 @@
       :title="$t('翻译练习')"
       :book-id="bookId"
       :locked="!canSearch"
+      :prefill="searchPrefill"
     />
 
     <!-- PWstudy（番茄钟）把用户送过来时的来路提示 + 结束回跳。
@@ -416,6 +417,20 @@ export default {
     canSearch() {
       if (this.finished) return true
       return !!this.answered && !this.confirming
+    },
+
+    /**
+     * 打开搜索时预填的词：这一句考的目标词（通常 2~4 个，取第一个）。
+     * 句子本身预填进查词框没意义（搜整句查不出东西），取目标词最贴近
+     * "我刚在这句话里碰到的生词"。只在 canSearch 后给 —— 确认关里目标词
+     * 还是答案本体，绝不能提前递出去（组件那边 locked 还拦一道，双保险）。
+     */
+    searchPrefill() {
+      try {
+        if (this.finished || !this.canSearch) return ''
+        const ws = (this.q && this.q.words) || []
+        return String((ws[0] && ws[0].w) || '').trim()
+      } catch (e) { return '' }
     }
   },
   async onLoad(opt) {
@@ -450,6 +465,16 @@ export default {
     try { this.barsSync = barsSyncColors() } catch (e) { this.barsSync = true }
     // 从查词结果点进词条页、再返回：把搜索面板收起来，别让它杵在题目上面
     if (this.$refs.search) this.$refs.search.collapse()
+  },
+
+  // 返回键 / 返回手势：搜索面板开着 → 先收面板，不是退出整页。
+  // 练到一半被返回键带走，整组句子就得重新进 —— 用户要的是"退出查词"，
+  // 不是"放弃练习"（实测反馈）。return true = 这次返回已被消化；
+  // 小程序端没有此钩子，行为不变。
+  onBackPress() {
+    const s = this.$refs && this.$refs.search
+    if (s && s.handleBack()) return true
+    return false
   },
 
   onHide() { this.clearAnswerTimer(); tts.stop() },

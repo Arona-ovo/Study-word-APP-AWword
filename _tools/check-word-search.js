@@ -458,6 +458,11 @@ function mount(props) {
     assert(/<word-search[\s\S]{0,220}?ref="search"/.test(p), name + ' 主分支顶栏用 word-search');
     assert(/:locked="!canSearch"/.test(p), name + ' 锁定态挂在 canSearch 上');
     assert(/:book-id="bookId"/.test(p), name + ' 搜索范围 = 当前词书');
+    assert(/:prefill="searchPrefill"/.test(p), name + ' 顶栏传 :prefill（打开搜索预填当前词）');
+    assert(/onBackPress\(\)\s*\{[\s\S]{0,260}?handleBack\(\)/.test(p),
+      name + ' onBackPress 先收搜索面板（面板开着按返回 ≠ 退整页，用户实测反馈）');
+    assert(/searchPrefill\(\)[\s\S]{0,420}?this\.canSearch/.test(p),
+      name + ' 预填只在 canSearch 之后给（答案没揭晓的关卡不能提前递词）');
     assert(/onShow\(\)[\s\S]{0,400}?\$refs\.search\.collapse\(\)/.test(p),
       name + ' onShow 收起搜索面板（从词条页返回不杵在那儿）');
     assert(/onUnload\(\)[\s\S]{0,700}?\$refs\.search\.close\(\)/.test(p),
@@ -475,6 +480,14 @@ function mount(props) {
   const dv = fs.readFileSync(path.join(ROOT, 'pkgStudy/pages/word-drill/word-drill.vue'), 'utf8');
   assert(!/confirming/.test(dv.slice(dv.indexOf('canSearch()'), dv.indexOf('canSearch()') + 320)),
     'word-drill：三关每关都是独立作答，用 answered 一条就够');
+
+  // 预填的"词从哪来"两页各不相同，分开锁：
+  const dsp = dv.slice(dv.indexOf('searchPrefill()'), dv.indexOf('searchPrefill()') + 500);
+  assert(/session\.current\(\)[\s\S]{0,120}\.w/.test(dsp),
+    'word-drill 预填 = session.current().w（正在刷的这一张卡）');
+  const psp = pv.slice(pv.indexOf('searchPrefill()'), pv.indexOf('searchPrefill()') + 500);
+  assert(/q\.words[\s\S]{0,120}\[0\][\s\S]{0,120}\.w/.test(psp),
+    'practice 预填 = q.words[0].w（这句的目标词；搜整句查不出东西，不预填句子）');
 
   console.log('\n== 16. 三种结局要有三种说法（本地命中 / AI 命中 / 没找到 / 查询失败）==');
   // 用户实测反馈：查询结果一路走到"什么都没显示"就没了下文 —— 分不清
@@ -599,6 +612,36 @@ function mount(props) {
     assert(!/aiEnabled \? \$t\('AI 也未能补充这个词/.test(tpl), '不再写死"AI 也未能补充这个词"');
     assert(/\{\{ aiActionText \}\}/.test(tpl), '按钮文案跟着 aiTried 走（aiActionText）');
     assert(/this\.aiTried = true/.test(script), 'aiLookup 里真的把"问过了"记下来');
+  }
+
+  console.log('\n== 17. 预填与返回键（做题页查词的两条实测反馈） ==');
+  {
+    /* --- ① 打开搜索 → 当前正在背的词已经在输入框里，且直接出结果 --- */
+    stubs.local = () => [{ w: 'exclude', pos: 'v.', m: '排除', fromText: '当前词书' }];
+    stubs.cache = () => null;
+    stubs.explain = async () => ({ word: '', pos: '', meaningZh: '', examples: [] });
+    const pf = mount({ locked: false, bookId: 'B', prefill: 'exclude' });
+    pf.open();
+    eq(pf.keyword, 'exclude', '点开搜索 → 输入框预填当前正在背的词');
+    eq(pf.lastQuery, 'exclude', '预填按真实输入处理（不用再按一次回车）');
+    eq(pf.exactHits.length, 1, '预填的词直接出精确命中');
+    pf.close();
+    eq(pf.keyword, '', '收起后清空 → 下次打开重新预填，不会串词');
+    // 已有输入时不覆盖（理论上 close 都会清，这里防的是"开着再点标题"那条路）
+    const keep = mount({ locked: false, bookId: 'B', prefill: 'exclude' });
+    keep.open();
+    keep.keyword = 'mine';
+    keep.open();
+    eq(keep.keyword, 'mine', '已经开着再点标题 → 不覆盖用户正在输的词');
+
+    /* --- ② 返回键：面板开着 → 收面板吞掉返回；没开 → 不吞 --- */
+    stubs.local = () => [];
+    const bk = mount({ locked: false, bookId: 'B' });
+    eq(bk.handleBack(), false, '面板没开 → 不吞返回键（该退页面就退）');
+    bk.open();
+    eq(bk.handleBack(), true, '面板开着 → 返回键先收面板');
+    eq(bk.active, false, '返回后面板已收起');
+    eq(bk.keyword, '', '关键词一起清干净');
   }
 
   console.log('');
