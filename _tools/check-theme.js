@@ -333,7 +333,10 @@ if (settings.defaults && settings.defaults().theme.progressSync === true) {
   else console.log('  · 提示：这些页面仍有写死背景（需人工确认是否作用于根节点）：' + bgHack.join(', '));
 
   console.log('== 15. App.vue 背景层 CSS 契约 ==');
-  const appVue = fs.readFileSync(path.join(__dirname, '..', 'uniapp', 'App.vue'), 'utf8');
+  // ⚠️ 工作区文件是 CRLF：跨行正则里的 `\n\n`、lookbehind 会在 \r 上失手
+  // （2026-10-12：App.vue 统一成 CRLF 后这组凭空红了三条）——匹配前先归一成 \n
+  const appVue = fs.readFileSync(path.join(__dirname, '..', 'uniapp', 'App.vue'), 'utf8')
+    .replace(/\r\n/g, '\n');
   const hasRoot = /\.app-root\s*\{[^}]*position:\s*relative[^}]*z-index:\s*0/s.test(appVue);
   if (hasRoot) ok('.app-root 是层叠上下文（蒙版层才能落在背景之上、内容之下）');
   else bad('.app-root 缺少 position:relative + z-index:0');

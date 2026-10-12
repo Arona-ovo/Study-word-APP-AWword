@@ -45,7 +45,7 @@ const eq = (a, b, label) => {
   else bad(label + ' 期望 ' + JSON.stringify(b) + '，实际 ' + JSON.stringify(a));
 };
 
-const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
 const walk = (dir, ext, out) => {
   out = out || [];
   fs.readdirSync(dir).forEach((n) => {

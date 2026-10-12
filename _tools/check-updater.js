@@ -107,23 +107,33 @@ eq(up.cmpVersion([1, 2], [1, 2]), 0, '1.2 = 1.2');
 eq(up.cmpVersion([1, 1, 9], [1, 2]), -1, '1.1.9 < 1.2');
 assert(/^\d/.test(up.localVersion()), '本机版本读得到（' + up.localVersion() + '）');
 
+// ⚠️ 下面的 fixture 一律**从本机版本算出来**，不写死 1.2.1 这种字面量 ——
+// 否则每次改版本号这些用例都会凭空变红（2026-10-12 改 1.3 时踩到：1.2.1 < 1.3，
+// "有更新"的场景直接变成"没更新"）。
+const LV = up.parseVersion(up.localVersion()) || [1, 0];
+const SAME = LV.join('.');                                  // 等于本机
+const NEWER = [LV[0], LV[1], (LV[2] || 0) + 1].join('.');   // 比本机新一点
+const FAR = [LV[0], LV[1] + 1].join('.');                   // 次版本 +1
+assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
+  '测试用的「新版本」确实比本机新（' + NEWER + ' > ' + SAME + '）');
+
 (async () => {
   // ① 已经是最新（远端版本 = 本机）
-  handler = () => ({ assets: [{ name: 'AWword-1.2.wgt', browser_download_url: 'http://x/1.2.wgt' }] });
+  handler = () => ({ assets: [{ name: 'AWword-' + SAME + '.wgt', browser_download_url: 'http://x/' + SAME + '.wgt' }] });
   let r = await up.check();
   eq(r.kind, 'none', '远端版本不比本机新 → 没有更新');
 
   // ② 有热更包
-  handler = () => ({ assets: [{ name: 'AWword-1.2.1.wgt', browser_download_url: 'http://x/1.2.1.wgt' }] });
+  handler = () => ({ assets: [{ name: 'AWword-' + NEWER + '.wgt', browser_download_url: 'http://x/' + NEWER + '.wgt' }] });
   r = await up.check();
   eq(r.kind, 'wgt', '有更新的 wgt → 热更');
-  eq((r.version || []).join('.'), '1.2.1', '带上它的版本号');
+  eq((r.version || []).join('.'), NEWER, '带上它的版本号');
 
   // ③ 有整包：优先（整包最彻底，也是 wgt 装不上老基座时的兜底）
   handler = () => ({
     assets: [
-      { name: 'AWword-1.3.apk', browser_download_url: 'http://x/1.3.apk' },
-      { name: 'AWword-1.3.1.wgt', browser_download_url: 'http://x/1.3.1.wgt' }
+      { name: 'AWword-' + FAR + '.apk', browser_download_url: 'http://x/' + FAR + '.apk' },
+      { name: 'AWword-' + FAR + '.1.wgt', browser_download_url: 'http://x/' + FAR + '.1.wgt' }
     ]
   });
   r = await up.check();
@@ -167,9 +177,9 @@ assert(/^\d/.test(up.localVersion()), '本机版本读得到（' + up.localVersi
   };
   const withPlus = mount({ plus: fakePlus });
   downloaded = null; restarted = false;
-  const done = await withPlus.installWgt('http://x/1.2.1.wgt');
+  const done = await withPlus.installWgt('http://x/' + NEWER + '.wgt');
   eq(done, true, 'App 端装 wgt 成功');
-  eq(downloaded, 'http://x/1.2.1.wgt', '下载的是那条直链');
+  eq(downloaded, 'http://x/' + NEWER + '.wgt', '下载的是那条直链');
   assert(!!installed, '调了 plus.runtime.install');
   assert(restarted, '装完重启（wgt 不重启不生效）');
 
@@ -239,7 +249,7 @@ assert(/^\d/.test(up.localVersion()), '本机版本读得到（' + up.localVersi
   deps.updater = updaterSpy;
   deps.settings = settingsForUp;
   deps.t = (k) => String(k);   // 译文函数：直接回 key，断言文案选了哪条
-  deps.BUILD_INFO = { version: '1.2 Beta', versionCode: 121 };
+  deps.BUILD_INFO = { version: '1.3 Beta', versionCode: 131 };
   deps.FloatNavbar = { name: 'FloatNavbar' };
   deps.AppDialog = { name: 'AppDialog' };
 
@@ -257,7 +267,7 @@ assert(/^\d/.test(up.localVersion()), '本机版本读得到（' + up.localVersi
     updatePending: null
   }, Comp.methods);
 
-  const wgtRel = { kind: 'wgt', version: [1, 2, 1], url: 'http://x/1.2.1.wgt' };
+  const wgtRel = { kind: 'wgt', version: up.parseVersion(NEWER), url: 'http://x/' + NEWER + '.wgt' };
   st.askUpdate(wgtRel);
   eq(st.confirm.show, true, '弹的是统一弹窗（confirm.show）');
   eq(st.confirm.action, 'update', '弹窗派发标记 = update');
@@ -288,7 +298,7 @@ assert(/^\d/.test(up.localVersion()), '本机版本读得到（' + up.localVersi
   eq(skips, 1, '走安装路径时不记 skip');
 
   // apk → 不去装，改走"打开发布页让用户自己下整包"
-  const apkRel = { kind: 'apk', version: [1, 3, 0], url: 'http://x/1.3.0.apk' };
+  const apkRel = { kind: 'apk', version: up.parseVersion(FAR), url: 'http://x/' + FAR + '.apk' };
   st.askUpdate(apkRel);
   eq(st.confirm.content, '这次要下载完整安装包', 'apk 的文案换成"完整安装包"');
   eq(st.confirm.confirmText, '去下载', 'apk 的确认键 = 去下载');

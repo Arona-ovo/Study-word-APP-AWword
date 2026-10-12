@@ -1,12 +1,12 @@
 # App 自动覆盖更新方案（Android / uni-app）
 
-> **状态（1.2 Beta）**：第一版已落地，走 **GitHub Releases 当静态版本源**，见 **第十节**（本节之前的
+> **状态（1.3 Beta）**：第一版已落地，走 **GitHub Releases 当静态版本源**，见 **第十节**（本节之前的
 > 一~九是早期用「自建 JSON + 对象存储」的完整设计稿，保留作后续要接 CDN / 商业化分发时的参考）。
 > 已实现：设置页「检查更新」+「GitHub 上的最新版」两个入口、启动 3 秒后静默自检（12 小时节流）、
 > wgt 自动热更并重启、apk 走外链下载。
 
 面向本项目现状：HBuilderX 云打包 Android APK、无服务器、AppID 尚未获取、
-`manifest.json` 当前 `versionName=1.2 Beta / versionCode=121`（与 `data/build-info.js` 的
+`manifest.json` 当前 `versionName=1.3 Beta / versionCode=131`（与 `data/build-info.js` 的
 `BUILD_INFO.version` 同步维护，`versionCode` 只涨不跌、前两位 = 主+次版本）、
 `app-plus.distribute.android.permissions` 有 `INTERNET` 与 `QUERY_ALL_PACKAGES`。
 
@@ -320,7 +320,7 @@ update: {
 
 ---
 
-## 十、已落地实现（1.2 Beta）—— GitHub Releases 当版本源
+## 十、已落地实现（1.3 Beta）—— GitHub Releases 当版本源
 
 ### 10.1 为什么选它
 
@@ -363,7 +363,7 @@ update: {
    > wgt 版本只是资源包版本，但 **manifest 的 versionCode 也要跟着涨**，否则之后发的 apk 覆盖不上。
 2. HBuilderX：「发行 → 原生App-云打包 → 打 wgt 包」。
 3. 把 wgt 上传到 `AWword-APP` 这个 Release 的附件里，**文件名必须带版本号**
-   （如 `AWword-1.2.1.wgt`，`parseVersion()` 靠文件名里的数字认版本，抽不到就直接忽略该附件）。
+   （如 `AWword-1.3.1.wgt`，`parseVersion()` 靠文件名里的数字认版本，抽不到就直接忽略该附件）。
 4. 用户端：启动静默自检发现 → 弹「发现新版本」→ 点「立即更新」→ 下载安装 → **自动重启**生效。
 
 **B. 碰了任何原生（权限 / 模块 / 图标 / 启动图 / AppID / 证书 / manifest 原生配置）→ 发 apk**
