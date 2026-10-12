@@ -313,7 +313,7 @@ function seedStorage() {
     sfx: { play: noop },
     backup: b,
     backupIO: fakeIO,
-    BUILD_INFO: { version: '1.1 Beta', versionCode: 111 },
+    BUILD_INFO: { version: '1.2 Beta', versionCode: 121 },
     BACKGROUNDS: {}, ACCENTS: {}, SWATCHES: [], CUSTOM_KEY: 'custom', DEFAULT_CUSTOM: {},
     currentBg: () => 'sky', setBackground: noop, backgroundOf: () => ({}),
     currentAccent: () => 'blue', setAccent: noop,

@@ -35,7 +35,7 @@ const eq = (a, b, m) => assert(a === b, m + '（期望 ' + b + '，实际 ' + a 
   const bi = await import(U('data/build-info.js'));
   const info = bi.BUILD_INFO;
   assert(!!info && typeof info.version === 'string', 'data/build-info.js 导出了 BUILD_INFO.version');
-  eq(info.version, '1.1 Beta', '快照里的版本号');
+  eq(info.version, '1.2 Beta', '快照里的版本号');
 
   // manifest 是严格 JSON（HBuilderX 会重写它），别加注释
   const mf = JSON.parse(R('manifest.json'));
