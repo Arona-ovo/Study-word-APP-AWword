@@ -1299,5 +1299,31 @@ export default {
   '（本地暂无释义）': '(no local meaning yet)',
   '讲解没拿到，先记住上面两个释义': 'Could not fetch the explanation — start with the two meanings above',
   'AI 没启用或这项被关了，先把两个词的释义看清 —— 打开后这里会讲清区别':
-    'AI is off or this feature is disabled — read the two meanings for now. Turn it on and the difference shows up here.'
+    'AI is off or this feature is disabled — read the two meanings for now. Turn it on and the difference shows up here.',
+
+  // ---- 在线更新（utils/updater.js + 设置 › 关于）----
+  '检查更新': 'Check for updates',
+  'GitHub 上的最新版': 'Latest release on GitHub',
+  '更新装不上时，去这里手动下载安装包': 'If an update fails, download the installer here',
+  '打开 ›': 'Open ›',
+  '版本源：GitHub Releases': 'Update source: GitHub Releases',
+  '检查 ›': 'Check ›',
+  '检查中…': 'Checking…',
+  '正在检查…': 'Checking for updates…',
+  '已经是最新版': 'Already up to date',
+  '最新': 'Latest',
+  '重试 ›': 'Retry ›',
+  '有新版本 {v}': 'New version {v}',
+  '发现新版本 {v}': 'New version {v} available',
+  '这次要下载完整安装包': 'This one needs the full installer',
+  '下载后自动安装并重启，不动你的学习数据': 'Downloads, installs and restarts — your study data stays untouched',
+  '去下载': 'Download',
+  '去下载 ›': 'Download ›',
+  '更新 ›': 'Update ›',
+  '立即更新': 'Update now',
+  '正在下载更新…': 'Downloading update…',
+  '没检查成，可去 GitHub 手动下载': 'Check failed — you can grab it from GitHub',
+  '没更新成，可去 GitHub 手动下载': 'Update failed — you can grab it from GitHub',
+  '链接已复制，粘贴到浏览器打开': 'Link copied — paste it into a browser',
+  '打不开，请手动访问 GitHub': 'Cannot open it — please visit GitHub manually'
 };

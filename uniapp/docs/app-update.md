@@ -1,5 +1,10 @@
 # App 自动覆盖更新方案（Android / uni-app）
 
+> **状态（1.2 Beta）**：第一版已落地，走 **GitHub Releases 当静态版本源**，见 **第十节**（本节之前的
+> 一~九是早期用「自建 JSON + 对象存储」的完整设计稿，保留作后续要接 CDN / 商业化分发时的参考）。
+> 已实现：设置页「检查更新」+「GitHub 上的最新版」两个入口、启动 3 秒后静默自检（12 小时节流）、
+> wgt 自动热更并重启、apk 走外链下载。
+
 面向本项目现状：HBuilderX 云打包 Android APK、无服务器、AppID 尚未获取、
 `manifest.json` 当前 `versionName=1.2 Beta / versionCode=121`（与 `data/build-info.js` 的
 `BUILD_INFO.version` 同步维护，`versionCode` 只涨不跌、前两位 = 主+次版本）、
@@ -312,3 +317,69 @@ update: {
 5. **加更新弹窗组件 + 设置页「检查更新」入口**；
 6. **真机全流程验证**：1.1.0 → 1.2.0 覆盖安装，确认数据未丢、wgt 与 APK 两条路都通；
 7. 之后每次发版按第六节 checklist 走。
+
+---
+
+## 十、已落地实现（1.2 Beta）—— GitHub Releases 当版本源
+
+### 10.1 为什么选它
+
+没有服务器、只有自己用 / 小范围分发，所以服务端这一层直接用 GitHub 现成的：
+
+- 版本源 = **一个固定 tag 的 Release**：`AWword-APP`
+  （<https://github.com/Arona-ovo/Study-word-APP-AWword/releases/tag/AWword-APP>）。
+  每次发版**往这个 Release 里换附件**即可，App 里的地址**一个字都不用改**。
+- 不用写后端、不用买对象存储、不用管缓存头。
+- 代价：国内访问 `objects.githubusercontent.com` 时不稳（下载失败就降级为「去网页下载」，不影响使用）；
+  未认证调用 GitHub API 限 **60 次/小时/IP**，所以客户端做了 12 小时节流。
+
+### 10.2 代码位置
+
+| 文件 | 职责 |
+|---|---|
+| `uniapp/utils/updater.js` | 版本源地址、版本号解析与比较、`check()` / `autoCheck()` / `installWgt()` / `openReleasePage()` |
+| `uniapp/App.vue` | `onLaunch` 延迟 3 秒调 `updater.autoCheck()`（静默，失败不打扰） |
+| `uniapp/pkgManage/pages/settings/settings.vue` | 「检查更新」「GitHub 上的最新版」两行入口 + `onShow` 读 `peek()` 显示角标 |
+| `uniapp/utils/settings.js` | `updater: { lastCheckAt, skip }`（节流 + 「这个版本以后再说」） |
+| `_tools/check-updater.js` | 契约校验：源码契约 / 接入点 / 运行时 9 个场景真跑 |
+
+### 10.3 三条关键实现约定（改之前先看）
+
+1. **本机版本读 `BUILD_INFO.version`，绝不读 `plus.runtime.version`。**
+   `plus.runtime.version` 是**原生基座**的版本，wgt 装完它不变 —— 用它比较会导致
+   「装完新 wgt，还是一直提示有新版本」的死循环。小程序端它返回宿主版本，更不能用。
+2. **apk 优先于 wgt。** 同一个 Release 里同时挂了 `.apk` 和 `.wgt` 时，整包优先
+   （wgt 装不了原生，整包才一定能到位）。
+3. **「没查到」和「没查成」分开。** `check()` 请求失败是 **throw**，绝不能静默返回
+   「已是最新版」—— 那是在替 App 撒谎（项目硬约束 29 的同款要求）。
+
+### 10.4 发版运维约定（每次发版照做）
+
+**A. 只改了前端（JS / 页面 / 样式 / 图片 / 词表数据）→ 发 wgt**
+
+1. 改四处版本号真源（项目硬约束 38）：`_vocab/build.js` 的 `APP_VERSION`、`data/build-info.js`
+   的 `BUILD_INFO.version`、`manifest.json` 的 `versionName` + `versionCode`、
+   `_tools/check-version-egg.js` 的 `eq()`；外加 `_tools/check-backup.js` 里那个 `BUILD_INFO` 桩。
+   > wgt 版本只是资源包版本，但 **manifest 的 versionCode 也要跟着涨**，否则之后发的 apk 覆盖不上。
+2. HBuilderX：「发行 → 原生App-云打包 → 打 wgt 包」。
+3. 把 wgt 上传到 `AWword-APP` 这个 Release 的附件里，**文件名必须带版本号**
+   （如 `AWword-1.2.1.wgt`，`parseVersion()` 靠文件名里的数字认版本，抽不到就直接忽略该附件）。
+4. 用户端：启动静默自检发现 → 弹「发现新版本」→ 点「立即更新」→ 下载安装 → **自动重启**生效。
+
+**B. 碰了任何原生（权限 / 模块 / 图标 / 启动图 / AppID / 证书 / manifest 原生配置）→ 发 apk**
+
+1. 同样改四处版本号真源。
+2. 云打包出 APK，上传到同一个 Release。
+3. **⚠️ 必须同时把该 Release 下的 `.wgt` 附件删掉**（或确认它的版本号不比 apk 新）。
+   因为客户端是 **apk 优先**判断，但若 wgt 版本更高就会被老基座错误地装上不兼容的资源包 → **白屏**。
+   这条是 wgt 热更最容易翻车的地方（对应第六节 checklist 第 2 条）。
+4. 用户端：自检发现 apk → 弹更新 → 点「去下载」→ 跳浏览器打开 Release 页面手动下载安装
+   （App 内静默装 APK 在国内合规上有要求，见第七节，当前版本故意只做外链跳转）。
+
+### 10.5 已知限制 / 待办
+
+- **手机上现在装的旧包里没有这段检查代码** → 第一次必须**手动云打包 APK 覆盖安装**，
+  装上新包之后才谈得上自动更新。（代码在前端资源里，wgt 也是前端资源，但"第一次得有个人把门推开"。）
+- 启动图（`.9.png`）属于**原生资源**，wgt 更新不了 —— 改启动图必须发 APK（项目硬约束 39）。
+- 若之后要对外分发 / 国内稳定下载，按第一节接腾讯云 COS + `update.json`，
+  `updater.js` 只需换 `API` 与解析函数的实现，上层调用不用动。

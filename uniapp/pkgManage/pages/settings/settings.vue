@@ -808,6 +808,22 @@
           </view>
           <text class="row-value">{{ version }}</text>
         </view>
+        <!-- 在线更新：手动检查 + 打开发布页（版本源是 GitHub Releases，见 utils/updater.js）。
+             自检发现过新版本时，这一行自己就带着"有新版本"的角标进来。 -->
+        <view class="row" @tap="checkUpdate">
+          <view class="row-main">
+            <text class="row-title">{{ $t('检查更新') }}</text>
+            <text class="row-desc">{{ updateDesc }}</text>
+          </view>
+          <text class="row-value">{{ updateBtn }}</text>
+        </view>
+        <view class="row" @tap="openRelease">
+          <view class="row-main">
+            <text class="row-title">{{ $t('GitHub 上的最新版') }}</text>
+            <text class="row-desc">{{ $t('更新装不上时，去这里手动下载安装包') }}</text>
+          </view>
+          <text class="row-value">{{ $t('打开 ›') }}</text>
+        </view>
         <view class="row">
           <view class="row-main">
             <text class="row-title">{{ $t('介绍') }}</text>
@@ -851,6 +867,7 @@
       :title="confirm.title"
       :content="confirm.content"
       :confirm-text="confirm.confirmText"
+      :cancel-text="confirm.cancelText"
       :items="confirm.items"
       :danger="confirm.danger"
       :seq="confirm.seq"
@@ -860,7 +877,7 @@
       :password="confirm.password"
       :maxlength="confirm.maxlength"
       @confirm="onConfirmYes"
-      @cancel="confirm.show = false"
+      @cancel="onConfirmNo"
     />
 
     <!-- ===== 彩蛋：连点「版本」触发 =====
@@ -908,6 +925,7 @@ import * as aiCache from '../../../utils/ai-cache.js'
 import * as apiUsage from '../../../utils/api-usage.js'
 import * as onboarding from '../../../utils/onboarding.js'
 import * as partner from '../../../utils/partner.js'
+import * as updater from '../../../utils/updater.js'
 import * as confusion from '../../../utils/confusion.js'
 import { speakSentence as aiSpeak } from '../../../services/voice.js'
 import * as sfx from '../../../utils/sfx.js'
@@ -972,7 +990,7 @@ export default {
       // 危险确认（confirm 模式）与语言选择（sheet 模式）共用一张弹窗
       confirm: {
         show: false, mode: 'confirm', title: '', content: '',
-        confirmText: t('确定'), items: [], danger: true, seq: 0, action: '',
+        confirmText: t('确定'), cancelText: t('取消'), items: [], danger: true, seq: 0, action: '',
         // input / alert 模式用（导出密码、导入完成提示）
         btnMode: 'confirm', value: '', placeholder: '', password: false, maxlength: 24
       },
@@ -1062,6 +1080,14 @@ export default {
         { v: 'none', n: '无' }
       ],
       version: BUILD_INFO.version,
+      // 在线更新（utils/updater.js）：idle / checking / new / latest / fail
+      // 启动那次静默自检的结果也落到这里 —— 自检发现新版本时进来就能看到角标
+      updateState: 'idle',
+      updateVer: '',
+      updateKind: '',
+      // 弹更新确认框时把这一版的 Release 对象挂这儿 —— 弹窗的 payload 只有一个 true，
+      // 拿不到是哪个版本，共用一个 pending 字段比塞进 confirm 对象干净
+      updatePending: null,
       // AI 功能分项开关：默认收起；aiTick 是让 computed 跟着开关变化重算的响应式令牌
       aiFnOpen: false,
       aiTick: 0,
@@ -1241,10 +1267,35 @@ export default {
       const en = l.en === false ? t('英文不可用') : t('英文可用');
       const head = t('系统语音已就绪 · {zh} / {en}', { zh: zh, en: en });
       return l.device ? head + t('（设备语言 {d}）', { d: l.device }) : head;
+    },
+    // 「检查更新」那两行的文案一律在这里拼好 —— 模板里不能写表达式（项目约定 9）
+    updateDesc() {
+      void this.__lang;
+      if (this.updateState === 'checking') return t('正在检查…');
+      if (this.updateState === 'new') return t('有新版本 {v}', { v: this.updateVer });
+      if (this.updateState === 'latest') return t('已经是最新版');
+      if (this.updateState === 'fail') return t('没检查成，可去 GitHub 手动下载');
+      return t('版本源：GitHub Releases');
+    },
+    updateBtn() {
+      void this.__lang;
+      if (this.updateState === 'checking') return t('检查中…');
+      if (this.updateState === 'new') return this.updateKind === 'apk' ? t('去下载 ›') : t('更新 ›');
+      if (this.updateState === 'latest') return t('最新');
+      if (this.updateState === 'fail') return t('重试 ›');
+      return t('检查 ›');
     }
   },
   onShow() {
     this.refresh()
+    // 启动那次静默自检的结果（utils/updater.js）：真有新版本就把角标带进来，
+    // 没查过 / 查了没更新都保持 idle —— 不打扰。
+    const up = updater.peek()
+    if (up && up.kind && up.kind !== 'none') {
+      this.updateVer = (up.version || []).join('.')
+      this.updateKind = up.kind
+      this.updateState = 'new'
+    }
     this.accentKey = currentAccent()
     this.bgKey = currentBg()
     this.bgImage = currentBgImage()
@@ -1267,6 +1318,62 @@ export default {
     toggleSec(e) {
       const k = e.currentTarget.dataset.k
       this.openSec = this.openSec === k ? '' : k
+    },
+
+    // ---------- 在线更新（utils/updater.js）----------
+    // 手动检查：和启动那次静默自检共用 updater.check()，区别只在"要不要给反馈"。
+    // 失败必须说出来 —— 点了一下什么都没发生的按钮等于坏的（项目一贯的口径）。
+    checkUpdate() {
+      if (this.updateState === 'checking') return
+      this.updateState = 'checking'
+      updater.check().then((r) => {
+        if (!r || r.kind === 'none') {
+          this.updateState = 'latest'
+          uni.showToast({ title: t('已经是最新版'), icon: 'none' })
+          return
+        }
+        this.updateVer = (r.version || []).join('.')
+        this.updateKind = r.kind
+        this.updateState = 'new'
+        this.askUpdate(r)
+      }).catch(() => {
+        this.updateState = 'fail'
+        uni.showToast({ title: t('没检查成，可去 GitHub 手动下载'), icon: 'none' })
+      })
+    },
+    // 走全 App 统一弹窗（components/app-dialog），不用系统弹窗 —— 项目约定：
+    // 页面层不许各起一套，样式唯一来源是 App.vue 的 .pop-card。
+    askUpdate(r) {
+      const v = (r.version || []).join('.')
+      this.updatePending = r
+      this.confirm = Object.assign(this.blankConfirm(), {
+        show: true,
+        mode: 'confirm',
+        title: t('发现新版本 {v}', { v: v }),
+        // wgt 只换前端资源，学习数据在本机 storage 里，不受影响 —— 这句话要给用户，
+        // 否则"更新"两个字总让人担心记录没了。
+        content: r.kind === 'apk' ? t('这次要下载完整安装包') : t('下载后自动安装并重启，不动你的学习数据'),
+        confirmText: r.kind === 'apk' ? t('去下载') : t('立即更新'),
+        cancelText: t('以后再说'),
+        danger: false,
+        action: 'update'
+      })
+    },
+    doUpdate(r) {
+      if (!r) return
+      if (r.kind === 'apk') { this.openRelease(); return }
+      uni.showToast({ title: t('正在下载更新…'), icon: 'none', duration: 3000 })
+      updater.installWgt(r.url).catch(() => {
+        // 装不上（老基座不兼容 / 下载中断）必须有出路，不能卡在"更新中"
+        this.updateState = 'fail'
+        uni.showToast({ title: t('没更新成，可去 GitHub 手动下载'), icon: 'none' })
+      })
+    },
+    // 打开发布页：App 端走系统浏览器，小程序打不开外链 → 复制链接（总有出路）
+    openRelease() {
+      const r = updater.openReleasePage()
+      if (r === 'copied') uni.showToast({ title: t('链接已复制，粘贴到浏览器打开'), icon: 'none' })
+      else if (r === 'failed') uni.showToast({ title: t('打不开，请手动访问 GitHub'), icon: 'none' })
     },
 
     // 打赏页（设置 → 关于 → 支持 AWword）
@@ -2020,7 +2127,7 @@ export default {
     blankConfirm() {
       return {
         show: false, mode: 'confirm', title: '', content: '',
-        confirmText: t('确定'), items: [], danger: true,
+        confirmText: t('确定'), cancelText: t('取消'), items: [], danger: true,
         seq: (this.confirm && this.confirm.seq || 0) + 1, action: '',
         btnMode: 'confirm', value: '', placeholder: '', password: false, maxlength: 24
       }
@@ -2038,11 +2145,25 @@ export default {
       })
     },
 
+    // 点「取消 / 以后再说」。多数弹窗取消就是取消，唯独更新弹窗的取消键文案是
+    // 「以后再说」—— 那是用户明确说"这个版本别再问了"，所以要记一笔 skip。
+    // 记在 updater 里（settings.updater.skip），下次启动的自检会跳过这个版本号。
+    onConfirmNo() {
+      if (this.confirm.action === 'update') {
+        try { updater.skipThis() } catch (e) {}
+      }
+      this.confirm.show = false
+    },
+
     // payload 语义随 mode 变：sheet → 选中下标，confirm → true
     onConfirmYes(payload) {
       const act = this.confirm.action
       const items = this.confirm.items || []
       this.confirm.show = false
+      if (act === 'update') {
+        this.doUpdate(this.updatePending)
+        return
+      }
       if (act === 'locale') {
         const pick = items[payload]
         if (pick && pick.key) {

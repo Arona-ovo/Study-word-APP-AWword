@@ -53,6 +53,8 @@ function defaults() {
       v: 1, state: 'undecided', askedCount: 0, lastAskAt: 0,
       linkedAt: 0, lastSyncAt: 0, lastWords: 0, seenAt: 0
     },
+    // 在线更新（utils/updater.js）：lastCheckAt 是自检节流用，skip 是"这个版本以后再说"
+    updater: { lastCheckAt: 0, skip: '' },
     // 外观：主题色 / 背景（key 见 utils/theme.js 的 ACCENTS 与 BACKGROUNDS）
     theme: {
       accent: 'blue',      // 主题色

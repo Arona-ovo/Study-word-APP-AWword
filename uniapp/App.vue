@@ -13,6 +13,7 @@ import { purgeJunkWords } from './utils/wordbook.js'
 import * as usage from './utils/usage.js'
 import * as sfx from './utils/sfx.js'
 import * as link from './utils/link.js'
+import * as updater from './utils/updater.js'
 
 export default {
   onLaunch() {
@@ -37,6 +38,16 @@ export default {
     try {
       setTimeout(() => { autoDowngrade(false) }, 1500)
     } catch (e) {}
+    // 在线更新：**静默**自检一次（内部有 12 小时节流，失败一律不吭声）。
+    // 只在真有更新时把结果留在 updater 里，设置页 onShow 读它显示角标 ——
+    // 启动就弹"有更新"太吵，也容易在用户还没看清首页时抢走注意力。
+    // 延迟 3 秒：不和首屏渲染 / 封面动画抢主线程，也不拖慢启动时的数据初始化。
+    // 小程序端不编进去：那边 uni.request 要配域名白名单，而且小程序只能走版本审核。
+    // #ifdef APP-PLUS || H5
+    try {
+      setTimeout(() => { updater.autoCheck() }, 3000)
+    } catch (e) {}
+    // #endif
     // 被 awword:// 链接唤起（PWstudy 番茄钟把用户送过来背单词）：认领启动参数，
     // 再挂 newintent —— 应用已在后台时再被唤起走的是这个事件。
     // 放在这一串 init 之后：认领会 navigateTo 练习页，那一页依赖 store/settings 已就绪。

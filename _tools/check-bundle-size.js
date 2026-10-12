@@ -97,9 +97,11 @@ console.log('== 3. 主包 data 白名单与体积 ==');
 // word-senses.js 是「词典层完整义项」（3316 条 / 319KB），
 // 只被 utils/dict.js 引用，用来给词条页 / 点读 / 义项补全补上被 20 字上限截掉的义项。
 // 它**不进词书**（见 check-word-senses.js 第 8 组），所以不计入下面的 BOOKLOAD。
+// data/build-info.js 是 1 行版本号常量（2026-10-12 起被 utils/updater.js 引用 → 进了主包闭包）。
+// 它本来就属于"启动时同步装载"那一类，加进来只是让白名单跟上现实，不是放宽约束。
 const ALLOW = ['data/words.js', 'data/sentences.js', 'data/wordbooks.js', 'data/common-words.js',
   'data/lexicon.js', 'data/lexicon-data.js', 'data/bookdata.js', 'data/extra-words.js',
-  'data/word-senses.js'];
+  'data/word-senses.js', 'data/build-info.js'];
 const BOOKLOAD = ['data/lexicon-data.js', 'data/bookdata.js', 'data/extra-words.js'];
 const inMain = [...mainSet].map(rel).filter((r) => r.startsWith('data/')).sort();
 inMain.forEach((d) => assert(ALLOW.indexOf(d) >= 0, '主包 data 在白名单内：' + d));
