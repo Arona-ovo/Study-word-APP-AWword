@@ -824,6 +824,15 @@
           </view>
           <text class="row-value">{{ $t('打开 ›') }}</text>
         </view>
+        <!-- 服务器地址：接上自家后端才用得上（services/api.js 是唯一出口）。
+             没填 = 纯本地离线，这是**默认且正常**的形态，不是"缺配置"。 -->
+        <view class="row" @tap="editServer">
+          <view class="row-main">
+            <text class="row-title">{{ $t('服务器地址') }}</text>
+            <text class="row-desc">{{ serverDesc }}</text>
+          </view>
+          <text class="row-value">{{ serverValue }}</text>
+        </view>
         <view class="row">
           <view class="row-main">
             <text class="row-title">{{ $t('介绍') }}</text>
@@ -931,6 +940,9 @@ import { speakSentence as aiSpeak } from '../../../services/voice.js'
 import * as sfx from '../../../utils/sfx.js'
 import * as backup from '../../../utils/backup.js'
 import * as backupIO from '../../../utils/backup-io.js'
+// 自家后端的唯一出口（services/api.js）。这一版还没接服务器，所以这里只用到
+// 地址读写与探活；等后端就绪，同步逻辑从这一层长出来，业务代码不用动。
+import * as api from '../../../services/api.js'
 // 只有几百字节的规模快照：设置页在分包里，不能为了显示几个数字去 import 语料本身
 import { BUILD_INFO } from '../../../data/build-info.js'
 import {
@@ -1088,6 +1100,13 @@ export default {
       // 弹更新确认框时把这一版的 Release 对象挂这儿 —— 弹窗的 payload 只有一个 true，
       // 拿不到是哪个版本，共用一个 pending 字段比塞进 confirm 对象干净
       updatePending: null,
+      // 服务器地址（services/api.js）。默认空 = 纯本地离线，同步一律降级。
+      //   serverUrl   已填的地址（只用于显示）
+      //   serverState idle 没填 / testing 正在连 / ok 连上了 / fail 连不上或地址不合法
+      //   serverCode  失败原因的枚举码（见 services/api.js 的 codeOf），文案在这层翻
+      serverUrl: '',
+      serverState: 'idle',
+      serverCode: '',
       // AI 功能分项开关：默认收起；aiTick 是让 computed 跟着开关变化重算的响应式令牌
       aiFnOpen: false,
       aiTick: 0,
@@ -1284,6 +1303,40 @@ export default {
       if (this.updateState === 'latest') return t('最新');
       if (this.updateState === 'fail') return t('重试 ›');
       return t('检查 ›');
+    },
+    // 「服务器地址」那一行。绝大多数人看到的是"没填 = 纯本地离线" ——
+    // 这是**默认且正常**的形态，别写成"未配置"这种像缺了什么东西的说法。
+    serverDesc() {
+      void this.__lang;
+      if (this.serverState === 'testing') return t('正在连接…');
+      if (this.serverState === 'ok') return t('连上了，可同步账号数据');
+      if (this.serverState === 'fail') return this.serverReasonText;
+      // idle：没填 = 纯本地（默认形态）；填了但还没测过 —— **不替它声称连得上**，
+      // 进页面不自动发包（没服务器的人每次进设置页都要等 8 秒超时，太烦）
+      return this.serverUrl ? t('已保存，点这里测试连接')
+        : t('没填 = 纯本地离线，数据只在这台手机上');
+    },
+    serverValue() {
+      void this.__lang;
+      if (this.serverState === 'testing') return t('连接中…');
+      return this.serverUrl ? t('已设置 ›') : t('未设置 ›');
+    },
+    // 失败原因：api 层只给枚举码（'timeout' / 'unauthorized' …），人话在这层说。
+    // 每条都要能回答"下一步我该干什么" —— 光说"连接失败"等于没说。
+    serverReasonText() {
+      void this.__lang;
+      const m = {
+        notset: t('还没填服务器地址'),
+        timeout: t('连了 8 秒没反应，地址对吗'),
+        unauthorized: t('地址通了，但没登录或登录过期了'),
+        noping: t('地址通了，但这个服务没有 /ping'),
+        server: t('服务器自己报错了，稍后再试'),
+        // badurl 是**页面层**的本地校验（协议不对，压根没发请求），
+        // 不走 api.codeOf —— 那边只负责真发出去过、带回来的失败。
+        badurl: t('地址要以 https:// 或 http:// 开头'),
+        offline: t('连不上，检查一下地址和网络')
+      };
+      return m[this.serverCode] || t('连不上，检查一下地址和网络');
     }
   },
   onShow() {
@@ -1374,6 +1427,59 @@ export default {
       const r = updater.openReleasePage()
       if (r === 'copied') uni.showToast({ title: t('链接已复制，粘贴到浏览器打开'), icon: 'none' })
       else if (r === 'failed') uni.showToast({ title: t('打不开，请手动访问 GitHub'), icon: 'none' })
+    },
+
+    // ---------- 服务器地址（services/api.js）----------
+    // 这一版还没有后端，所以这个入口只做两件事：存地址、试着连一下。
+    // 同步逻辑等后端就绪再从这一层长出来 —— 页面不用改，wgt 一推就有。
+    editServer() {
+      this.confirm = Object.assign(this.blankConfirm(), {
+        show: true,
+        mode: 'input',
+        danger: false,
+        title: t('服务器地址'),
+        content: t('留空就切回纯本地离线，数据只在这台手机上。'),
+        confirmText: t('测试并保存'),
+        value: this.serverUrl,
+        placeholder: 'https://api.example.com',
+        // ⚠️ 组件默认 maxlength 只有 24，域名加路径轻松超 —— 必须显式放大
+        maxlength: 200,
+        action: 'server'
+      })
+    },
+    // 确认：先存（顺手去空白与末尾斜杠），再探活。
+    // 失败一律说"下一步能干什么"，原始报错只进 console，不摆到界面上。
+    onServerConfirm(raw) {
+      const url = api.setBaseURL(raw || '')
+      if (!url) {
+        // 清空 = 回到纯本地。项目约定 14：settings.set 是深合并，
+        // 写空串才是"清掉"，删 key 清不掉。
+        try { api.clearToken() } catch (e) {}
+        this.serverUrl = ''
+        this.serverState = 'idle'
+        this.serverCode = ''
+        uni.showToast({ title: t('已切回纯本地离线'), icon: 'none' })
+        return
+      }
+      if (!/^https?:\/\//i.test(url)) {
+        // 不拦着存（用户可能还没打完），但明确告诉他差在哪
+        this.serverUrl = url
+        this.serverState = 'fail'
+        this.serverCode = 'badurl'
+        uni.showToast({ title: this.serverReasonText, icon: 'none', duration: 3000 })
+        return
+      }
+      this.serverUrl = url
+      this.serverState = 'testing'
+      api.testConnection().then((r) => {
+        this.serverCode = r.ok ? '' : r.code
+        this.serverState = r.ok ? 'ok' : 'fail'
+        uni.showToast({
+          title: r.ok ? t('连上了') : this.serverReasonText,
+          icon: r.ok ? 'success' : 'none',
+          duration: r.ok ? 1500 : 3000
+        })
+      })
     },
 
     // 打赏页（设置 → 关于 → 支持 AWword）
@@ -1882,6 +1988,10 @@ export default {
       this.lastBackupAt = Number(((s.backup || {}).lastAt) || 0)
       // 伙伴 App 的关联状态：每次进页面都重查系统（用户可能刚在后台装完/卸掉）
       this.refreshPartner()
+      // 服务器地址：老存档没有 api 字段，api.baseURL() 兜空串 → idle（纯本地）
+      this.serverUrl = api.baseURL()
+      this.serverState = 'idle'
+      this.serverCode = ''
     },
 
     // ---------- 伙伴 App（PWstudy）：可选关联 ----------
@@ -2162,6 +2272,11 @@ export default {
       this.confirm.show = false
       if (act === 'update') {
         this.doUpdate(this.updatePending)
+        return
+      }
+      // 服务器地址：input 模式的 payload 就是用户填的文本
+      if (act === 'server') {
+        this.onServerConfirm(String(payload || ''))
         return
       }
       if (act === 'locale') {

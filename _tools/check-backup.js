@@ -279,6 +279,14 @@ function seedStorage() {
   const EN = load('utils/i18n-en.js');
   const i18n = load('utils/i18n.js', { settings: settingsMod, EN: EN.default || EN });
   const tt = i18n.t;
+  // 设置页 import 了 services/api.js（refresh() 里读服务器地址）。
+  // 依赖袋给它**真模块 + 内存 settings**，不给空壳 —— 空壳会让这条路径静默跳过，
+  // 导入流程就测不到了（项目规矩：漏注入依赖 = 假绿）。
+  const apiMod = load('services/api.js', {
+    request: () => Promise.resolve({}),
+    ServiceError: Error,
+    settings: settingsMod
+  });
 
   // 假 IO：不碰 plus，直接把"写成功 / 分享成功"回报出来
   const fakeIO = {
@@ -299,6 +307,8 @@ function seedStorage() {
     currentLocale: () => 'zh',
     setLocale: noop,
     settings: settingsMod,
+    api: apiMod,
+    api: apiMod,
     store: { reset: noop },
     voiceStop: noop, voiceStatus: () => ({}), resetVoice: noop,
     validateKeyFormat: () => true, testAIConnection: async () => ({ ok: true }),
@@ -313,7 +323,7 @@ function seedStorage() {
     sfx: { play: noop },
     backup: b,
     backupIO: fakeIO,
-    BUILD_INFO: { version: '1.3 Beta', versionCode: 131 },
+    BUILD_INFO: { version: '1.3.1 Beta', versionCode: 132 },
     BACKGROUNDS: {}, ACCENTS: {}, SWATCHES: [], CUSTOM_KEY: 'custom', DEFAULT_CUSTOM: {},
     currentBg: () => 'sky', setBackground: noop, backgroundOf: () => ({}),
     currentAccent: () => 'blue', setAccent: noop,

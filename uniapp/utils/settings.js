@@ -58,6 +58,14 @@ function defaults() {
     // 「我的 → 设置」红点都读它。必须是字符串 —— settings.set 是深合并，
     // 存对象的话清不掉（写 null 会被合并忽略）。
     updater: { lastCheckAt: 0, skip: '', pending: '' },
+    // 自家后端（services/api.js）。
+    // 这一版**还没有服务器**，baseURL 为空 = "还没接"，所有同步调用自动降级成纯本地，
+    // 行为和没这个字段时 100% 一致。等以后接了服务器，用户在设置页填个地址就行，
+    // 不用改代码、不用重新打包（wgt 一推，老用户立刻变"在线版"）。
+    //   baseURL  服务器地址（如 https://api.example.com；末尾斜杠会被去掉）
+    //   token    登录凭证（登录后才有；空 = 未登录，同步一律降级）
+    // ⚠️ token 是凭证，别写进备份导出 / 日志 / AI 上下文。
+    api: { baseURL: '', token: '' },
     // 外观：主题色 / 背景（key 见 utils/theme.js 的 ACCENTS 与 BACKGROUNDS）
     theme: {
       accent: 'blue',      // 主题色

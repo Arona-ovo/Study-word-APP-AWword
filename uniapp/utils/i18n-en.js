@@ -1332,5 +1332,31 @@ export default {
   '打不开，请手动访问 GitHub': 'Cannot open it — please visit GitHub manually',
   // 首页新版本弹窗（两个按钮）+ 「我的 → 设置」红点
   '更新': 'Update',
-  '不再提示': "Don't ask again"
+  '不再提示': "Don't ask again",
+
+  // ---- 服务器地址（services/api.js + 设置 › 关于）----
+  // 这一版还没有后端，默认态是"没填 = 纯本地离线"。
+  // ⚠️ 别把"未设置"翻成 Missing / Not configured 之类像缺了东西的词 —— 那是**正常形态**。
+  '服务器地址': 'Server address',
+  '留空就切回纯本地离线，数据只在这台手机上。':
+    'Leave it empty to stay fully offline — data stays on this device only.',
+  '测试并保存': 'Test & save',
+  '正在连接…': 'Connecting…',
+  '连接中…': 'Connecting…',
+  '连上了，可同步账号数据': 'Connected — account data can sync',
+  '连上了': 'Connected',
+  '已设置 ›': 'Set ›',
+  '未设置 ›': 'Not set ›',
+  '已切回纯本地离线': 'Back to offline-only mode',
+  '地址要以 https:// 或 http:// 开头': 'The address must start with https:// or http://',
+  '没填 = 纯本地离线，数据只在这台手机上':
+    'Not set = offline-only, data stays on this device',
+  '已保存，点这里测试连接': 'Saved — tap here to test the connection',
+  '连不上': 'Cannot connect',
+  '连不上，检查一下地址和网络': 'Cannot connect — check the address and your network',
+  '还没填服务器地址': 'No server address set yet',
+  '连了 8 秒没反应，地址对吗': 'No response for 8 seconds — is the address right?',
+  '地址通了，但没登录或登录过期了': 'Reachable, but not signed in or the session expired',
+  '地址通了，但这个服务没有 /ping': 'Reachable, but this server has no /ping',
+  '服务器自己报错了，稍后再试': 'The server returned an error — try again later'
 };
