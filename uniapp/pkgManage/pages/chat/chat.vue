@@ -123,6 +123,11 @@ const GREETING = "Hi! I'm your English partner. Let's chat — how are you today
  *   ② uni 的 `getSystemInfoSync().windowHeight`（App 端 adjustResize 生效时它会变矮）
  * 都取不到就返回 0 —— 调用方按"系统没帮我们压过"处理，宁可自己顶一下让输入框可见，
  * 也不要因为取不到高度而把它留在键盘底下。
+ *
+ * ⚠️ 只用来拿「键盘还没弹出来时」的基线（created / 量容器失败时的兜底）。
+ * **别拿它当"键盘弹出后的当前可视高度"** —— 真机上 ② 不随键盘更新，
+ * 用它判断"系统压没压过"会稳输（2026-10-12 的事故，详见 applyKbPad 的注释）。
+ * 键盘弹出后要量可视区，用 measureViewport()（量容器，是真的会变的那一个）。
  */
 function viewportH() {
   try {
@@ -225,7 +230,8 @@ export default {
     }
   },
   created() {
-    // 记下"键盘没弹出来时的可视高度"，onKbChange 靠它判断系统有没有帮我们压过可视区。
+    // 记下"键盘没弹出来时的可视高度"，applyKbPad 拿它跟实测容器高度比，判断系统有没有压过可视区。
+    // 只在**此时**取才准：键盘还没弹，getSystemInfoSync().windowHeight 是可信的。
     // 非响应式字段不进 data（按项目约定，但必须在 created 里先挂到实例上）。
     this._winH = viewportH()
   },
@@ -267,9 +273,8 @@ export default {
      * 两种情况都会让输入框被盖住。所以这里做一层**不依赖系统行为**的兜底。
      *
      * ⚠️ 不能无脑顶：系统如果真的压过可视区了，再顶一次会把输入框推到屏幕中间。
-     * 判据是"可视高度有没有真的变矮"（`window.innerHeight` 对比进入页面时的值）：
-     *   变矮了 = 系统已经缩过 → 自己不再顶（kbPad = 0）
-     *   没变   = 键盘浮在上面 → 键盘多高就顶多高
+     * 判据是"**容器**有没有真的变矮"，见 applyKbPad ——
+     * 千万别退回 `getSystemInfoSync().windowHeight`，理由写在那里。
      */
     onKbChange(res) {
       const h = Math.max(0, Number((res || {}).height) || 0)
@@ -280,19 +285,70 @@ export default {
         this.scrollToEnd(true)
         return
       }
-      const apply = () => {
-        // 120ms 那次复查时键盘可能已经收了，别再把输入框顶上去
-        if (!this.kbHeight) return
-        const now = viewportH()
-        // 可视区真的矮了 60px 以上 = 系统已经帮我们压过了 → 自己不再顶
-        const shrunk = this._winH > 0 && now > 0 && now < this._winH - 60
-        this.kbPad = shrunk ? 0 : h
-        this.scrollToEnd(true)
-      }
-      apply()
-      // 部分机型窗口高度更新慢一拍，等一下按真实情况再判一次
+      // 先乐观地相信系统（不顶），量完容器发现它没变矮再自己补上。
+      // 反过来做的话，adjustResize 生效时会先顶一次再撤回 —— 输入框要闪一下。
+      this.kbPad = 0
+      this.scrollToEnd(true)
+      // 等一下再判：键盘回调有可能比 webview 的 resize 早一拍，
+      // 立刻量的话会量到"还没变矮"的旧高度 → 误判成浮层键盘 → 白顶一下再落回来。
+      // 40ms 足够让 resize 落地；这期间不顶的代价只是极端情况下被盖 40ms，感知不到。
+      setTimeout(() => this.applyKbPad(), 40)
+      // 部分机型窗口更新更慢，再复查一次按真实情况定
       // （即使第一次判早了，也只是输入框多顶/少顶一下，不会卡死）
-      setTimeout(apply, 120)
+      setTimeout(() => this.applyKbPad(), 200)
+    },
+
+    /**
+     * 按"容器实际有没有变矮"决定要不要自己顶。
+     *
+     * ⚠️ 别退回 `uni.getSystemInfoSync().windowHeight` 当判据。
+     * 真机实测（2026-10-12 用户截图，输入框被顶到屏幕中间）：
+     * 键盘弹出后它**返回的仍是弹出前的高度**，于是"系统已经压过可视区"永远判为 false
+     * → 系统压一次（adjustResize）+ 自己又顶一次（kbPad = 键盘高度）
+     * → 输入框被推到屏幕中间，底下一大片空白，比被盖住还难用。
+     *
+     * `.chat-container` 是 `position: fixed; left/right/top/bottom: 0`，
+     * 它的高度**就是** webview 可视区高度，adjustResize 生效时是真的会变矮 ——
+     * 拿它当判据才不依赖"系统那个 API 会不会老实更新"。
+     */
+    applyKbPad() {
+      // 150ms 那次复查时键盘可能已经收了，别再把输入框顶上去
+      if (!this.kbHeight) return
+      const h = this.kbHeight
+      this.measureViewport((nowH) => {
+        if (!this.kbHeight) return
+        // 可视区真的矮了 60px 以上 = 系统已经帮我们压过了 → 自己不再顶
+        const shrunk = this._winH > 0 && nowH > 0 && nowH < this._winH - 60
+        const next = shrunk ? 0 : h
+        if (next !== this.kbPad) {
+          this.kbPad = next
+          this.scrollToEnd(true)
+        }
+      })
+    },
+
+    /**
+     * 量 `.chat-container` 的真实渲染高度（= 当前 webview 可视区高度），结果走回调。
+     * 量不到（页面还没布局完 / 端上不支持）就回落到 viewportH()；两个都取不到给 0，
+     * 调用方按"系统没帮我们压过"处理 —— 宁可自己顶一下让输入框可见，
+     * 也不要因为量不到而把它留在键盘底下。
+     *
+     * `.in(this)` 是组件内查询的写法，个别端上不支持 → 抛错就退到页面级查询。
+     */
+    measureViewport(cb) {
+      const fallback = () => { cb(viewportH()) }
+      try {
+        if (typeof uni.createSelectorQuery !== 'function') { fallback(); return }
+        let q = uni.createSelectorQuery()
+        try {
+          if (q && typeof q.in === 'function') q = q.in(this)
+        } catch (e) { q = uni.createSelectorQuery() }
+        if (!q || typeof q.select !== 'function') { fallback(); return }
+        q.select('.chat-container').boundingClientRect((r) => {
+          if (r && r.height > 0) cb(r.height)
+          else fallback()
+        }).exec()
+      } catch (e) { fallback() }
     },
 
     // ---------- 会话 ----------

@@ -461,29 +461,66 @@ assert(/@tap="pickWord"/.test(sdSrc), '可以挑这句里的哪个词进词书')
     '用双类选择器压掉全局 .container 的 min-height: 100vh（同特异性时不能赌加载顺序）');
   assert(!/max-height:\s*100%/.test(chatSrc), '不再靠 max-height: 100% 兜高度（fixed 元素上百分比不一定按预期解析）');
 
-  // 可视高度由 uni.getSystemInfoSync().windowHeight 提供（App 端 adjustResize 生效时它会变矮）
-  let fakeWinH = 800;
-  uni.getSystemInfoSync = () => ({ windowHeight: fakeWinH });
+  // 可视高度由 `uni.createSelectorQuery()` 量 `.chat-container` 得到（= webview 可视区高度，
+  // adjustResize 生效时它**真的**会变矮）。
+  // ⚠️ 别改回 `uni.getSystemInfoSync().windowHeight`：真机实测它不随键盘更新，
+  // 「系统已经压过」会永远判 false → 系统压一次 + 自己再顶一次 → 输入框被推到屏幕中间
+  // （2026-10-12 用户截图就是这个）。所以这里也必须 mock 选择器查询，而不是 systemInfo。
+  assert(/measureViewport\(/.test(chatSrc) && /createSelectorQuery\(\)/.test(chatSrc) && /\.in\(this\)/.test(chatSrc),
+    '用 createSelectorQuery 量容器高度（量的是真的会变的那一个）');
+  assert(/applyKbPad\(\)\s*\{[\s\S]{0,400}this\.measureViewport\(/.test(chatSrc),
+    'applyKbPad 走的是实测容器高度，不是某个系统 API 的快照');
+  assert(!/const shrunk[\s\S]{0,80}viewportH\(/.test(chatSrc),
+    '判断"系统压没压过"不许用 viewportH()（真机上它不更新，会稳输）');
+  let fakeBoxH = 800;
+  uni.createSelectorQuery = () => {
+    const q = {
+      in: () => q,
+      select: () => q,
+      boundingClientRect: (cb) => { cb({ height: fakeBoxH }); return q },
+      exec: () => {}
+    };
+    return q;
+  };
+  // 量高度那两次是**延迟**判的（40ms / 200ms）：键盘回调可能比 webview resize 早一拍，
+  // 立刻量会量到旧高度、误判成浮层键盘。所以这里也照真实时序等一等再断言。
+  const settle = () => new Promise((r) => setTimeout(r, 260));
   const kb = boot('block', 'ok');
   kb.vm._winH = 800;
   kb.vm.onKbChange({ height: 320 });
-  eq(kb.vm.kbPad, 320, '可视区没变矮（键盘是浮层）→ 按键盘高度自己顶');
-  fakeWinH = 460;                    // 系统这次真把可视区压短了
+  await settle();
+  eq(kb.vm.kbPad, 320, '容器没变矮（键盘是浮层）→ 按键盘高度自己顶');
+  fakeBoxH = 460;                    // 系统这次真把容器压短了
   kb.vm.onKbChange({ height: 320 });
+  await settle();
   eq(kb.vm.kbPad, 0, '系统已经压短过可视区 → 不再自己顶（否则输入框会被推到屏幕中间）');
   eq(JSON.stringify(ChatPage.computed.bottomStyle.call(kb.vm)), '{}', '不需要顶的时候不产生空 style');
-  fakeWinH = 800;
+  fakeBoxH = 800;
   kb.vm.onKbChange({ height: 320 });
+  await settle();
   assert(/paddingBottom/.test(JSON.stringify(ChatPage.computed.bottomStyle.call(kb.vm))),
     'bottomStyle 真的给出 padding-bottom：' + JSON.stringify(ChatPage.computed.bottomStyle.call(kb.vm)));
+  // 键盘收起是**立刻**的（不用等那两次延迟判定）
   kb.vm.onKbChange({ height: 0 });
   eq(kb.vm.kbPad, 0, '键盘收起 → 撤掉位移（输入框落回屏幕底部）');
   // 高度一个都取不到时宁可自己顶 —— 不能让输入框留在键盘底下
+  uni.createSelectorQuery = () => { throw new Error('no query') };
   uni.getSystemInfoSync = () => { throw new Error('no info') };
   const kb2 = boot('block', 'ok');
   kb2.vm._winH = 0;
   kb2.vm.onKbChange({ height: 300 });
+  await settle();
   eq(kb2.vm.kbPad, 300, '量不到可视高度 → 保守地自己顶（看不见输入框比多顶一下糟得多）');
+  // 选择器查得到元素、但元素还没布局完（height 为 0）→ 同样走兜底
+  uni.createSelectorQuery = () => {
+    const q = { in: () => q, select: () => q, boundingClientRect: (cb) => { cb({ height: 0 }); return q }, exec: () => {} };
+    return q;
+  };
+  const kb3 = boot('block', 'ok');
+  kb3.vm._winH = 800;
+  kb3.vm.onKbChange({ height: 300 });
+  await settle();
+  eq(kb3.vm.kbPad, 300, '元素还没布局完（height = 0）→ 同样视为"量不到"，保守地自己顶');
 
   /* ============================================================
    * 10. 三个动作搬进顶栏胶囊
