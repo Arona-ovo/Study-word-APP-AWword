@@ -370,6 +370,15 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   u6.skipThis();
   eq(u6.hasPending(), false, '点「不再提示」→ 红点消失');
 
+  // ⚠️ skip 存的是**那一个版本号**，不是一句"永远别提醒我"。
+  // 所以必须验：又发了更新的版本时红点要重新亮。
+  // 这条最容易悄悄坏掉 —— 坏了不报错、不崩，只是用户从此再也收不到更新提示，
+  // 等他自己发现已经是好几个版本之后了。
+  eq(String(((set6.get() || {}).updater || {}).skip || ''), NEWER,
+    '「不再提示」记的是那个版本号（不是永久静音开关）');
+  u6.noteUpdate({ version: u6.parseVersion(FAR), kind: 'wgt', url: 'http://x/new' });
+  eq(u6.hasPending(), true, '又发了更新的版本 → 红点重新亮（skip 只压得住那一个版本号）');
+
   // 装完新版本（本机版本号升上去）→ 红点自己消失，不需要任何手动清理。
   // 先清掉上一步的 skip：不然"不再提示"仍然生效，这里就验不到"装完自动消失"了。
   set6.set({ updater: { skip: '' } });
