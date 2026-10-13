@@ -280,8 +280,9 @@ function seedStorage() {
   const i18n = load('utils/i18n.js', { settings: settingsMod, EN: EN.default || EN });
   const tt = i18n.t;
   // 设置页 import 了 services/api.js（refresh() 里读服务器地址）。
-  // 依赖袋给它**真模块 + 内存 settings**，不给空壳 —— 空壳会让这条路径静默跳过，
-  // 导入流程就测不到了（项目规矩：漏注入依赖 = 假绿）。
+  // 依赖袋给它**真模块 + 内存 settings**：给空壳会让这条路径静默跳过；
+  // 漏注入则抛 ReferenceError，被 doImport 的 catch 吃掉后
+  // 报成「备份文件已损坏」—— 看着像备份坏了，其实是依赖没给。
   const apiMod = load('services/api.js', {
     request: () => Promise.resolve({}),
     ServiceError: Error,
@@ -308,7 +309,6 @@ function seedStorage() {
     setLocale: noop,
     settings: settingsMod,
     api: apiMod,
-    api: apiMod,
     store: { reset: noop },
     voiceStop: noop, voiceStatus: () => ({}), resetVoice: noop,
     validateKeyFormat: () => true, testAIConnection: async () => ({ ok: true }),
@@ -323,7 +323,7 @@ function seedStorage() {
     sfx: { play: noop },
     backup: b,
     backupIO: fakeIO,
-    BUILD_INFO: { version: '1.3.1 Beta', versionCode: 132 },
+    BUILD_INFO: { version: '1.35Beta', versionCode: 135 },
     BACKGROUNDS: {}, ACCENTS: {}, SWATCHES: [], CUSTOM_KEY: 'custom', DEFAULT_CUSTOM: {},
     currentBg: () => 'sky', setBackground: noop, backgroundOf: () => ({}),
     currentAccent: () => 'blue', setAccent: noop,
