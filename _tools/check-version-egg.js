@@ -35,11 +35,16 @@ const eq = (a, b, m) => assert(a === b, m + '（期望 ' + b + '，实际 ' + a 
   const bi = await import(U('data/build-info.js'));
   const info = bi.BUILD_INFO;
   assert(!!info && typeof info.version === 'string', 'data/build-info.js 导出了 BUILD_INFO.version');
-  eq(info.version, '1.4', '快照里的版本号');
+  eq(info.version, '1.4.1', '快照里的版本号');
 
   // manifest 是严格 JSON（HBuilderX 会重写它），别加注释
   const mf = JSON.parse(R('manifest.json'));
-  eq(mf.versionName, info.version, 'manifest.json 的 versionName 与快照一致');
+  // 版本结构改成「整包两段 + 热更三段」后，两者不再是相等关系而是**前缀**关系：
+  //   整包 1.4（manifest versionName）→ 热更包前端版本 1.4.1、1.4.2 …
+  // 只放宽到前缀，不能随便写：1.4.1 的资源配个 1.5 的整包号，老用户就收不到更新了。
+  assert(String(info.version).indexOf(String(mf.versionName) + '.') === 0 ||
+    String(mf.versionName) === String(info.version),
+    'manifest 的整包号是快照版本的前缀（' + mf.versionName + ' ↔ ' + info.version + '）');
   assert(/^\d+$/.test(String(mf.versionCode)), 'versionCode 仍是整数（' + mf.versionCode + '）');
   // versionCode 只涨不跌，且前两位 = 主版本+次版本（1.1 → 111）。
   // 只改 versionName 不改 versionCode 是最容易漏的一步：系统/商店按 versionCode 判断
