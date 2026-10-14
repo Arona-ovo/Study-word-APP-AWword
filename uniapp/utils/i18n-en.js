@@ -1319,8 +1319,10 @@ export default {
   '重试 ›': 'Retry ›',
   '有新版本 {v}': 'New version {v}',
   '发现新版本 {v}': 'New version {v} available',
-  '这次要下载完整安装包': 'This one needs the full installer',
-  '下载后自动安装并重启，不动你的学习数据': 'Downloads, installs and restarts — your study data stays untouched',
+  '这次要下载完整安装包，建议在 Wi-Fi 下进行': 'This one needs the full installer — Wi-Fi recommended',
+  '会在 Wi-Fi 下自动下载，下好后一点就装完，不动你的学习数据': 'Downloads automatically over Wi-Fi — one tap to install when ready, your study data stays untouched',
+  // 移动网点「更新」会被 updater 的 need-wifi 拦下（不在蜂窝网偷跑流量），这条是给用户的解释
+  '仅能在 Wi-Fi 下更新，连上后会自动下载好': 'Wi-Fi only — it downloads itself once you’re connected',
   '去下载': 'Download',
   '去下载 ›': 'Download ›',
   '更新 ›': 'Update ›',

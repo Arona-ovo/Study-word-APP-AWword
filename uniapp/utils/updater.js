@@ -450,30 +450,57 @@ export function installLocal(path, kind) {
 
 /**
  * 更新入口：优先装已经下好的本地包（秒装）；没下过才现下。
- * ⚠️ apk 又没预下载好的情况会抛 'need-download' —— 那种时候调用方应该走
- *    openReleasePage() 让用户去浏览器下，App 内不该静默拉一个 16MB 的整包。
+ *
+ * ⚠️ 现下的那条路**必须先过 WiFi 这道门**：拿不到"是 WiFi"就抛 'need-wifi'，
+ *    一个字节都不下。手机在移动网下取 GitHub 附件经常十几秒才出首字节，16MB 的
+ *    整包更是能拖到用户以为 App 死了 —— 那种体验不如直接告诉他"连上 WiFi 就好"。
+ *    （包已经在 WiFi 下预下载好的情况不走这道门：装本地包不耗流量。）
+ *
+ * 可能的失败原因，调用方按它决定给什么提示：
+ *   'no-pending'     没有待更新版本
+ *   'need-wifi'      不是 WiFi，不能下（提示用户连 WiFi，连上会自动下好）
+ *   'need-download'  整包，且在 WiFi 下但没预下载好 → 交给浏览器，App 内不静默拉
  */
-export function install(onProgress) {
+export async function install(onProgress) {
   const o = pendingRaw()
-  if (!o) return Promise.reject(new Error('no-pending'))
+  if (!o) throw new Error('no-pending')
   const kind = String(o.kind || '')
+  const url = String(o.url || '')
+
+  /** 在线下载：先过 WiFi 门，再下。本地包那条路不经过这里。 */
+  const online = async () => {
+    if ((await netType()) !== 'wifi') throw new Error('need-wifi')
+    return installWgt(url, onProgress)
+  }
+
   const local = stagedPath()
-  if (!local && kind === 'apk') return Promise.reject(new Error('need-download'))
-  if (!local) return installWgt(String(o.url), onProgress)
-  return installLocal(local, kind).catch((e) => {
-    // 本地包装不上（文件被系统清了 / 没装未知应用的权限）→ 退回在线那条老路，
-    // 不能把用户卡在"更新中"。整包没有"在线装"这条路（合规 + 老基座风险），
-    // 只能把错误抛回去，让调用方带用户去浏览器下。
-    if (kind === 'apk') throw e
-    clearStaged()
-    return installWgt(String(o.url), onProgress)
-  })
+  if (local) {
+    return installLocal(local, kind).catch((e) => {
+      // 本地包装不上（文件被系统清了 / 没装未知应用的权限）→ 退回在线那条老路，
+      // 不能把用户卡在"更新中"。整包没有"在线装"这条路（合规 + 老基座风险），
+      // 只能把错误抛回去，让调用方带用户去浏览器下。
+      if (kind === 'apk') throw e
+      clearStaged()
+      return online()
+    })
+  }
+  // 没预下载好 → 要真下流量。整包十几 MB，移动网下更不该拉，所以 apk 同样先过门。
+  if (kind === 'apk') {
+    if ((await netType()) !== 'wifi') throw new Error('need-wifi')
+    throw new Error('need-download')
+  }
+  return online()
 }
 
 let watching = false
 /**
  * 监听网络变化：一接上 WiFi 就把待更新的包补下好。
  * （自检那次只在启动时跑一次，用户是回家才连上 WiFi 的话就靠这个补。）
+ *
+ * ⚠️ 挂上的那一刻还要**自己先下一次**：回调只在网络"发生变化"时才来，
+ *    而"上次开 App 是移动网、这次一开就已经连着 WiFi"根本不产生变化事件 ——
+ *    那种情况下只挂回调的话，包永远等不到（用户明明在 WiFi 下却一直没预下载）。
+ *    prefetch 自己是幂等的（已下过返回 'already'、没待更新返回 null），多调无害。
  */
 export function watchWifi() {
   if (watching) return
@@ -486,6 +513,7 @@ export function watchWifi() {
       } catch (e) {}
     })
   } catch (e) {}
+  try { prefetch() } catch (e) {}
 }
 
 /**

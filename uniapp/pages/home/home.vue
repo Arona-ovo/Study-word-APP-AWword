@@ -644,14 +644,18 @@ export default {
     }
   },
   computed: {
-    /** 更新弹窗的正文：热更和整包必须说清楚差别（一个不动数据、一个要下整包） */
+    /**
+     * 更新弹窗的正文：热更和整包必须说清楚差别（一个不动数据、一个要下整包）。
+     * ⚠️ 两条都要讲"Wi-Fi 下自动下载" —— 移动网点更新会被拦住（utils/updater.js 的
+     *    need-wifi），不提前讲清楚，用户会以为按钮坏了。
+     */
     updateContent() {
       void this.updateTitle
       const info = updater.pendingInfo()
       if (!info) return ''
       return info.kind === 'apk'
-        ? t('这次要下载完整安装包')
-        : t('下载后自动安装并重启，不动你的学习数据')
+        ? t('这次要下载完整安装包，建议在 Wi-Fi 下进行')
+        : t('会在 Wi-Fi 下自动下载，下好后一点就装完，不动你的学习数据')
     },
 
     /** 首次询问的三个选项：接受 / 稍后 / 拒绝，一个都不能少 */
@@ -920,7 +924,12 @@ export default {
         return
       }
       uni.showToast({ title: ready ? t('正在安装…') : t('正在下载更新…'), icon: 'none', duration: 3000 })
-      updater.install().catch(() => {
+      updater.install().catch((e) => {
+        // 移动网 → 一个字节都不下，明确告诉他等 WiFi（连上会自动下好，不用他守着）
+        if (String((e && e.message) || '') === 'need-wifi') {
+          uni.showToast({ title: t('仅能在 Wi-Fi 下更新，连上后会自动下载好'), icon: 'none' })
+          return
+        }
         // 装不上（下载中断 / 基座不配套 / 没装未知应用的权限）必须给退路，不能卡在"更新中"
         uni.showToast({ title: t('没更新成，可去 GitHub 手动下载'), icon: 'none' })
       })

@@ -1420,8 +1420,11 @@ export default {
         title: t('发现新版本 {v}', { v: v }),
         // wgt 只换前端资源，学习数据在本机 storage 里，不受影响 —— 这句话要给用户，
         // 否则"更新"两个字总让人担心记录没了。
+        // ⚠️ 两条都要讲"Wi-Fi 下自动下载"：移动网点更新会被拦（updater 的 need-wifi），
+        // 不提前讲清楚，用户只会觉得按钮点了没反应。
         content: this.updateReady ? t('已经下载好了，点一下就装完，不动你的学习数据')
-          : (r.kind === 'apk' ? t('这次要下载完整安装包') : t('下载后自动安装并重启，不动你的学习数据')),
+          : (r.kind === 'apk' ? t('这次要下载完整安装包，建议在 Wi-Fi 下进行')
+            : t('会在 Wi-Fi 下自动下载，下好后一点就装完，不动你的学习数据')),
         confirmText: this.updateReady ? t('立即安装')
           : (r.kind === 'apk' ? t('去下载') : t('立即更新')),
         cancelText: t('以后再说'),
@@ -1435,7 +1438,12 @@ export default {
       const ready = !!updater.stagedPath()
       if (r.kind === 'apk' && !ready) { this.openRelease(); return }
       uni.showToast({ title: ready ? t('正在安装…') : t('正在下载更新…'), icon: 'none', duration: 3000 })
-      updater.install().catch(() => {
+      updater.install().catch((e) => {
+        // 移动网 → 一个字节都不下，明确告诉他等 WiFi（连上会自动下好，不用他守着）
+        if (String((e && e.message) || '') === 'need-wifi') {
+          uni.showToast({ title: t('仅能在 Wi-Fi 下更新，连上后会自动下载好'), icon: 'none' })
+          return
+        }
         // 装不上（老基座不兼容 / 下载中断 / 没装未知应用的权限）必须有出路，不能卡在"更新中"
         this.updateState = 'fail'
         uni.showToast({ title: t('没更新成，可去 GitHub 手动下载'), icon: 'none' })
