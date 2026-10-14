@@ -1326,6 +1326,12 @@ export default {
   '更新 ›': 'Update ›',
   '立即更新': 'Update now',
   '正在下载更新…': 'Downloading update…',
+  // WiFi 预下载（utils/updater.js 的 prefetch）：已经下好了就直接装本地包
+  '正在安装…': 'Installing…',
+  '新版本已下载好 {v}': 'Version {v} downloaded, ready to install',
+  '安装 ›': 'Install ›',
+  '已经下载好了，点一下就装完，不动你的学习数据': 'Already downloaded — one tap to install, your study data stays untouched',
+  '立即安装': 'Install now',
   '没检查成，可去 GitHub 手动下载': 'Check failed — you can grab it from GitHub',
   '没更新成，可去 GitHub 手动下载': 'Update failed — you can grab it from GitHub',
   '链接已复制，粘贴到浏览器打开': 'Link copied — paste it into a browser',

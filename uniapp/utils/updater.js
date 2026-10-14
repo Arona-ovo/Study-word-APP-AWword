@@ -18,6 +18,10 @@
 //
 // 静默自检：启动后台查一次，只在**真有更新**时留个角标，不弹窗不打断；
 // 手动检查（设置页）才给结果反馈。两者共用同一份 check()。
+//
+// 预下载：连着 WiFi 时先把包偷偷下好存着，用户点「更新」时一步装完（见下面
+// 「预下载」那一节）。手机上 GitHub 附件的 CDN 在移动网下经常慢到十几秒才出首字节，
+// 但 WiFi 下其实很快 —— 所以把"下载"这件慢事挪到 WiFi 时做，是性价比最高的提速。
 import * as settings from './settings.js'
 import { BUILD_INFO } from '../data/build-info.js'
 
@@ -179,6 +183,9 @@ export function noteUpdate(r) {
   try {
     const v = r && r.version ? r.version.join('.') : ''
     if (!v) return
+    // 换新版本了 → 上一版预下载好的包作废（不删就一直占着十几 MB，而且版本对不上也用不了）
+    const old = stagedRaw()
+    if (old && String(old.v) !== v) clearStaged()
     settings.set({
       updater: { pending: JSON.stringify({ v: v, kind: String(r.kind || ''), url: String(r.url || '') }) }
     })
@@ -228,7 +235,10 @@ export function hasPending() {
   }
 }
 
-/** 待更新的详情（弹窗要点"更新"时得知道是热更还是整包、链接是什么） */
+/**
+ * 待更新的详情（弹窗要点"更新"时得知道是热更还是整包、链接是什么）。
+ * staged = 这个版本已经趁 WiFi 下好了 → 点「更新」直接装本地包，不用再等下载。
+ */
 export function pendingInfo() {
   const o = pendingRaw()
   if (!o) return null
@@ -236,7 +246,8 @@ export function pendingInfo() {
     version: parseVersion(String(o.v)) || [],
     versionText: String(o.v),
     kind: String(o.kind || ''),
-    url: String(o.url || '')
+    url: String(o.url || ''),
+    staged: !!stagedPath()
   }
 }
 
@@ -249,35 +260,252 @@ export async function autoCheck() {
   try {
     const r = await check()
     noteChecked()
+    // 有更新就趁 WiFi 把包先下好。⚠️ 不 await：下载是慢活，不能拖住启动。
+    // 失败也无所谓（prefetch 自己吞掉异常），用户点「更新」时还有在线那条路。
+    watchWifi()
+    try { prefetch() } catch (e) {}
     return r
   } catch (e) {
     return null
   }
 }
 
+// ---------- 预下载：趁 WiFi 把包装好，用户点「更新」时一步装完 ----------
+//
+// 为什么值得做：手机在移动网下取 GitHub 附件经常十几秒才出首字节，同一个包在 WiFi 下
+// 却几秒就完。把"下载"这件慢事挪到连 WiFi 时偷偷做完，用户点「更新」就只剩 install
+// 一步 —— 体感从"干等一分钟"变成"一秒装完"。
+//
+// 四条硬规矩，违反任何一条都是事故：
+//   1. 只在 WiFi 下动流量。拿不到网络类型一律按"不是 WiFi"处理 —— 宁可不下，不能偷跑。
+//   2. 只下不装。自动重启是打断，绝不在用户不知情时干。
+//   3. 存下来的包必须能扔：版本变了、装完了就删，不能悄悄吃掉用户十几 MB 存储。
+//   4. 本地包装不上（文件被系统清了 / 没装未知应用的权限）要能退回在线那条老路，
+//      不能把用户卡在"更新中"。
+
+/** 下载超时：弱网下不给超时就会永远转圈（原来的下载连超时都没有） */
+const DL_TIMEOUT = 60000
+
 /**
- * 安装热更包：下载 → install → 重启。
- * 只走 App 端（plus）；H5 / 小程序装不了 wgt，直接告诉调用方不支持。
+ * 当前网络类型：'wifi' / 'cellular' / 'none' / 'unknown'。
+ * ⚠️ 拿不到（接口不在 / 回调没来）按 'unknown' —— 那不是 WiFi，不许下。
  */
-export function installWgt(url) {
+export function netType() {
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (t) => { if (!settled) { settled = true; resolve(t) } }
+    try {
+      uni.getNetworkType({
+        success: (r) => {
+          const t = String((r && r.networkType) || '')
+          done(t === 'wifi' ? 'wifi' : (t === 'none' ? 'none' : 'cellular'))
+        },
+        fail: () => done('unknown')
+      })
+      return
+    } catch (e) {}
+    // uni 那条路走不通时退到 App 端的原生接口（同步，拿不到常数就算了）
+    try {
+      if (typeof plus !== 'undefined' && plus.networkinfo) {
+        const t = plus.networkinfo.getCurrentType()
+        done(t === plus.networkinfo.CONNECTION_WIFI ? 'wifi'
+          : (t === plus.networkinfo.CONNECTION_NONE ? 'none' : 'cellular'))
+        return
+      }
+    } catch (e) {}
+    done('unknown')
+  })
+}
+
+function stagedRaw() {
+  try {
+    const u = (settings.get() || {}).updater || {}
+    const s = String(u.staged || '')
+    if (!s) return null
+    const o = JSON.parse(s)
+    return o && o.v && o.path ? o : null
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 已经下好、可以拿来装的本地包路径；没有就返回空串。
+ * ⚠️ 必须版本号对得上才算 —— 上一版留下的包对新版本没用，拿去装会装错版本。
+ */
+export function stagedPath() {
+  const o = stagedRaw()
+  if (!o) return ''
+  const pen = pendingRaw()
+  if (!pen || String(pen.v) !== String(o.v)) return ''
+  return String(o.path)
+}
+
+/** 下载到临时文件（带超时；有进度回调就顺便报百分比） */
+function downloadTo(url, onProgress) {
+  return new Promise((resolve, reject) => {
+    try {
+      const task = uni.downloadFile({
+        url: url,
+        timeout: DL_TIMEOUT,
+        success: (res) => {
+          if (!res || res.statusCode !== 200 || !res.tempFilePath) { reject(new Error('download')); return }
+          resolve(res.tempFilePath)
+        },
+        fail: (e) => reject(e || new Error('download'))
+      })
+      // 进度回调挂在返回的任务上（不在 options 里）；拿不到任务就算了，不影响下载本身
+      try {
+        if (task && task.onProgressUpdate && onProgress) {
+          task.onProgressUpdate((r) => {
+            if (r && r.totalBytesExpectedToWrite > 0) {
+              onProgress(Math.floor(r.totalBytesWritten * 100 / r.totalBytesExpectedToWrite))
+            }
+          })
+        }
+      } catch (e) {}
+    } catch (e) {
+      reject(e || new Error('download'))
+    }
+  })
+}
+
+/** 把临时文件存成持久文件（tempFilePath 重启后可能被清，必须另存） */
+function persist(tmp) {
+  return new Promise((resolve, reject) => {
+    try {
+      uni.saveFile({
+        tempFilePath: tmp,
+        success: (r) => {
+          const p = String((r && r.savedFilePath) || '')
+          if (p) resolve(p)
+          else reject(new Error('save'))
+        },
+        fail: (e) => reject(e || new Error('save'))
+      })
+    } catch (e) {
+      reject(e || new Error('save'))
+    }
+  })
+}
+
+/**
+ * 后台预下载：把待更新的那个包下好存着，不装。
+ * 返回 'ok'（下好了）/ 'already'（这个版本早下过了）/ 'no-wifi'（不是 WiFi，不动流量）
+ * / null（失败）。⚠️ 失败一律静默 —— 预下载是锦上添花，它失败不该打扰任何人，
+ * 用户点「更新」时还有在线下载那条路。
+ */
+export async function prefetch() {
+  try {
+    const o = pendingRaw()
+    if (!o || !o.v || !o.url) return null
+    if (stagedPath()) return 'already'
+    if ((await netType()) !== 'wifi') return 'no-wifi'
+    const tmp = await downloadTo(String(o.url))
+    const p = await persist(tmp)
+    settings.set({
+      updater: { staged: JSON.stringify({ v: String(o.v), kind: String(o.kind || ''), path: p, at: Date.now() }) }
+    })
+    return 'ok'
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 扔掉存下来的包。⚠️ 文件与记账要一起清，只清记账会留下一坨没人认的十几 MB。
+ */
+export function clearStaged() {
+  try {
+    const o = stagedRaw()
+    if (o && o.path) {
+      try { uni.removeSavedFile({ filePath: String(o.path) }) } catch (e) {}
+    }
+  } catch (e) {}
+  try { settings.set({ updater: { staged: '' } }) } catch (e) {}
+}
+
+/** 装已经下好的本地包（wgt 与 apk 都走这里） */
+export function installLocal(path, kind) {
   return new Promise((resolve, reject) => {
     if (typeof plus === 'undefined' || !plus.runtime || !plus.runtime.install) {
       reject(new Error('not-app'))
       return
     }
-    uni.downloadFile({
-      url: url,
-      success: (res) => {
-        if (!res || res.statusCode !== 200) { reject(new Error('download')); return }
-        plus.runtime.install(res.tempFilePath, { force: true }, () => {
-          // 装完必须重启才生效（uni-app 的 wgt 更新规矩）
-          clearPending()
-          try { plus.runtime.restart() } catch (e) {}
-          resolve(true)
-        }, (e) => reject(e || new Error('install')))
-      },
-      fail: (e) => reject(e || new Error('download'))
+    plus.runtime.install(String(path), { force: true }, () => {
+      clearPending()
+      if (kind === 'apk') {
+        // 整包：系统安装器会接手，这时候重启纯属捣乱；本地文件也不能删 ——
+        // 安装器还在读它，删了就装一半。等下次换版本时由 noteUpdate 顺手清掉。
+        resolve(true)
+        return
+      }
+      clearStaged()
+      // 装完必须重启才生效（uni-app 的 wgt 更新规矩）
+      try { plus.runtime.restart() } catch (e) {}
+      resolve(true)
+    }, (e) => reject(e || new Error('install')))
+  })
+}
+
+/**
+ * 更新入口：优先装已经下好的本地包（秒装）；没下过才现下。
+ * ⚠️ apk 又没预下载好的情况会抛 'need-download' —— 那种时候调用方应该走
+ *    openReleasePage() 让用户去浏览器下，App 内不该静默拉一个 16MB 的整包。
+ */
+export function install(onProgress) {
+  const o = pendingRaw()
+  if (!o) return Promise.reject(new Error('no-pending'))
+  const kind = String(o.kind || '')
+  const local = stagedPath()
+  if (!local && kind === 'apk') return Promise.reject(new Error('need-download'))
+  if (!local) return installWgt(String(o.url), onProgress)
+  return installLocal(local, kind).catch((e) => {
+    // 本地包装不上（文件被系统清了 / 没装未知应用的权限）→ 退回在线那条老路，
+    // 不能把用户卡在"更新中"。整包没有"在线装"这条路（合规 + 老基座风险），
+    // 只能把错误抛回去，让调用方带用户去浏览器下。
+    if (kind === 'apk') throw e
+    clearStaged()
+    return installWgt(String(o.url), onProgress)
+  })
+}
+
+let watching = false
+/**
+ * 监听网络变化：一接上 WiFi 就把待更新的包补下好。
+ * （自检那次只在启动时跑一次，用户是回家才连上 WiFi 的话就靠这个补。）
+ */
+export function watchWifi() {
+  if (watching) return
+  watching = true
+  try {
+    uni.onNetworkStatusChange((r) => {
+      try {
+        if (!r || !r.isConnected || String(r.networkType || '') !== 'wifi') return
+        prefetch()
+      } catch (e) {}
     })
+  } catch (e) {}
+}
+
+/**
+ * 安装热更包：下载 → install → 重启。
+ * 只走 App 端（plus）；H5 / 小程序装不了 wgt，直接告诉调用方不支持。
+ */
+export function installWgt(url, onProgress) {
+  return new Promise((resolve, reject) => {
+    if (typeof plus === 'undefined' || !plus.runtime || !plus.runtime.install) {
+      reject(new Error('not-app'))
+      return
+    }
+    downloadTo(url, onProgress).then((tmp) => {
+      plus.runtime.install(tmp, { force: true }, () => {
+        // 装完必须重启才生效（uni-app 的 wgt 更新规矩）
+        clearPending()
+        try { plus.runtime.restart() } catch (e) {}
+        resolve(true)
+      }, (e) => reject(e || new Error('install')))
+    }).catch((e) => reject(e || new Error('download')))
   })
 }
 

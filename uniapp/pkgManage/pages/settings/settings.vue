@@ -1097,6 +1097,8 @@ export default {
       updateState: 'idle',
       updateVer: '',
       updateKind: '',
+      // 这个版本是不是已经趁 WiFi 下好了（是的话点一下就装，不用等下载）
+      updateReady: false,
       // 弹更新确认框时把这一版的 Release 对象挂这儿 —— 弹窗的 payload 只有一个 true，
       // 拿不到是哪个版本，共用一个 pending 字段比塞进 confirm 对象干净
       updatePending: null,
@@ -1291,7 +1293,12 @@ export default {
     updateDesc() {
       void this.__lang;
       if (this.updateState === 'checking') return t('正在检查…');
-      if (this.updateState === 'new') return t('有新版本 {v}', { v: this.updateVer });
+      if (this.updateState === 'new') {
+        // 下好了就直说 —— 「更新」两个字下面藏着"还要下载十几 MB"和"点一下就好"
+        // 是两种完全不同的事，不说清楚用户不敢点。
+        return this.updateReady ? t('新版本已下载好 {v}', { v: this.updateVer })
+          : t('有新版本 {v}', { v: this.updateVer });
+      }
       if (this.updateState === 'latest') return t('已经是最新版');
       if (this.updateState === 'fail') return t('没检查成，可去 GitHub 手动下载');
       return t('版本源：GitHub Releases');
@@ -1299,7 +1306,10 @@ export default {
     updateBtn() {
       void this.__lang;
       if (this.updateState === 'checking') return t('检查中…');
-      if (this.updateState === 'new') return this.updateKind === 'apk' ? t('去下载 ›') : t('更新 ›');
+      if (this.updateState === 'new') {
+        if (this.updateReady) return t('安装 ›');
+        return this.updateKind === 'apk' ? t('去下载 ›') : t('更新 ›');
+      }
       if (this.updateState === 'latest') return t('最新');
       if (this.updateState === 'fail') return t('重试 ›');
       return t('检查 ›');
@@ -1349,6 +1359,8 @@ export default {
       this.updateKind = up.kind
       this.updateState = 'new'
     }
+    // 后台那次预下载可能已经把包下好了 —— 进页面时重新看一眼，别拿旧状态糊弄人
+    this.updateReady = !!updater.stagedPath()
     this.accentKey = currentAccent()
     this.bgKey = currentBg()
     this.bgImage = currentBgImage()
@@ -1388,6 +1400,9 @@ export default {
         this.updateVer = (r.version || []).join('.')
         this.updateKind = r.kind
         this.updateState = 'new'
+        this.updateReady = !!updater.stagedPath()
+        // 手动查到了就顺手把包下起来（只会在 WiFi 下真下），下次进来就是"已下载好"
+        try { updater.prefetch() } catch (e) {}
         this.askUpdate(r)
       }).catch(() => {
         this.updateState = 'fail'
@@ -1405,8 +1420,10 @@ export default {
         title: t('发现新版本 {v}', { v: v }),
         // wgt 只换前端资源，学习数据在本机 storage 里，不受影响 —— 这句话要给用户，
         // 否则"更新"两个字总让人担心记录没了。
-        content: r.kind === 'apk' ? t('这次要下载完整安装包') : t('下载后自动安装并重启，不动你的学习数据'),
-        confirmText: r.kind === 'apk' ? t('去下载') : t('立即更新'),
+        content: this.updateReady ? t('已经下载好了，点一下就装完，不动你的学习数据')
+          : (r.kind === 'apk' ? t('这次要下载完整安装包') : t('下载后自动安装并重启，不动你的学习数据')),
+        confirmText: this.updateReady ? t('立即安装')
+          : (r.kind === 'apk' ? t('去下载') : t('立即更新')),
         cancelText: t('以后再说'),
         danger: false,
         action: 'update'
@@ -1414,10 +1431,12 @@ export default {
     },
     doUpdate(r) {
       if (!r) return
-      if (r.kind === 'apk') { this.openRelease(); return }
-      uni.showToast({ title: t('正在下载更新…'), icon: 'none', duration: 3000 })
-      updater.installWgt(r.url).catch(() => {
-        // 装不上（老基座不兼容 / 下载中断）必须有出路，不能卡在"更新中"
+      // 已经趁 WiFi 下好了 → 直接装本地包；整包没下好才交给浏览器（不在 App 内静默拉十几 MB）
+      const ready = !!updater.stagedPath()
+      if (r.kind === 'apk' && !ready) { this.openRelease(); return }
+      uni.showToast({ title: ready ? t('正在安装…') : t('正在下载更新…'), icon: 'none', duration: 3000 })
+      updater.install().catch(() => {
+        // 装不上（老基座不兼容 / 下载中断 / 没装未知应用的权限）必须有出路，不能卡在"更新中"
         this.updateState = 'fail'
         uni.showToast({ title: t('没更新成，可去 GitHub 手动下载'), icon: 'none' })
       })

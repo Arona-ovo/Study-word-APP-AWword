@@ -910,16 +910,18 @@ export default {
       this.updateAsk = { show: false }
       const info = updater.pendingInfo()
       if (!info) return
-      if (info.kind === 'apk') {
-        // 整包不在 App 内静默装（合规 + 老基座风险），交给浏览器
+      // 已经趁 WiFi 下好了 → 直接装本地包，用户不用再等下载
+      const ready = !!info.staged
+      if (info.kind === 'apk' && !ready) {
+        // 整包又没预下载好，就不在 App 内静默拉一个十几 MB，交给浏览器
         const r = updater.openReleasePage()
         if (r === 'copied') uni.showToast({ title: t('链接已复制，粘贴到浏览器打开'), icon: 'none' })
         else if (r === 'failed') uni.showToast({ title: t('打不开，请手动访问 GitHub'), icon: 'none' })
         return
       }
-      uni.showToast({ title: t('正在下载更新…'), icon: 'none', duration: 3000 })
-      updater.installWgt(info.url).catch(() => {
-        // 装不上（下载中断 / 基座不配套）必须给退路，不能卡在"更新中"
+      uni.showToast({ title: ready ? t('正在安装…') : t('正在下载更新…'), icon: 'none', duration: 3000 })
+      updater.install().catch(() => {
+        // 装不上（下载中断 / 基座不配套 / 没装未知应用的权限）必须给退路，不能卡在"更新中"
         uni.showToast({ title: t('没更新成，可去 GitHub 手动下载'), icon: 'none' })
       })
     },
