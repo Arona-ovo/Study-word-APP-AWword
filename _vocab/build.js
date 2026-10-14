@@ -666,7 +666,7 @@ export const SENSES_RAW = \`${noShot(sensesRaw)}\`
 // 但为了几个数字去 import 174KB 的语料，会把语料再复制一份进分包 —— 得不偿失。
 // 所以这里把数字预先算好，写成几百字节的小文件，设置页只引它。
 // 改版本号改这里（APP_VERSION），同时记得同步 uniapp/manifest.json 的 versionName。
-const APP_VERSION = '1.4.1'
+const APP_VERSION = '1.4.2'
 
 const sentenceJs = fs.readFileSync(path.join(OUT, 'sentences.js'), 'utf8')
 const sentenceCount = (sentenceJs.match(/\{ id: \d+,/g) || []).length

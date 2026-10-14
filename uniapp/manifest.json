@@ -2,8 +2,8 @@
     "name" : "AWword",
     "appid" : "__UNI__53285BF",
     "description" : "英语单词与翻译练习：词书分批学习、中英互译、按掌握情况调整难度",
-    "versionName" : "1.4",
-    "versionCode" : "140",
+    "versionName" : "1.4.2",
+    "versionCode" : "142",
     "vueVersion" : "3",
     "transformPx" : false,
     "app-plus" : {
@@ -29,7 +29,8 @@
             "android" : {
                 "permissions" : [
                     "<uses-permission android:name=\"android.permission.INTERNET\"/>",
-                    "<uses-permission android:name=\"android.permission.QUERY_ALL_PACKAGES\"/>"
+                    "<uses-permission android:name=\"android.permission.QUERY_ALL_PACKAGES\"/>",
+                    "<uses-permission android:name=\"android.permission.REQUEST_INSTALL_PACKAGES\"/>"
                 ],
                 "schemes" : [ "awword" ],
                 "packageName" : "com.AWword"

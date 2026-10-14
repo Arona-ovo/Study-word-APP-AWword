@@ -35,13 +35,15 @@ const eq = (a, b, m) => assert(a === b, m + '（期望 ' + b + '，实际 ' + a 
   const bi = await import(U('data/build-info.js'));
   const info = bi.BUILD_INFO;
   assert(!!info && typeof info.version === 'string', 'data/build-info.js 导出了 BUILD_INFO.version');
-  eq(info.version, '1.4.1', '快照里的版本号');
+  eq(info.version, '1.4.2', '快照里的版本号');
 
   // manifest 是严格 JSON（HBuilderX 会重写它），别加注释
   const mf = JSON.parse(R('manifest.json'));
-  // 版本结构改成「整包两段 + 热更三段」后，两者不再是相等关系而是**前缀**关系：
-  //   整包 1.4（manifest versionName）→ 热更包前端版本 1.4.1、1.4.2 …
-  // 只放宽到前缀，不能随便写：1.4.1 的资源配个 1.5 的整包号，老用户就收不到更新了。
+  // 2026-10-14 起版本号**统一三段式**：整包 / 热更 wgt / GitHub Release 一律 x.y.z，
+  // manifest versionName 与 BUILD_INFO.version 应当完全相等。
+  // （旧方案是「整包两段 1.4 + 热更三段 1.4.1」，结果打 wgt 时整包号被同化成两段，
+  //   版本链路对不上；统一三段后没有这个坑。）
+  // 这里仍保留前缀判断，是为了旧写法不至于一改就炸，但正常情况下两者相等。
   assert(String(info.version).indexOf(String(mf.versionName) + '.') === 0 ||
     String(mf.versionName) === String(info.version),
     'manifest 的整包号是快照版本的前缀（' + mf.versionName + ' ↔ ' + info.version + '）');
