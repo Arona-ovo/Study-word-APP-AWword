@@ -1401,8 +1401,9 @@ export default {
         this.updateKind = r.kind
         this.updateState = 'new'
         this.updateReady = !!updater.stagedPath()
-        // 手动查到了就顺手把包下起来（只会在 WiFi 下真下），下次进来就是"已下载好"
-        try { updater.prefetch() } catch (e) {}
+        // 手动查到就顺手在后台静默下好（什么网都下）。下完之后 updateReady 会自己刷新，
+        // 用户不用守着 —— 这也是手动检查唯一会触发下载的地方。
+        try { updater.ensure() } catch (e) {}
         this.askUpdate(r)
       }).catch(() => {
         this.updateState = 'fail'
@@ -1420,11 +1421,11 @@ export default {
         title: t('发现新版本 {v}', { v: v }),
         // wgt 只换前端资源，学习数据在本机 storage 里，不受影响 —— 这句话要给用户，
         // 否则"更新"两个字总让人担心记录没了。
-        // ⚠️ 两条都要讲"Wi-Fi 下自动下载"：移动网点更新会被拦（updater 的 need-wifi），
-        // 不提前讲清楚，用户只会觉得按钮点了没反应。
+        // ⚠️ 手动检查时包可能还没下好（红点只在校验通过后才亮，但这里是用户主动点的）,
+        //    所以两种状态都要如实说 —— 没下好就明说在后台下，别让人以为点了会立刻装。
         content: this.updateReady ? t('已经下载好了，点一下就装完，不动你的学习数据')
-          : (r.kind === 'apk' ? t('这次要下载完整安装包，建议在 Wi-Fi 下进行')
-            : t('会在 Wi-Fi 下自动下载，下好后一点就装完，不动你的学习数据')),
+          : (r.kind === 'apk' ? t('正在后台下载完整安装包，下好后一点就装完')
+            : t('正在后台下载，下好后一点就装完，不动你的学习数据')),
         confirmText: this.updateReady ? t('立即安装')
           : (r.kind === 'apk' ? t('去下载') : t('立即更新')),
         cancelText: t('以后再说'),
@@ -1437,14 +1438,27 @@ export default {
       // 已经趁 WiFi 下好了 → 直接装本地包；整包没下好才交给浏览器（不在 App 内静默拉十几 MB）
       const ready = !!updater.stagedPath()
       if (r.kind === 'apk' && !ready) { this.openRelease(); return }
-      uni.showToast({ title: ready ? t('正在安装…') : t('正在下载更新…'), icon: 'none', duration: 3000 })
+      // 整包没下好 → 交给浏览器兜底（后台静默下载可能一直没成功，得给人一条手动的路）
+      if (r.kind === 'apk' && !ready) { this.openRelease(); return }
+      // 热更还没下好：下载是静默的，不该让用户在这儿干等 —— 如实说一声就结束
+      if (!ready) {
+        uni.showToast({ title: t('还在后台下载，下好后点一下就装完'), icon: 'none' })
+        return
+      }
+      uni.showToast({ title: t('正在安装…'), icon: 'none', duration: 3000 })
       updater.install().catch((e) => {
-        // 移动网 → 一个字节都不下，明确告诉他等 WiFi（连上会自动下好，不用他守着）
-        if (String((e && e.message) || '') === 'need-wifi') {
-          uni.showToast({ title: t('仅能在 Wi-Fi 下更新，连上后会自动下载好'), icon: 'none' })
+        const m = String((e && e.message) || '')
+        if (m === 'offline') {
+          uni.showToast({ title: t('现在没网，连上网再试'), icon: 'none' })
           return
         }
-        // 装不上（老基座不兼容 / 下载中断 / 没装未知应用的权限）必须有出路，不能卡在"更新中"
+        if (m === 'bad-package') {
+          uni.showToast({ title: t('更新包没下完整，正在重新下载'), icon: 'none' })
+          return
+        }
+        // 整包装不上（没装未知应用的权限 / 包坏了）→ 退回浏览器那条路
+        if (r.kind === 'apk') { this.openRelease(); return }
+        // 热更装不上（老基座不兼容 / 没装未知应用的权限）必须有出路，不能卡在"更新中"
         this.updateState = 'fail'
         uni.showToast({ title: t('没更新成，可去 GitHub 手动下载'), icon: 'none' })
       })

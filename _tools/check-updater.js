@@ -52,9 +52,9 @@ assert(!/updater\.check\(\)/.test(app) || /autoCheck/.test(app), '启动自检�
 // ⚠️ 网络监听必须**在自检之外**单独挂（2026-10-14 补）：
 //    autoCheck 开头就是 12 小时节流，节流窗口内它直接 return —— 要是只靠它顺手挂
 //    watchWifi，那"回家连上 WiFi 自动把包下好"在最常见的场景里一次都不会发生。
-assert(/updater\.watchWifi\(\)/.test(app), 'App.vue 挂了网络变化监听（接上 WiFi 补下载）');
+assert(/updater\.watchNetwork\(\)/.test(app), 'App.vue 挂了网络变化监听（一有网就静默补下）');
 const autoBlock = /setTimeout\(\(\) => \{ updater\.autoCheck\(\) \}, \d+\)/.exec(app);
-assert(autoBlock && autoBlock[0].indexOf('watchWifi') < 0,
+assert(autoBlock && autoBlock[0].indexOf('watchNetwork') < 0,
   '网络监听不在 autoCheck 那个 setTimeout 里（不能靠会被节流挡掉的自检顺手挂）');
 const sv = fs.readFileSync(path.join(ROOT, 'pkgManage/pages/settings/settings.vue'), 'utf8');
 assert(/\$t\('检查更新'\)/.test(sv), '设置页有「检查更新」入口');
@@ -67,12 +67,12 @@ assert(/updater\.stagedPath\(\)/.test(sv), '设置页会看包是不是已经预
 assert(/skipThis\(\)/.test(sv), '用户点「以后再说」会记一笔（这个版本不再重复提示）');
 const en = fs.readFileSync(path.join(ROOT, 'utils/i18n-en.js'), 'utf8');
 for (const k of ['检查更新', 'GitHub 上的最新版', '有新版本 {v}', '发现新版本 {v}', '已经是最新版',
-  '不再提示', '更新', '仅能在 Wi-Fi 下更新，连上后会自动下载好']) {
+  '不再提示', '更新', '还在后台下载，下好后点一下就装完', '更新包没下完整，正在重新下载']) {
   assert(en.indexOf("'" + k + "'") >= 0, '英文表有「' + k + '」');
 }
-// 移动网点「更新」会被拦，两个入口都得把这句话说给用户听 —— 否则就是"点了没反应"
-assert(/need-wifi/.test(sv), '设置页认得 need-wifi（移动网要给提示，不能静默失败）');
-assert(/t\('仅能在 Wi-Fi 下更新，连上后会自动下载好'\)/.test(sv), '设置页给的是人话提示（不是错误码）');
+// 包没下好 / 没网时点了更新，两个入口都得说人话 —— 否则就是"点了没反应"
+assert(/offline/.test(sv), '设置页认得 offline（没网要给提示，不能静默失败）');
+assert(/t\('现在没网，连上网再试'\)/.test(sv), '设置页给的是人话提示（不是错误码）');
 
 // ---------- 第 2b 组：红点 + 首页弹窗的接入点 ----------
 console.log('== 2b. 红点与更新弹窗 ==');
@@ -95,8 +95,8 @@ assert(/onUpdateCancel[\s\S]{0,200}skipThis\(\)/.test(hm), '「不再提示」�
 // 放宽是让契约跟得上代码，**不是绕过** —— 仍然要求这两处落在同一段里（不在就红）。
 assert(/onUpdateConfirm[\s\S]{0,1200}updater\.install\(/.test(hm), '点「更新」真的去装包（不是只关弹窗）');
 assert(/info\.staged/.test(hm), '首页看得到包是不是已经下好了（下好了就不用再等下载）');
-assert(/need-wifi/.test(hm), '首页认得 need-wifi（移动网点更新要给提示，不能静默失败）');
-assert(/t\('仅能在 Wi-Fi 下更新，连上后会自动下载好'\)/.test(hm), '首页给的是人话提示（不是错误码）');
+assert(/offline/.test(hm), '首页认得 offline（没网要给提示，不能静默失败）');
+assert(/t\('更新包没下完整，正在重新下载'\)/.test(hm), '首页给的是人话提示（不是错误码）');
 // ⚠️ 这三个方法必须在 methods 里。写在 onShow / onHide 旁边是**组件选项顶层**，
 // Vue 不会把它挂到实例上 → this.maybeUpdateAsk is not a function（2026-10-13 就这么栽的：
 // 生命周期与 methods 是平级的，不是它的子项）。
@@ -120,6 +120,36 @@ let netTypeStub = 'wifi';           // 网络类型桩：'wifi' / '4g' / 'unknow
 let netCb = null;                   // onNetworkStatusChange 的回调
 const savedFiles = [];              // 调过 saveFile 的临时路径
 const removedFiles = [];            // 调过 removeSavedFile 的路径
+let dlCount = 0;                    // 发起过几次下载（盯"重复下载"这条规矩）
+// 完整性校验靠 plus.io 读文件，所以得给它一套桩：
+//   statSize  = 报出来的"文件真实大小"（0 = 文件不在了）
+//   tailMode  = 'ok' 尾部有 zip 结尾标记 / 'truncated' 没有（截断包）/ 'none' 读不到内容
+let statSize = 1234;
+let savedGone = false;   // 模拟"已经存好的持久文件被系统清掉了"（只影响 /saved/ 下的路径，
+                         // 临时文件照常 —— 否则连新下载下来的包都读不到，测不出重下）
+let tailMode = 'ok';
+const EOCD = '\x50\x4B\x05\x06';
+const ioStub = {
+  resolveLocalFileSystemURL: (p, ok, err) => {
+    const isSaved = String(p).indexOf('/saved/') === 0;
+    if ((isSaved && savedGone) || !statSize) { if (err) err(new Error('nofile')); return; }
+    ok({
+      file: (ok2) => ok2({ size: statSize, slice: () => ({ __slice: 1 }) })
+    });
+  },
+  FileReader: function () {
+    const self = this;
+    this.onloadend = null;
+    this.onerror = null;
+    this.readAsText = function () {
+      setTimeout(() => {
+        const t = tailMode === 'ok' ? ('zzzz' + EOCD)
+          : (tailMode === 'truncated' ? 'zzzzPK\x03\x04半截' : '');
+        if (self.onloadend) self.onloadend({ target: { result: t } });
+      }, 0);
+    };
+  }
+};
 global.uni = {
   getStorageSync: (k) => mem[k],
   setStorageSync: (k, v) => { mem[k] = v; },
@@ -136,6 +166,7 @@ global.uni = {
   },
   downloadFile: (o) => {
     downloaded = o && o.url;
+    dlCount++;
     if (o && o.success) o.success({ statusCode: 200, tempFilePath: '/tmp/a.wgt' });
     return { onProgressUpdate: () => {} };
   },
@@ -231,6 +262,7 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
 
   // ⑧ 装包：有 plus → 下载 → install → 重启
   const fakePlus = {
+    io: ioStub,
     runtime: {
       install: (p, o, okCb, errCb) => { installed = p; if (okCb) okCb(); },
       restart: () => { restarted = true; }
@@ -253,56 +285,109 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   eq(withPlusOpen.openReleasePage(), 'opened', 'App 端用系统浏览器打开发布页');
   eq(copied, 'opened:' + PAGE, '打开的地址正确');
 
-  // ---------- 第 6 组：WiFi 预下载（只下不装）----------
+  // ---------- 第 6 组：静默下载 + 校准（APK 与 WGT 共用同一套） ----------
   //
-  // 这一段最容易出的事故是两种，而且**都不报错**：
-  //   · 在移动网下偷跑十几 MB 流量（用户月底看账单才发现）
-  //   · 拿上一版留下的包当新版本装（版本号对不上却没检查）
-  // 所以除了"能下下来"，"不该下的时候没下"和"装错版本"必须各有断言盯着。
+  // 这一组盯四类事故，而且**它们全都不报错**：
+  //   · 同一个包被重复下载（启动自检 + 网络回调 + 设置页各触发一次 → 下三遍）
+  //   · 残缺包被当成"已就绪"（大小不对 / 被截断，用户一点就装崩）
+  //   · 换版本后拿旧包当新版装
+  //   · 进程被杀后状态卡在 downloading，从此再也不下载
   console.log('');
-  console.log('== 6. WiFi 预下载 ==');
+  console.log('== 6. 静默下载与校准 ==');
 
   // 前面几组可能留了 skip / pending，先清干净，别让上一组的状态糊到这一组
-  try { settingsMod.set({ updater: { skip: '', pending: '', staged: '' } }); } catch (e) {}
+  try { settingsMod.set({ updater: { skip: '', pending: '', dl: '' } }); } catch (e) {}
+  statSize = 1234; tailMode = 'ok';
   const P6 = 'http://x/' + NEWER + '.wgt';
   const A6 = 'http://x/' + NEWER + '.apk';
-  /** 造一个"已经发现新版本"的状态（version / kind / url 都齐） */
-  const newPending = (kind, url) => {
-    const m = mount();
-    m.clearStaged();
+  /** 造一个"已经发现新版本"的状态（version / kind / url / size 都齐） */
+  const newPending = (kind, url, size) => {
+    const m = mount({ plus: fakePlus });
+    m.dropDl();
     try { settingsMod.set({ updater: { skip: '' } }); } catch (e) {}
-    m.noteUpdate({ version: m.parseVersion(NEWER), kind: kind, url: url });
+    m.noteUpdate({ version: m.parseVersion(NEWER), kind: kind, url: url, size: size || 0 });
     return m;
   };
 
-  // ① WiFi 下会下，而且存成持久路径（临时路径重启就没了，等于白下）
+  // ① 能下好并落盘（存的是持久路径 —— 临时路径重启就没了，等于白下）
   netTypeStub = 'wifi';
   savedFiles.length = 0;
   const m6 = newPending('wgt', P6);
   eq(m6.stagedPath(), '', '还没下过 → 没有本地包');
-  eq(await m6.prefetch(), 'ok', 'WiFi 下把包预下载好了');
+  eq(await m6.ensure(), 'ok', '把包静默下好了（WGT）');
   eq(m6.stagedPath(), '/saved/pkg', '存的是持久路径（不是重启就丢的临时路径）');
   assert(savedFiles.length > 0, '真的落盘了（不是只在内存里记一笔）');
-  assert(m6.pendingInfo() && m6.pendingInfo().staged === true, 'pendingInfo 会告诉 UI「已经下好了」');
+  assert(m6.pendingInfo() && m6.pendingInfo().ready === true, 'pendingInfo 会告诉 UI「已经就绪」');
 
-  // ② 同一个版本不重复下（否则每次启动都重下一次）
-  eq(await m6.prefetch(), 'already', '这个版本已经下好了 → 不重复下载');
+  // ② 已经下好 → 直接复用，一个字节都不重下（这是每次启动都会走的高频路径）
+  dlCount = 0;
+  eq(await m6.ensure(), 'ready', '这个版本已经下好 → 复用，不重新下载');
+  eq(dlCount, 0, '复用时一次下载请求都没发');
 
-  // ③ 移动网一律不动流量 —— 这条是最不能犯的错
+  // ③ 移动数据也下 —— 静默下载不分网络，用户永远不该"等下载"
   netTypeStub = '4g';
+  dlCount = 0;
   const m6c = newPending('wgt', P6);
-  eq(await m6c.prefetch(), 'no-wifi', '不是 WiFi → 一个字节都不下');
-  eq(m6c.stagedPath(), '', '没下 → 也就没有本地包');
+  eq(await m6c.ensure(), 'ok', '移动数据下照样静默下载（不分网络）');
+  eq(dlCount, 1, '移动数据下真的发起下载了');
 
-  // ④ 网络类型拿不到 → 按"不是 WiFi"处理（宁可不下，不能赌）
-  netTypeStub = 'unknown';
-  eq(await newPending('wgt', P6).prefetch(), 'no-wifi',
-    '网络类型拿不到 → 按不是 WiFi 处理（宁可不下，不能偷跑流量）');
+  // ③b 整包走的是同一套（APK 与 WGT 共用，不各写一遍）
+  netTypeStub = '4g';
+  dlCount = 0;
+  const m6a = newPending('apk', A6);
+  eq(await m6a.ensure(), 'ok', '整包走同一套静默下载（APK 与 WGT 共用）');
+  eq(dlCount, 1, '整包也只下一次');
 
-  // ⑤ 装本地包：不再联网，wgt 装完要重启 + 把存下来的包删掉
+  // ③c 真没网 → 这次不动（不白重试）
+  netTypeStub = 'none';
+  dlCount = 0;
+  eq(await newPending('wgt', P6).ensure(), 'offline', '确认没网 → 这次不下');
+  eq(dlCount, 0, '没网时一个请求都没发');
+  netTypeStub = 'wifi';
+
+  // ④ 单一实例：同一个包正在下 → 后续触发复用同一个任务，绝不重复下载
+  dlCount = 0;
+  const m6s = newPending('wgt', P6);
+  const t1 = m6s.ensure();
+  const t2 = m6s.ensure();
+  const t3 = m6s.ensure();
+  eq(await t1, 'ok', '第一次触发真的去下了');
+  eq(await t2, 'running', '第二次触发 → 复用正在跑的任务');
+  eq(await t3, 'running', '第三次触发 → 同样复用');
+  eq(dlCount, 1, '三次触发只对应一次下载（没有重复下载）');
+
+  // ⑤ 完整性校验 · 大小对不上 → 判坏包，绝不当"已就绪"
+  statSize = 1234;
+  const m6size = newPending('wgt', P6, 9999);   // 远端说 9999，落下来的却是 1234
+  eq(await m6size.ensure(), 'bad', '大小对不上 → 判为坏包');
+  eq(m6size.stagedPath(), '', '坏包不算"已就绪" → 红点不会亮');
+
+  // ⑤b 完整性校验 · 结构残缺（尾部没有 zip 结尾标记）→ 同样判坏包
+  tailMode = 'truncated';
+  const m6zip = newPending('wgt', P6);
+  eq(await m6zip.ensure(), 'bad', '没有 zip 结尾标记 → 判为截断包');
+  eq(m6zip.stagedPath(), '', '截断包不算"已就绪" → 红点不会亮');
+  tailMode = 'ok';
+
+  // ⑤c 读不到文件内容（H5 / 小程序没有 plus.io）→ 按通过放行
+  //    不能因为读不了文件就永远不给更新 —— 那时"文件存在 + 大小对得上"已能挡掉大半残缺包
+  tailMode = 'none';
+  eq(await newPending('wgt', P6).ensure(), 'ok', '读不到文件内容 → 按通过放行（不能因此永远不给更新）');
+  tailMode = 'ok';
+
+  // ⑤d 下好之后文件被系统清掉 → 再校准时发现"不在了"，要重新下而不是拿个空路径凑数
+  const m6gone = newPending('wgt', P6);
+  eq(await m6gone.ensure(), 'ok', '先下好一版');
+  savedGone = true;             // 只让 /saved/ 下的持久文件消失，临时文件照常能读
+  dlCount = 0;
+  eq(await m6gone.ensure(), 'ok', '文件被系统清掉 → 重新下（不是拿空路径凑数）');
+  eq(dlCount, 1, '确实重新发起了一次下载');
+  savedGone = false;
+
+  // ⑥ 装本地包：不再联网，wgt 装完要重启 + 把包删掉
   netTypeStub = 'wifi';
   const m6e = newPending('wgt', P6);
-  await m6e.prefetch();
+  await m6e.ensure();
   const mp6 = mount({ plus: fakePlus });
   downloaded = null; restarted = false; removedFiles.length = 0;
   eq(await mp6.install(), true, '装已经下好的本地包');
@@ -311,84 +396,62 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   assert(removedFiles.length > 0, '装完把存下来的包删了（不能一直占着用户存储）');
   eq(mp6.stagedPath(), '', '记账也一起清了（只清记账会留下一坨没人认的文件）');
 
-  // ⑥ 整包：装的时候**不能**重启（系统安装器要接手），文件也**不能**删（安装器还在读）
+  // ⑦ 整包：装的时候**不能**重启（系统安装器要接手），文件也**不能**删（安装器还在读）
   const m6f = newPending('apk', A6);
-  eq(await m6f.prefetch(), 'ok', '整包也会在 WiFi 下预下载');
+  await m6f.ensure();
   const mp6f = mount({ plus: fakePlus });
   restarted = false; removedFiles.length = 0;
   eq(await mp6f.install(), true, '装已经下好的整包');
   eq(restarted, false, '整包不重启（系统安装器接手，这时候重启是捣乱）');
   eq(removedFiles.length, 0, '整包文件不能删 —— 安装器还在读它，删了就装一半');
 
-  // ⑦ 换了版本 → 上一版留下的包不算数（拿旧包当新版装是最阴的一类 bug）
+  // ⑧ 换了版本 → 上一版留下的包不算数（拿旧包当新版装是最阴的一类 bug）
   netTypeStub = 'wifi';
   const m6g = newPending('wgt', P6);
-  await m6g.prefetch();
+  await m6g.ensure();
   assert(!!m6g.stagedPath(), '先下好一版');
   m6g.noteUpdate({ version: m6g.parseVersion(FAR), kind: 'wgt', url: 'http://x/' + FAR + '.wgt' });
   eq(m6g.stagedPath(), '', '换了版本 → 旧包的路径不再算数（不能拿旧包当新版装）');
 
-  // ⑦b 上面那条靠的是 noteUpdate 顺手清掉旧包。但清不掉的情况是存在的（进程被杀、
+  // ⑧b 上面那条靠的是 noteUpdate 顺手清掉旧包。但清不掉的情况是存在的（进程被杀、
   //     换了版本却没走 check），所以 stagedPath 自己还得再挡一道 —— 不能只靠上游打扫。
   netTypeStub = 'wifi';
   const m6k = newPending('wgt', P6);
-  await m6k.prefetch();
+  await m6k.ensure();
   assert(!!m6k.stagedPath(), '先下好一版（准备手工把记账改坏）');
   try {
     settingsMod.set({
-      updater: { staged: JSON.stringify({ v: '9.9.9', kind: 'wgt', path: '/saved/pkg', at: Date.now() }) }
+      updater: { dl: JSON.stringify({ v: '9.9.9', kind: 'wgt', state: 'done', path: '/saved/pkg', at: Date.now() }) }
     });
   } catch (e) {}
-  eq(m6k.stagedPath(), '', '记账里的版本号与待更新对不上 → 这个路径不算数（stagedPath 自己也要挡，不能只指望 noteUpdate 打扫）');
+  eq(m6k.stagedPath(), '', '记账里的版本号与待更新对不上 → 这个路径不算数（stagedPath 自己也要挡）');
 
-  // ⑧ 移动网 → 一个字节都不下（这是本轮最核心的规矩：不偷跑用户流量）
-  netTypeStub = '4g';
-  const m6h = newPending('apk', A6);
-  let e6h = '';
-  try { await m6h.install(); } catch (e) { e6h = String((e && e.message) || e); }
-  // ⚠️ 2026-10-14 改：这里原先断言 'need-download'。
-  //    加了「在线下载必须先过 WiFi 门」之后，整包在移动网下也先被 need-wifi 拦掉 ——
-  //    16MB 的 apk 比 wgt 更不该在蜂窝网拉。need-download 只在** WiFi 下没预下载好**时出现。
-  eq(e6h, 'need-wifi', '移动网 + 整包没下好 → 先被 WiFi 门拦住（不偷跑十几 MB 流量）');
-
-  // ⑧b 热更也一样：移动网点更新 → 拦下并告诉调用方（调用方弹"仅能在 Wi-Fi 下更新"）
-  netTypeStub = '4g';
-  const m6w = newPending('wgt', P6);
-  // ⚠️ downloaded 必须先清零：上一组（⑦b）的 prefetch 真的下过一次，不清零的话
-  //    这条断言永远绿 —— 那就是典型的假绿（看着在守门，其实验的是别人的残留）。
-  downloaded = null;
-  let e6w = '';
-  try { await m6w.install(); } catch (e) { e6w = String((e && e.message) || e); }
-  eq(e6w, 'need-wifi', '移动网 + 热更没下好 → 拦下（不偷跑流量）');
-  eq(downloaded, null, '被拦下时真的没发起下载（光返回错误不算守住了门）');
-
-  // ⑧c WiFi 下整包没预下载好 → 才轮到"交给浏览器"这条路
+  // ⑨ 进程被杀：状态卡在 downloading → 下次进来重新校准，不能从此再也不下载
   netTypeStub = 'wifi';
-  const m6y = newPending('apk', A6);
-  let e6y = '';
-  try { await m6y.install(); } catch (e) { e6y = String((e && e.message) || e); }
-  eq(e6y, 'need-download', 'WiFi 下整包没下好 → 明确让调用方去浏览器（App 内不静默拉整包）');
+  const m6dead = newPending('wgt', P6);
+  try {
+    settingsMod.set({
+      updater: { dl: JSON.stringify({ v: NEWER, kind: 'wgt', state: 'downloading', at: Date.now() - 10 * 60 * 1000 }) }
+    });
+  } catch (e) {}
+  eq(m6dead.stagedPath(), '', '卡在 downloading 时不算已就绪（否则会拿个不存在的包去装）');
+  dlCount = 0;
+  eq(await m6dead.ensure(), 'ok', '卡死状态 → 重新校准并下载（不会从此再也不下）');
+  eq(dlCount, 1, '校准时确实发起了一次下载');
 
-  // ⑧d 预下载好的本地包**不受 WiFi 门限制** —— 装本地包一字节流量都不走，
-  //     用户是在地铁上还是被窝里都该能装。这条漏了会把"已经下好了"这个功能废掉一半。
-  netTypeStub = '4g';
-  const m6z = newPending('wgt', P6);
-  netTypeStub = 'wifi';
-  await m6z.prefetch();
-  assert(!!m6z.stagedPath(), '先在 WiFi 下把包下好');
-  netTypeStub = '4g';
-  downloaded = null; restarted = false;
-  eq(await mount({ plus: fakePlus }).install(), true, '移动网也能装已经下好的本地包（不耗流量）');
-  eq(downloaded, null, '装本地包时没联网下载');
-  assert(restarted, 'wgt 装完重启（不重启不生效）');
+  // ⑩ 下不到包 → 明确报错，绝不把没验过的东西交给安装器
+  netTypeStub = 'none';           // 没网 + 没有本地包
+  statSize = 1234;
+  const m6bad = newPending('wgt', P6);
+  let e6bad = '';
+  try { await m6bad.install(); } catch (e) { e6bad = String((e && e.message) || e); }
+  eq(e6bad, 'offline', '没网且没本地包 → 明确报 offline（不静默装个不存在的包）');
 
-  // ⑨ 本地包装不上 → 自动退回在线下载（不能把用户卡在"更新中"）
+  // ⑩b 本地包装不上 → 自动退回在线装一次（不能把用户卡在"更新中"）
   netTypeStub = 'wifi';
-  const m6i = newPending('wgt', P6);
-  await m6i.prefetch();
-  downloaded = null; restarted = false;
   // 只让"本地路径"装失败，临时路径照常成功 —— 模拟文件被系统清掉那一类情况
   const flakyPlus = {
+    io: ioStub,
     runtime: {
       install: (p, o, okCb, errCb) => {
         if (String(p).indexOf('/saved/') === 0) { if (errCb) errCb(new Error('boom')); return; }
@@ -398,44 +461,32 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
       restart: () => { restarted = true; }
     }
   };
+  const m6i = newPending('wgt', P6);
+  await m6i.ensure();
+  downloaded = null; restarted = false;
   // ⚠️ 一定要 try/catch 包住：不包的话"没有退回"会以未捕获 rejection 的形式把整个
   //    脚本崩掉 —— 那样看着也是失败，但报的是堆栈不是断言，坏了不好定位。
-  let ok9 = false;
-  let e9 = '';
-  try { ok9 = await mount({ plus: flakyPlus }).install(); } catch (e) { e9 = String((e && e.message) || e); }
-  eq(ok9 && !e9, true, '本地包装不上 → 自动退回在线下载，最后还是装上了（' + (e9 || 'ok') + '）');
+  let ok10 = false;
+  let e10 = '';
+  try { ok10 = await mount({ plus: flakyPlus }).install(); } catch (e) { e10 = String((e && e.message) || e); }
+  eq(ok10 && !e10, true, '本地包装不上 → 自动退回在线装，最后还是装上了（' + (e10 || 'ok') + '）');
   assert(!!downloaded, '退回时真的去下载了（' + downloaded + '）');
 
-  // ⑩ 网络变化监听：接上 WiFi 才补下（用户是回家才连 WiFi 的话就靠它）
-  // ⚠️ 挂监听时会当场自己尝试一次（见 watchWifi 里的说明），所以这里先按**移动网**挂，
-  //    才能干净地验证"回调"这一件事；否则包在挂上的瞬间就下好了，下面全变成假绿。
+  // ⑪ 网络变化监听：一有网就补下（WiFi / 移动数据都算），已下好后怎么变都不重下
   netTypeStub = '4g';
+  dlCount = 0;
   const m6j = newPending('wgt', P6);
-  m6j.watchWifi();
-  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
-  eq(m6j.stagedPath(), '', '挂监听时不是 WiFi → 不下');
-  assert(typeof netCb === 'function', '注册了网络变化监听');
-  netCb({ isConnected: false, networkType: 'wifi' });
-  netCb({ isConnected: true, networkType: '4g' });
-  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
-  eq(m6j.stagedPath(), '', '断网 / 切到移动网 → 网络变化也不下载');
-  // ⚠️ 两个 stub 要同步改：真实环境下"连上 WiFi"时 getNetworkType 也返回 wifi，
-  //    但测试里 netTypeStub 与回调的 networkType 是各自独立的开关。
-  //    只改回调不改 netTypeStub 的话，prefetch 被触发了却一问还是移动网 → 白忙活
-  //    （回调挡不住的那两次无所谓，它们压根没走到 prefetch）。
-  netTypeStub = 'wifi';
-  netCb({ isConnected: true, networkType: 'wifi' });
+  m6j.watchNetwork();
   for (let i = 0; i < 5 && !m6j.stagedPath(); i++) await new Promise((r) => setTimeout(r, 0));
-  eq(m6j.stagedPath(), '/saved/pkg', '接上 WiFi → 把包补下了（回家才连 WiFi 也管用）');
-
-  // ⑩b 挂监听时**已经是 WiFi** → 当场就下，不能干等"变化"事件。
-  //     这条对着一个真实的洞：上次开 App 在移动网、这次一开就连着 WiFi，
-  //     网络没变化过 → 没有回调 → 只挂回调的话包永远下不到。
-  netTypeStub = 'wifi';
-  const m6n = newPending('wgt', P6);
-  m6n.watchWifi();
-  for (let i = 0; i < 5 && !m6n.stagedPath(); i++) await new Promise((r) => setTimeout(r, 0));
-  eq(m6n.stagedPath(), '/saved/pkg', '挂监听时已在 WiFi 下 → 当场补下（不等网络"变化"）');
+  eq(m6j.stagedPath(), '/saved/pkg', '移动数据下挂监听 → 同样当场补下（不分网络）');
+  eq(dlCount, 1, '挂上那次只下了一次');
+  assert(typeof netCb === 'function', '注册了网络变化监听');
+  dlCount = 0;
+  netCb({ isConnected: false, networkType: 'none' });
+  netCb({ isConnected: true, networkType: '4g' });
+  netCb({ isConnected: true, networkType: 'wifi' });
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  eq(dlCount, 0, '已经下好了 → 网络怎么变都不重复下载');
 
   // ---------- 第 4 组：真跑设置页的「更新弹窗派发」 ----------
   // 光看静态契约会留下一个大口子：askUpdate 到底开没开弹窗、「确定」有没有真的去装包、
@@ -522,8 +573,8 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   eq(st.confirm.show, true, '弹的是统一弹窗（confirm.show）');
   eq(st.confirm.action, 'update', '弹窗派发标记 = update');
   eq(st.confirm.title, '发现新版本 {v}', '标题带上版本号');
-  eq(st.confirm.content, '会在 Wi-Fi 下自动下载，下好后一点就装完，不动你的学习数据',
-    'wgt 的文案讲清"不动学习数据"，也说清是 Wi-Fi 下自动下（移动网点了会被拦，要先讲明白）');
+  eq(st.confirm.content, '正在后台下载，下好后一点就装完，不动你的学习数据',
+    'wgt 没下好时如实说"正在后台下载"，也说清不动学习数据（不许谎报"正在下载"让人干等）');
   eq(st.confirm.confirmText, '立即更新', 'wgt 的确认键 = 立即更新');
   eq(st.confirm.cancelText, '以后再说', '取消键 = 以后再说（不是"取消"，语义不同）');
   eq(st.confirm.danger, false, '更新不是危险操作（不用红色 danger 样式）');
@@ -541,16 +592,18 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   st.onConfirmNo();
   eq(skips, 1, '别的弹窗点取消 → 不记 skip（只有更新弹窗的取消是"以后再说"）');
 
-  // 确定 → 真的去装（走统一入口 updater.install()，不是直接 installWgt）
+  // 包还没下好 → **不许**去装。下载是静默的，把用户按在这儿干等是最差体验，
+  // 而且没验过的包根本不该交给安装器。这条最容易被写成"点了就立刻下载"。
   installs = [];
+  toasts.length = 0;
+  st.updateReady = false;
   st.askUpdate(wgtRel);
   st.onConfirmYes(true);
-  eq(installs.length, 1, '点「立即更新」→ 调了安装');
-  eq(installs[0], 'install', '走的是统一安装入口（它会自己决定装本地包还是现下）');
-  eq(skips, 1, '走安装路径时不记 skip');
-  assert(toasts.indexOf('正在下载更新…') >= 0, '没预下载好 → 提示"正在下载"（不谎报成"正在安装"）');
+  eq(installs.length, 0, '包还没下好 → 不调安装（不能拿个没验过的包去装）');
+  assert(toasts.indexOf('还在后台下载，下好后点一下就装完') >= 0,
+    '没下好 → 如实说"还在后台下载"（不谎报成"正在下载"）');
 
-  // 已经预下载好 → 按钮与文案都要换成"装"那一套
+  // 已经下好 → 走统一安装入口，按钮与文案都换成"装"那一套
   stagedSpy = '/saved/pkg';
   st.updateReady = true;
   st.askUpdate(wgtRel);
@@ -559,7 +612,8 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   toasts.length = 0;
   installs = [];
   st.onConfirmYes(true);
-  eq(installs.length, 1, '已下载好时点「立即安装」→ 照样走安装');
+  eq(installs.length, 1, '已下载好时点「立即安装」→ 走安装');
+  eq(installs[0], 'install', '走的是统一安装入口（它会自己决定装本地包还是现下）');
   assert(toasts.indexOf('正在安装…') >= 0, '已下载好 → 提示"正在安装"（不是"正在下载"）');
   stagedSpy = '';
   st.updateReady = false;
@@ -567,7 +621,7 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   // apk → 不去装，改走"打开发布页让用户自己下整包"
   const apkRel = { kind: 'apk', version: up.parseVersion(FAR), url: 'http://x/' + FAR + '.apk' };
   st.askUpdate(apkRel);
-  eq(st.confirm.content, '这次要下载完整安装包，建议在 Wi-Fi 下进行', 'apk 的文案换成"完整安装包"，并提醒走 Wi-Fi');
+  eq(st.confirm.content, '正在后台下载完整安装包，下好后一点就装完', 'apk 没下好时如实说"正在后台下载完整安装包"');
   eq(st.confirm.confirmText, '去下载', 'apk 的确认键 = 去下载');
   installs = [];
   st.onConfirmYes(true);
@@ -590,19 +644,26 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   const set6 = load('utils/settings.js', { uni: uni6 });
   // 用 mount() 而不是直接 load：uni.request 走的是全局 stub（handler 那一套），
   // 自己传 uni 会把 request 顶掉 → check() 直接 TypeError
-  const u6 = mount({ settings: set6 });
+  const u6 = mount({ settings: set6, plus: fakePlus });
   eq(u6.hasPending(), false, '一开始没有红点');
 
-  handler = () => ({ assets: [{ name: 'AWword-' + NEWER + '.wgt', browser_download_url: 'http://x/' + NEWER + '.wgt' }] });
+  handler = () => ({ assets: [{ name: 'AWword-' + NEWER + '.wgt', browser_download_url: 'http://x/' + NEWER + '.wgt', size: 1234 }] });
   await u6.check();
-  eq(u6.hasPending(), true, '查到新版本 → 有红点');
+  // ⚠️ 本轮最核心的一条规矩：查到新版本**不等于**有红点。
+  //    包没下好 / 校验没过就亮红点，等于把用户引向一次注定失败的点击 ——
+  //    "红点亮了，点进去还要等十几秒甚至装不上"，比没有红点更糟。
+  eq(u6.hasPending(), false, '刚查到新版本、包还没下好 → 不亮红点（下载中一律静默）');
+
+  netTypeStub = 'wifi'; statSize = 1234; tailMode = 'ok';
+  eq(await u6.ensure(), 'ok', '后台把包静默下好');
+  eq(u6.hasPending(), true, '包下好且校验通过 → 红点亮起');
   const info6 = u6.pendingInfo();
   eq(info6 && info6.versionText, NEWER, '弹窗拿得到版本号');
   eq(info6 && info6.kind, 'wgt', '弹窗拿得到类型（决定正文走哪条文案）');
   eq(info6 && info6.url, 'http://x/' + NEWER + '.wgt', '弹窗拿得到下载直链（点「更新」要能用）');
 
   // 红点必须扛得住 App 重启：换一个模块实例（模拟冷启动）再读，还在
-  const u6b = mount({ settings: set6 });
+  const u6b = mount({ settings: set6, plus: fakePlus });
   eq(u6b.hasPending(), true, 'App 重启后红点还在（落在 storage，不是内存变量）');
 
   // 「不再提示」
@@ -616,14 +677,18 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   eq(String(((set6.get() || {}).updater || {}).skip || ''), NEWER,
     '「不再提示」记的是那个版本号（不是永久静音开关）');
   u6.noteUpdate({ version: u6.parseVersion(FAR), kind: 'wgt', url: 'http://x/new' });
-  eq(u6.hasPending(), true, '又发了更新的版本 → 红点重新亮（skip 只压得住那一个版本号）');
+  // 换版本后旧包作废，得重新下好才亮 —— 这正是不拿旧包充数的表现
+  eq(u6.hasPending(), false, '刚换版本、新包还没下好 → 还是不亮红点');
+  await u6.ensure();
+  eq(u6.hasPending(), true, '又发了更新的版本且下好了 → 红点重新亮（skip 只压得住那一个版本号）');
 
   // 装完新版本（本机版本号升上去）→ 红点自己消失，不需要任何手动清理。
   // 先清掉上一步的 skip：不然"不再提示"仍然生效，这里就验不到"装完自动消失"了。
   set6.set({ updater: { skip: '' } });
   u6.noteUpdate({ version: u6.parseVersion(NEWER), kind: 'wgt', url: 'http://x' });
-  eq(u6.hasPending(), true, '（重新记一笔，准备验"装完自动消失"）');
-  const u6c = mount({ settings: set6, BUILD_INFO: { version: FAR + '.9', versionCode: 999 } });
+  await u6.ensure();
+  eq(u6.hasPending(), true, '（重新记一笔并下好，准备验"装完自动消失"）');
+  const u6c = mount({ settings: set6, plus: fakePlus, BUILD_INFO: { version: FAR + '.9', versionCode: 999 } });
   eq(u6c.hasPending(), false, '装完新版本 → 红点自己消失（版本号不再比本机新）');
 
   // 坏数据不许把红点逻辑搞崩

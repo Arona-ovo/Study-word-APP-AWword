@@ -1319,10 +1319,14 @@ export default {
   '重试 ›': 'Retry ›',
   '有新版本 {v}': 'New version {v}',
   '发现新版本 {v}': 'New version {v} available',
-  '这次要下载完整安装包，建议在 Wi-Fi 下进行': 'This one needs the full installer — Wi-Fi recommended',
-  '会在 Wi-Fi 下自动下载，下好后一点就装完，不动你的学习数据': 'Downloads automatically over Wi-Fi — one tap to install when ready, your study data stays untouched',
-  // 移动网点「更新」会被 updater 的 need-wifi 拦下（不在蜂窝网偷跑流量），这条是给用户的解释
-  '仅能在 Wi-Fi 下更新，连上后会自动下载好': 'Wi-Fi only — it downloads itself once you’re connected',
+  // 更新包是后台静默下载的，只有校验通过后才允许出现红点与弹窗 ——
+  // 所以这里的措辞都是"已经好了 / 正在后台下"，绝不能说"正在下载"让人干等。
+  '完整安装包已下载好，点一下就装完': 'Full installer is downloaded — one tap to install',
+  '正在后台下载完整安装包，下好后一点就装完': 'Downloading the full installer in the background — one tap when it’s ready',
+  '正在后台下载，下好后一点就装完，不动你的学习数据': 'Downloading in the background — one tap to install when ready, your study data stays untouched',
+  '还在后台下载，下好后点一下就装完': 'Still downloading in the background — tap again once it’s ready',
+  '现在没网，连上网再试': 'No connection right now — try again when you’re back online',
+  '更新包没下完整，正在重新下载': 'That download came through incomplete — fetching it again',
   '去下载': 'Download',
   '去下载 ›': 'Download ›',
   '更新 ›': 'Update ›',

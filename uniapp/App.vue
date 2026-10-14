@@ -48,10 +48,11 @@ export default {
       setTimeout(() => { updater.autoCheck() }, 3000)
     } catch (e) {}
     // ⚠️ 网络监听必须**无条件**挂，不能指望 autoCheck 顺手挂：
-    // autoCheck 开头就有 12 小时节流，节流窗口内它直接 return，watchWifi 一次都不会被调用 ——
-    // 那"回家连上 WiFi 自动把包下好"这件事在最常见的场景里根本不会发生。
-    // 挂在这里，监听与检查解耦：查不查是一回事，接上 WiFi 补不补下是另一回事。
-    try { updater.watchWifi() } catch (e) {}
+    // autoCheck 开头就有 12 小时节流，节流窗口内它直接 return，监听一次都不会被挂上 ——
+    // 那"有网就把包悄悄下好"这件事在最常见的场景里根本不会发生。
+    // 挂在这里，监听与检查解耦：查不查是一回事，有没有网补下是另一回事。
+    // （WiFi 和移动数据都下：下载是静默的，只有校验通过后才允许出现红点。）
+    try { updater.watchNetwork() } catch (e) {}
     // #endif
     // 被 awword:// 链接唤起（PWstudy 番茄钟把用户送过来背单词）：认领启动参数，
     // 再挂 newintent —— 应用已在后台时再被唤起走的是这个事件。

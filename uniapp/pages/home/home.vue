@@ -645,17 +645,17 @@ export default {
   },
   computed: {
     /**
-     * 更新弹窗的正文：热更和整包必须说清楚差别（一个不动数据、一个要下整包）。
-     * ⚠️ 两条都要讲"Wi-Fi 下自动下载" —— 移动网点更新会被拦住（utils/updater.js 的
-     *    need-wifi），不提前讲清楚，用户会以为按钮坏了。
+     * 更新弹窗的正文：热更和整包必须说清楚差别（一个不动数据、一个是完整安装包）。
+     * ⚠️ 这个弹窗只在"包已下载完且校验通过"后才出现（hasPending 守着），
+     *    所以两条都可以放心说"已经下载好了" —— 这时候点下去就是秒装，不会再等下载。
      */
     updateContent() {
       void this.updateTitle
       const info = updater.pendingInfo()
       if (!info) return ''
       return info.kind === 'apk'
-        ? t('这次要下载完整安装包，建议在 Wi-Fi 下进行')
-        : t('会在 Wi-Fi 下自动下载，下好后一点就装完，不动你的学习数据')
+        ? t('完整安装包已下载好，点一下就装完')
+        : t('已经下载好了，点一下就装完，不动你的学习数据')
     },
 
     /** 首次询问的三个选项：接受 / 稍后 / 拒绝，一个都不能少 */
@@ -923,14 +923,19 @@ export default {
         else if (r === 'failed') uni.showToast({ title: t('打不开，请手动访问 GitHub'), icon: 'none' })
         return
       }
-      uni.showToast({ title: ready ? t('正在安装…') : t('正在下载更新…'), icon: 'none', duration: 3000 })
+      // 走到这儿包一定已经下好（红点只在校验通过后才亮），所以只说"安装"，不说"下载"
+      uni.showToast({ title: t('正在安装…'), icon: 'none', duration: 3000 })
       updater.install().catch((e) => {
-        // 移动网 → 一个字节都不下，明确告诉他等 WiFi（连上会自动下好，不用他守着）
-        if (String((e && e.message) || '') === 'need-wifi') {
-          uni.showToast({ title: t('仅能在 Wi-Fi 下更新，连上后会自动下载好'), icon: 'none' })
+        const m = String((e && e.message) || '')
+        if (m === 'offline') {
+          uni.showToast({ title: t('现在没网，连上网再试'), icon: 'none' })
           return
         }
-        // 装不上（下载中断 / 基座不配套 / 没装未知应用的权限）必须给退路，不能卡在"更新中"
+        if (m === 'bad-package') {
+          uni.showToast({ title: t('更新包没下完整，正在重新下载'), icon: 'none' })
+          return
+        }
+        // 装不上（基座不配套 / 没装未知应用的权限）必须给退路，不能卡在"更新中"
         uni.showToast({ title: t('没更新成，可去 GitHub 手动下载'), icon: 'none' })
       })
     },
