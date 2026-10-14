@@ -99,18 +99,26 @@ console.log('== 3. 主包 data 白名单与体积 ==');
 // 它**不进词书**（见 check-word-senses.js 第 8 组），所以不计入下面的 BOOKLOAD。
 // data/build-info.js 是 1 行版本号常量（2026-10-12 起被 utils/updater.js 引用 → 进了主包闭包）。
 // 它本来就属于"启动时同步装载"那一类，加进来只是让白名单跟上现实，不是放宽约束。
+// data/song-links.js 是 2026-10-14 新增的「今日歌曲」歌名表（800 首 / 34KB，见文件头注释），
+// 首页卡片启动时同步装载，所以同样落在主包闭包里。
 const ALLOW = ['data/words.js', 'data/sentences.js', 'data/wordbooks.js', 'data/common-words.js',
   'data/lexicon.js', 'data/lexicon-data.js', 'data/bookdata.js', 'data/extra-words.js',
-  'data/word-senses.js', 'data/build-info.js'];
+  'data/word-senses.js', 'data/build-info.js', 'data/song-links.js'];
 const BOOKLOAD = ['data/lexicon-data.js', 'data/bookdata.js', 'data/extra-words.js'];
+// 歌名表单独计量：它是"往里加歌就线性变长"的纯内容表，跟词典那几份不是一回事。
+// 混进「其余 data」的话，560KB 那条护栏的余量只剩个零头，以后每加一首歌都要来抬一次总数；
+// 分开之后两边各自的增长都看得见。
+const SONGLOAD = ['data/song-links.js'];
 const inMain = [...mainSet].map(rel).filter((r) => r.startsWith('data/')).sort();
 inMain.forEach((d) => assert(ALLOW.indexOf(d) >= 0, '主包 data 在白名单内：' + d));
 
 const kbOf = (list) => list.reduce((s, d) => s + fs.statSync(P(d)).size, 0) / 1024;
 const bookKB = kbOf(inMain.filter((d) => BOOKLOAD.indexOf(d) >= 0));
-const otherKB = kbOf(inMain.filter((d) => BOOKLOAD.indexOf(d) < 0));
-const dataKB = bookKB + otherKB;
-console.log('     词书语料 ' + bookKB.toFixed(0) + ' KB + 其余 data ' + otherKB.toFixed(0) + ' KB = ' + dataKB.toFixed(0) + ' KB');
+const otherKB = kbOf(inMain.filter((d) => BOOKLOAD.indexOf(d) < 0 && SONGLOAD.indexOf(d) < 0));
+const songKB = kbOf(inMain.filter((d) => SONGLOAD.indexOf(d) >= 0));
+const dataKB = bookKB + otherKB + songKB;
+console.log('     词书语料 ' + bookKB.toFixed(0) + ' KB + 其余 data ' + otherKB.toFixed(0) +
+  ' KB + 歌名表 ' + songKB.toFixed(0) + ' KB = ' + dataKB.toFixed(0) + ' KB');
 // 300 → 360 → 400（2026-10-11 / 10-12）：两笔新增，都是**往词典里加东西、不动词书行号**。
 //   1. 查词补充词表 extra-words.js（3012 条 / 126KB）
 //      _vocab/src 里那些**没被任何词书挑中**的考试词条，以前在本地彻底搜不到。
@@ -130,6 +138,9 @@ assert(bookKB <= 400, '内置词书语料 ≤ 400 KB（实际 ' + bookKB.toFixed
 //   所以拆成两份：短版给卡片与列表，长版给查词 / 点读 / 词条页。
 //   ⚠️ 它不进检索索引、不进任何词书（check-word-senses.js 第 7 / 8 组守着）。
 assert(otherKB <= 560, '其余 data ≤ 560 KB（实际 ' + otherKB.toFixed(0) + '）');
+// 60 KB：当前 800 首约占 34 KB，一首平均 43 字节 —— 60 KB 大约装 1400 首。
+// 再往上涨就该考虑"按词频裁表"或"按需装载"了，而不是继续抬这个数。
+assert(songKB <= 60, '歌名表 ≤ 60 KB（实际 ' + songKB.toFixed(0) + '）');
 
 const totalKB = [...mainSet].reduce((s, f) => s + fs.statSync(f).size, 0) / 1024;
 console.log('     主包源码合计 ' + totalKB.toFixed(0) + ' KB');

@@ -17,8 +17,12 @@ const ROOT = path.join(__dirname, '..', 'uniapp');
 const P = (rel) => 'file:///' + path.join(ROOT, rel).replace(/\\/g, '/');
 const R = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
-// 默认布局：必须与 home-layout.ts 的 MODULES(def:true) 顺序一致
-const DEF_LAYOUT = ['book', 'action', 'worddrill', 'chat', 'stats', 'goal', 'chart', 'usage'];
+// 默认布局：必须与 home-layout.ts 的 MODULES(def:true) 顺序一致。
+// 新增默认上首页的模块时**只改这一处** —— 下面凡是"去掉某模块后的布局"都由它推导，
+// 否则每加一个模块就要翻下去改四五条字面量（2026-10-14 加 songs 时踩过）。
+const DEF_LAYOUT = ['book', 'action', 'worddrill', 'chat', 'stats', 'goal', 'chart', 'usage', 'songs'];
+// 收纳掉 action 之后剩下的顺序（顺序敏感，所以是推导而不是重写一遍）
+const WITHOUT_ACTION = DEF_LAYOUT.filter((id) => id !== 'action');
 
 /* ---------------- mock：uni 存储 ---------------- */
 const kv = {};
@@ -64,14 +68,14 @@ function eq(a, b, label) {
 
   // 收纳：移出首页 → 出现在收纳区
   let lay = L.stash('action');
-  eq(lay, ['book', 'worddrill', 'chat', 'stats', 'goal', 'chart', 'usage'], '收纳 action 后布局');
+  eq(lay, WITHOUT_ACTION, '收纳 action 后布局');
   assert(L.stashed().some(m => m.id === 'action'), 'action 进入收纳区');
   eq(L.stashed().length, L.MODULES.length - lay.length, '收纳区数量 = 全部 - 首页');
 
   // 重新加回：追加到末尾
   lay = L.restore('action');
-  eq(lay, ['book', 'worddrill', 'chat', 'stats', 'goal', 'chart', 'usage', 'action'], '加回 action（追加到末尾）');
-  eq(L.restore('action'), ['book', 'worddrill', 'chat', 'stats', 'goal', 'chart', 'usage', 'action'], '重复添加幂等');
+  eq(lay, WITHOUT_ACTION.concat('action'), '加回 action（追加到末尾）');
+  eq(L.restore('action'), WITHOUT_ACTION.concat('action'), '重复添加幂等');
 
   // 拖拽换位
   L.saveLayout(['book', 'action', 'stats']);

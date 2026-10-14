@@ -344,6 +344,7 @@
         <view v-else-if="c.type === 'usage'" class="mod-widget"><widget-usage /></view>
         <view v-else-if="c.type === 'worddrill'" class="mod-widget"><widget-worddrill /></view>
         <view v-else-if="c.type === 'chat'" class="mod-widget"><widget-chat /></view>
+        <view v-else-if="c.type === 'songs'" class="mod-widget"><widget-songs /></view>
 
         <!-- AI 给内置卡加的配图与批注文案 -->
         <image v-if="c.builtin && c.image" class="mod-image" :src="c.image" mode="aspectFill" />
@@ -484,6 +485,7 @@ import WidgetGoal from '../../components/home-widgets/widget-goal.vue'
 import WidgetUsage from '../../components/home-widgets/widget-usage.vue'
 import WidgetWorddrill from '../../components/home-widgets/widget-worddrill.vue'
 import WidgetChat from '../../components/home-widgets/widget-chat.vue'
+import WidgetSongs from '../../components/home-widgets/widget-songs.vue'
 import AppCardBlocks from '../../components/app-card-blocks.vue'
 import AppDialog from '../../components/app-dialog/app-dialog.vue'
 
@@ -557,6 +559,7 @@ export default {
     WidgetUsage,
     WidgetWorddrill,
     WidgetChat,
+    WidgetSongs,
     AppCardBlocks,
     OnboardingMask,
     AppDialog,

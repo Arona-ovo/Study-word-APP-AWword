@@ -48,7 +48,7 @@ export const SHADOWS = ['none', 'soft', 'lifted'];
 export const BORDERS = ['none', 'hairline', 'bold'];
 
 // 内置卡片类型：与 utils/home-layout.ts 的 MODULES id 一一对应
-export const BUILTIN_TYPES = ['book', 'action', 'worddrill', 'chat', 'stats', 'goal', 'chart', 'usage', 'progress', 'favorites', 'streak'];
+export const BUILTIN_TYPES = ['book', 'action', 'worddrill', 'chat', 'stats', 'goal', 'chart', 'usage', 'songs', 'progress', 'favorites', 'streak'];
 
 // AI 可新建的卡片形态（都展开成块序列，渲染器是同一套）
 export const CUSTOM_TYPES = ['custom', 'note', 'countdown', 'checklist', 'stats', 'quote'];

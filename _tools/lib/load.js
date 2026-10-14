@@ -34,6 +34,30 @@ function collectImports(src, rel, deps, cache) {
   let m;
   while ((m = IMPORT_RE.exec(src))) {
     const clause = m[1].trim();
+    // 组件 import（*.vue）：自动补一个空桩。
+    // 不补的话，每往首页加一张卡片，所有把 home.vue 的 <script> loadCode 起来的校验脚本
+    // 都会崩在 ReferenceError: Xxx is not defined —— 它们测的是联动 / 搜索，
+    // 没义务知道首页今天多了哪张卡。
+    // 只看扩展名、不要求文件解析得到：loadCode 常被告知 'home.vue' 这种不带目录的
+    // 文件名，相对路径根本指不到真实文件，而桩本来就不需要真文件。
+    if (/\.vue$/.test(m[2])) {
+      const ns = /^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(clause);
+      if (ns) {
+        if (!(ns[1] in deps)) extra[ns[1]] = {};
+        continue;
+      }
+      const named = /^\{([^}]*)\}$/.exec(clause);
+      if (named) {
+        named[1].split(',').map(s => s.trim()).filter(Boolean).forEach(s => {
+          const to = (s.split(/\s+as\s+/)[1] || s).trim();
+          if (!(to in deps)) extra[to] = {};
+        });
+        continue;
+      }
+      const def = /^([A-Za-z_$][\w$]*)$/.exec(clause);
+      if (def && !(def[1] in deps)) extra[def[1]] = {};
+      continue;
+    }
     const hit = resolveSpec(rel, m[2]);
     if (!hit) continue;
     if (!/^data\//.test(hit.rel) && !/\/data\//.test(hit.rel)) continue;

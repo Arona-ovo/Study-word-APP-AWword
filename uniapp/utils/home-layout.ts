@@ -26,6 +26,7 @@ export const MODULES: HomeModule[] = [
   { id: 'goal', name: '每日目标', desc: '今日新词 / 学会进度，可点进去改目标', def: true },
   { id: 'chart', name: '打卡走势', desc: '股票式折线图：背了就涨、没背就跌，可切 7/30 天', def: true },
   { id: 'usage', name: '停留时长', desc: '今日在 App 里待了多久 · 圆环一整圈 = 1 小时', def: true },
+  { id: 'songs', name: '今日歌曲', desc: '词书里的词配上真实英文歌名，每天 3 首，可换一批', def: true },
   { id: 'progress', name: '掌握度概览', desc: '已学 / 已掌握 / 全书进度条', def: false },
   { id: 'favorites', name: '收藏速览', desc: '收藏数量与最近收藏的几个词', def: false },
   { id: 'streak', name: '打卡周历', desc: '近 7 天的打卡圆点与当前连续天数', def: false }

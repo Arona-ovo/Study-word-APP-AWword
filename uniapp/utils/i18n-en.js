@@ -1370,5 +1370,21 @@ export default {
   '连了 8 秒没反应，地址对吗': 'No response for 8 seconds — is the address right?',
   '地址通了，但没登录或登录过期了': 'Reachable, but not signed in or the session expired',
   '地址通了，但这个服务没有 /ping': 'Reachable, but this server has no /ping',
-  '服务器自己报错了，稍后再试': 'The server returned an error — try again later'
+  '服务器自己报错了，稍后再试': 'The server returned an error — try again later',
+
+  // ---------- 今日歌曲卡（components/home-widgets/widget-songs.vue） ----------
+  // 名字里有"歌"，但翻译时别往"播放器"上靠 —— 这张卡只给歌名和演唱者，
+  // 不播放、不给歌词，文案得让用户明白"为什么不能直接听"。
+  '今日歌曲': 'Songs of the day',
+  '词书里的词配上真实英文歌名，每天 3 首，可换一批':
+    'Words from your book matched to real English song titles · 3 a day, shuffle anytime',
+  '换一批 ›': 'Shuffle ›',
+  '同名': 'Same title',
+  '这本词书暂时配不出歌名': 'No song titles match this book yet',
+  '多背几个词，或者换一本词书试试': 'Learn a few more words, or try another book',
+  '只给歌名，不播放 · 点一下复制，去音乐 App 搜':
+    'Titles only, no playback · tap to copy, then search in your music app',
+  '已复制，去音乐 App 搜': 'Copied — search it in your music app',
+  '能配上的歌就这几首，多背点词再来':
+    'That is every match for now — learn more words to unlock new songs'
 };
