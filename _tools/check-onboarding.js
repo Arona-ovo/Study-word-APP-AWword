@@ -114,8 +114,26 @@ assert(/class="fnb-search"/.test(navbar), 'float-navbar 内存在 .fnb-search（
 assert(/class="ftb"/.test(tabbar), 'float-tabbar 内存在 .ftb（引导目标）');
 assert(/rect\(sel, cb\)/.test(navbar) && /boundingClientRect/.test(navbar), 'float-navbar 暴露 rect() 测量口');
 assert(/rect\(sel, cb\)/.test(tabbar) && /boundingClientRect/.test(tabbar), 'float-tabbar 暴露 rect() 测量口');
-assert(/class="action-area"/.test(home), '首页存在 .action-area（「开始背单词」目标）');
+assert(/class="action-area"/.test(home), '首页存在 .action-area（卡片平铺模式的「开始背单词」目标）');
 assert(/class="foot-link"/.test(home), '首页存在 .foot-link（「编辑首页」目标）');
+// 焦点模式换了布局：action 卡被整卡隐藏，同一步要改指向 hero 上的入口；
+// 另外多了一步讲「上滑看全部功能」。这两个选择器对不上，引导就指到空气上。
+assert(/class="focus-cta"/.test(home), '首页存在 .focus-cta（焦点模式的「开始背单词」目标）');
+assert(/class="drawer-handle"/.test(home), '首页存在 .drawer-handle（「上滑看全部功能」目标）');
+const focusShapeOk = steps.every(s =>
+  !s.targetFocus || (s.targetFocus && typeof s.targetFocus.sel === 'string')
+);
+assert(focusShapeOk, 'targetFocus 形态合法（可省略；写了就必须带 sel）');
+assert(byId('start') && byId('start').targetFocus &&
+  byId('start').targetFocus.sel === '.focus-cta',
+  'start 步骤在焦点模式下改指向 .focus-cta（否则该步会被当成测不到而跳过）');
+assert(byId('drawer') && byId('drawer').target &&
+  byId('drawer').target.sel === '.drawer-handle',
+  'drawer 步骤指向 .drawer-handle（讲上滑抽屉）');
+// 首页按当前形态挑目标：焦点模式用 targetFocus，否则用 target
+assert(/guideTarget\(st\)\s*\{[\s\S]{0,240}?targetFocus/.test(home), '首页有按形态挑目标的 guideTarget()');
+assert(/const tg = this\.guideTarget\(st\)/.test(home) && /this\.rectOf\(tg\)/.test(home),
+  '测量与滚动都用挑出来的目标（tg），不是写死 target');
 // ref 与 target 对得上
 const refTargets = steps.filter(s => s.target && s.target.ref).map(s => s.target.ref);
 assert(refTargets.every(r => r === 'navbar' || r === 'tabbar'), 'ref 只指向首页已注册的两个浮层组件：' + refTargets.join(','));

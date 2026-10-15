@@ -565,6 +565,11 @@ function eq(a, b, label) {
   HS.clear();
   eq(HS.list(), [], '能一次性清空');
 
+  // ⚠️ 校验脚本是把 home.vue 的 <script> 单独 loadCode 起来跑的，那个页面桩没有 $nextTick。
+  // 写了它，onShow 会直接 TypeError 崩掉 —— 而且不打印 ✗，只体现为退出码非 0
+  // （"看着一行红都没有，其实整个脚本没跑完"的假绿陷阱）。要延迟一律用 setTimeout。
+  assert(!/\$nextTick/.test(homeSrc), 'home.vue 不用 $nextTick（页面桩没有它，会崩校验脚本）');
+
   console.log('');
   console.log(fail === 0 ? '全部通过 ✓' : ('失败 ' + fail + ' 项 ✗'));
   process.exit(fail === 0 ? 0 : 1);

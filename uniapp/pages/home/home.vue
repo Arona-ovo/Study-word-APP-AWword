@@ -243,22 +243,33 @@
         <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
       </view>
     </view>
+    <!-- 抽屉把手 = 手势区：往上滑 / 点一下都能把下面的卡片拉出来。
+         手势刻意只挂在把手上，不挂到 hero：hero 里是两颗入口按钮，
+         在按钮上滑动会顺带触发按钮自己的 click（一边开抽屉一边跳走），
+         而把手内部没有任何可点元素，怎么滑都不会误触。 -->
     <view
       v-if="isFocus"
       class="drawer-handle"
       @tap="toggleDrawer"
       @touchstart="dhStart"
       @touchmove="dhMove"
+      @touchend="dhEnd"
+      @touchcancel="dhEnd"
     >
       <view class="dh-grip"></view>
-      <text class="dh-text">{{ drawerOpen ? $t('收起') : $t('更多功能') }}</text>
+      <text class="dh-text">{{ drawerOpen ? $t('收起') : $t('上滑查看全部功能') }}</text>
       <text class="dh-chev" :class="{ up: drawerOpen }">⌃</text>
     </view>
 
     <!-- 首页模块：按用户保存的顺序渲染；编辑态显示拖拽手柄与收纳按钮 -->
     <view
       class="mod-list"
-      :class="{ 'drawer-collapsed': isFocus && !drawerOpen }"
+      :class="{
+        'is-drawer': isFocus,
+        'drawer-collapsed': isFocus && !drawerOpen,
+        'drawer-animating': isFocus && drawerMax != null
+      }"
+      :style="drawerStyle"
       @touchmove="dragMove"
       @touchend="dragEnd"
       @touchcancel="dragEnd"
@@ -640,6 +651,12 @@ export default {
       editing: false,
       // 焦点模式下，底部抽屉是否展开（默认收起，只露把手；上滑 / 点把手才展开）
       drawerOpen: false,
+      // 抽屉里卡片的实测内容高（px）。max-height 在 0 和「这个高度」之间过渡，
+      // 动画长度才是准的 —— 用 0 ↔ none 是不会有过渡的（none 不可插值）。
+      drawerH: 0,
+      // 动画期间钉住的具体 max-height（'0px' / 'NNNpx'）；null = 展开完成后交还自然高度
+      drawerMax: null,
+      drawerT: 0,
       // 首页呈现形态：'focus'（默认，焦点 + 抽屉）/ 'cards'（原卡片平铺）。设置页可切。
       homeStyle: 'focus',
       sheetShow: false,
@@ -740,6 +757,17 @@ export default {
     /** 是否走焦点 + 抽屉形态（默认）。设置页切到 'cards' 就回到原卡片平铺。 */
     isFocus() {
       return this.homeStyle === 'focus'
+    },
+    /**
+     * 抽屉的高度控制。卡片平铺形态一律不干预（{}）—— 老形态、老脚本零影响。
+     * 焦点模式下：
+     *   drawerMax 有值 → 用它（开/关动画期间精确控制，0 ↔ 实测内容高）
+     *   drawerMax 为 null → 展开态交还自然高度（卡片再长高也不会被裁），收起态压到 0
+     */
+    drawerStyle() {
+      if (!this.isFocus) return {}
+      if (this.drawerMax != null) return { maxHeight: this.drawerMax }
+      return this.drawerOpen ? {} : { maxHeight: '0px' }
     },
     /** 收纳区里的 AI 卡片：被收纳（visible=false）的那几张，可加回或彻底删除 */
     aiSheetList() {
@@ -909,6 +937,11 @@ export default {
     // 首页呈现形态（焦点 + 抽屉 / 卡片平铺）可能在设置页被改过，回到首页重新读一次。
     // 放最后：上面 maybeUpdateAsk 的字符窗口不能被挤出去（check-updater 守）。
     this.homeStyle = this.readHomeStyle()
+    // 抽屉按卡片实测内容高做过渡，进首页先量一次（收起状态也能量，见 measureDrawer）。
+    // ⚠️ 延迟一律用 setTimeout，别用 Vue 实例的那个 nextTick 方法：
+    // 校验脚本是把 home.vue 的 <script> 单独 loadCode 起来跑的，页面桩上没有那个方法，
+    // 写了会直接 TypeError 崩掉（表现为"一行红都没有，但退出码非 0"的假绿陷阱）。
+    setTimeout(() => { this.measureDrawer() }, 60)
   },
 
   onHide() {
@@ -930,6 +963,8 @@ export default {
       this.guide.box = null
     }
     if (this.guideTimer) { clearTimeout(this.guideTimer); this.guideTimer = 0 }
+    // 抽屉展开/收起的过渡定时器：切走了就别再改高度，回来重新展开
+    if (this.drawerT) { clearTimeout(this.drawerT); this.drawerT = 0 }
     if (this.__partnerTimer) { clearTimeout(this.__partnerTimer); this.__partnerTimer = 0 }
   },
   // 返回键 / 返回手势：搜索结果、编辑态、收纳抽屉都是"页面里的临时状态"，
@@ -1048,19 +1083,30 @@ export default {
         this.measureGuide()
       }, 700)
     },
+    /**
+     * 取当前形态下这一步该高亮谁。首页有两种形态，同一件事的入口位置不一样
+     * （焦点模式的 hero 取代了 action 卡），所以步骤可以带 targetFocus：
+     * 焦点模式下优先用它，没配就退回 target。
+     */
+    guideTarget(st) {
+      if (!st) return null
+      if (this.isFocus && st.targetFocus) return st.targetFocus
+      return st.target || null
+    },
     measureGuide() {
       const st = onboarding.stepAt(this.guide.index)
       if (!st) { this.guideFinish(); return }
-      if (!st.target) { this.guide.box = null; return }
+      const tg = this.guideTarget(st)
+      if (!tg) { this.guide.box = null; return }
       const seq = ++this.guideSeq
-      this.rectOf(st.target).then(rect => {
+      this.rectOf(tg).then(rect => {
         if (seq !== this.guideSeq) return
         if (!rect || !(rect.width > 0)) { this.guideNext(); return }
         // 目标不在视口内（如「编辑首页」在页面底部）：滚到屏幕中部再测一次
         const vh = this.guideViewportH()
         if (rect.top < 0 || rect.top + rect.height > vh) {
           this.scrollGuideTarget(rect, () => {
-            this.rectOf(st.target).then(r2 => {
+            this.rectOf(tg).then(r2 => {
               if (seq !== this.guideSeq) return
               this.guide.box = (r2 && r2.width > 0) ? r2 : rect
             })
@@ -1442,9 +1488,59 @@ export default {
     isActionInFocus(c) {
       return !!(this.isFocus && c && c.type === 'action')
     },
+    /** 展开抽屉：先把高度钉成实测内容高，让 0 → H 的过渡真的跑起来 */
+    openDrawer() {
+      if (this.drawerOpen) return
+      // 量过就按真实高度过渡；没量到给宽松上限兜底（宁可动画略钝，也不能把卡片夹掉）
+      this.drawerMax = this.drawerH > 0 ? (this.drawerH + 120) + 'px' : '4000rpx'
+      this.drawerOpen = true
+      // 动画走完就交还自然高度：之后卡片自己长高（展开目标 / 加组件）都不会被裁
+      this.setDrawerTimer(() => {
+        if (this.drawerOpen) this.drawerMax = null
+      }, 420)
+    },
+    /** 收起抽屉：此刻高度可能是 none（不可插值），先钉回具体值，下一拍再收到 0 */
+    closeDrawer() {
+      if (!this.drawerOpen) return
+      this.drawerMax = this.drawerH > 0 ? (this.drawerH + 120) + 'px' : '4000rpx'
+      this.setDrawerTimer(() => {
+        this.drawerMax = '0px'
+        this.drawerOpen = false
+        // 收完还原成 null，让 drawerStyle 的收起分支接管（内容再变也不会露出来）
+        this.setDrawerTimer(() => { this.drawerMax = null }, 420)
+      }, 30)
+    },
+    /** 抽屉动画只用一个定时器：新的会顶掉旧的，不会出现两个互相打架 */
+    setDrawerTimer(fn, ms) {
+      if (this.drawerT) { clearTimeout(this.drawerT); this.drawerT = 0 }
+      this.drawerT = setTimeout(() => { this.drawerT = 0; fn() }, ms)
+    },
     /** 切换底部抽屉的展开 / 收起（把手点击） */
     toggleDrawer() {
-      this.drawerOpen = !this.drawerOpen
+      if (this.drawerOpen) this.closeDrawer()
+      else this.openDrawer()
+    },
+    /**
+     * 量抽屉里卡片的真实内容高。收起状态也能量 —— overflow:hidden 只是裁掉绘制，
+     * 子节点的布局几何还在，所以首屏收起时就能把 H 量好，不必先展开一次。
+     */
+    measureDrawer() {
+      if (!this.isFocus) return
+      try {
+        uni.createSelectorQuery().in(this).selectAll('.mod-wrap').boundingClientRect(res => {
+          const arr = Array.isArray(res) ? res : (res ? [res] : [])
+          let top = Infinity
+          let bottom = -Infinity
+          arr.forEach(r => {
+            if (!r || !(r.height > 0)) return
+            if (r.top < top) top = r.top
+            const b = (r.bottom != null ? r.bottom : r.top + r.height)
+            if (b > bottom) bottom = b
+          })
+          const h = Math.ceil(bottom - top)
+          if (h > 0) this.drawerH = h
+        }).exec()
+      } catch (e) { /* 量不到就保持 0，走宽松上限兜底 */ }
     },
     /** 把手上滑手势：记下起点 Y，move 时若整体上滑超过阈值就展开抽屉 */
     dhStart(e) {
@@ -1455,9 +1551,14 @@ export default {
       if (this.__dhY == null) return
       const t = (e && e.touches && e.touches[0]) || {}
       const y = t.clientY != null ? t.clientY : (t.pageY != null ? t.pageY : 0)
-      // 整体向上滑（当前 Y 比起点小）超过 30px → 展开；向下滑超过 30px → 收起
-      if (this.__dhY - y > 30) this.drawerOpen = true
-      else if (y - this.__dhY > 30) this.drawerOpen = false
+      // 整体向上滑（当前 Y 比起点小）超过阈值 → 把卡片拉出来；向下滑超过阈值 → 收回去。
+      // 触发一次就把起点作废，避免同一次滑动来回开关。
+      const UP = 40
+      if (this.__dhY - y > UP) { this.__dhY = null; this.openDrawer() }
+      else if (y - this.__dhY > UP) { this.__dhY = null; this.closeDrawer() }
+    },
+    dhEnd() {
+      this.__dhY = null
     },
 
     // ---------- 顶部输入：搜索 / 指令双模式 ----------
@@ -3111,13 +3212,29 @@ export default {
 }
 .dh-chev.up { transform: rotate(180deg); }
 
-/* 焦点模式下，抽屉收起时把卡片区裁成 0 高（展开时无此类，回到自然高度） */
-.mod-list.drawer-collapsed {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 280ms ease;
+/* 焦点模式：卡片区是个可收起的抽屉。
+   ⚠️ 高度必须由 JS 实测的具体数值来控制（0 ↔ 内容高）—— 以前写的是 0 ↔ none，
+   none 不可插值，那段 transition 等于白写，所以展开/收起看着是"硬切"。 */
+.mod-list.is-drawer {
+  transition: max-height 320ms cubic-bezier(0.22, 0.9, 0.28, 1), opacity 240ms ease;
 }
-.mod-list:not(.drawer-collapsed) {
-  transition: max-height 280ms ease;
+/* 只在「收起」和「动画进行中」裁切：
+   动画期间要裁，否则卡片会一边长高一边盖住下面的「编辑首页」；
+   但展开完成后必须放开 —— 编辑态拖动排序用的是 transform 位移，
+   一直 overflow:hidden 会把拖出容器范围的那张卡裁掉。 */
+.mod-list.is-drawer.drawer-collapsed,
+.mod-list.is-drawer.drawer-animating { overflow: hidden; }
+.mod-list.is-drawer.drawer-collapsed { opacity: 0; }
+/* 展开时卡片逐张淡入。只动 opacity，不碰 transform ——
+   transform 是拖拽排序在用的（wrapStyle），动画里动它会在动画期间把拖动位移顶掉。 */
+.mod-list.is-drawer:not(.drawer-collapsed) .mod-wrap {
+  animation: drawer-card-in 300ms ease backwards;
+}
+.mod-list.is-drawer:not(.drawer-collapsed) .mod-wrap:nth-child(2) { animation-delay: 50ms; }
+.mod-list.is-drawer:not(.drawer-collapsed) .mod-wrap:nth-child(3) { animation-delay: 100ms; }
+.mod-list.is-drawer:not(.drawer-collapsed) .mod-wrap:nth-child(n+4) { animation-delay: 150ms; }
+@keyframes drawer-card-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 </style>

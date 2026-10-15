@@ -19,7 +19,12 @@ const VERSION = 1
 //   { sel }             页面内元素：home.vue 用 createSelectorQuery().in(this) 测
 //   { ref, sel }        子组件内元素：调 this.$refs[ref].rect(sel, cb) 测
 //                       （小程序端页面的 query 选不进自定义组件内部，必须组件自己量）
-// 任何目标都可能不存在（模块被收纳 / 结构改动）：
+//
+// targetFocus 是可选的「焦点模式专用目标」：首页有焦点 + 抽屉 / 卡片平铺两种形态，
+// 同一件事的入口在两种形态里位置不同（焦点模式没有 action 卡）。
+// home.vue 焦点模式下优先用 targetFocus，测不到再退回 target。
+//
+// 任何目标都可能不存在（模块被收纳 / 结构改动 / 当前形态没有这个元素）：
 // 测量失败一律自动跳过该步，绝不能把用户卡死在引导里。
 const STEPS = [
   {
@@ -38,7 +43,17 @@ const STEPS = [
     id: 'start',
     title: '中间：开始背单词',
     body: '每组都是中英互译，答错的自动进错题本；下面两个小按钮直达错题复习和 AI 薄弱点专练。',
-    target: { sel: '.action-area' }
+    // 焦点模式下没有 action 卡（它的主按钮与主页 hero 重复，已整卡隐藏），
+    // 所以这一步改指向 hero 上的两颗入口；卡片平铺模式仍用 .action-area。
+    target: { sel: '.action-area' },
+    targetFocus: { sel: '.focus-cta' }
+  },
+  {
+    id: 'drawer',
+    title: '底部：上滑看全部功能',
+    body: '主页只留背单词 / 背句子两个入口；把手往上滑，词书进度、今日数据、每日目标这些卡片就出来了，往下滑回去就能收起。',
+    // 只有焦点模式有把手（卡片平铺模式下这个元素不存在 → 测量失败会自动跳过该步）
+    target: { sel: '.drawer-handle' }
   },
   {
     id: 'edit',
