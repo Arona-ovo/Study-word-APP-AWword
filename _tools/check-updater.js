@@ -231,6 +231,30 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   r = await up.check();
   eq(r.kind, 'apk', '同时有 apk 与 wgt → 优先整包');
 
+  // ③b Release 会攒旧包（传了新的没删旧的），而 API 按上传顺序返回 —— 第一个常常是最旧的。
+  //     拿第一个跟本机比，1.4.1 的用户就永远停在"已是最新"，新传上去的包根本发不出去
+  //     （2026-10-15 真踩：1.4.3 传上去了，1.4.1 的 App 死活检测不到）。
+  handler = () => ({
+    assets: [
+      { name: 'AWword-' + SAME + '.wgt', browser_download_url: 'http://x/' + SAME + '.wgt' },
+      { name: 'AWword-' + NEWER + '.wgt', browser_download_url: 'http://x/' + NEWER + '.wgt' }
+    ]
+  });
+  r = await up.check();
+  eq(r.kind, 'wgt', '旧 wgt 排在新 wgt 前面 → 仍挑到新包（旧包不许挡路）');
+  eq((r.version || []).join('.'), NEWER, '挑中的是新包的版本号（不是第一个）');
+
+  // ③c 比本机还旧的整包也不许抢戏（两段式老包 AWword-1.4.apk 会把热更拦死）
+  const OLD2 = [LV[0], LV[1]].join('.');
+  handler = () => ({
+    assets: [
+      { name: 'AWword-' + OLD2 + '.apk', browser_download_url: 'http://x/' + OLD2 + '.apk' },
+      { name: 'AWword-' + NEWER + '.wgt', browser_download_url: 'http://x/' + NEWER + '.wgt' }
+    ]
+  });
+  r = await up.check();
+  eq(r.kind, 'wgt', '比本机旧的 apk 不抢戏（老整包不该拦住热更）');
+
   // ④ 附件连版本号都没有 → 不认
   handler = () => ({ assets: [{ name: 'latest.wgt', browser_download_url: 'http://x/latest.wgt' }] });
   r = await up.check();
@@ -549,7 +573,7 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   deps.updater = updaterSpy;
   deps.settings = settingsForUp;
   deps.t = (k) => String(k);   // 译文函数：直接回 key，断言文案选了哪条
-  deps.BUILD_INFO = { version: '1.4.3', versionCode: 143 };
+  deps.BUILD_INFO = { version: '1.4.4', versionCode: 144 };
   deps.FloatNavbar = { name: 'FloatNavbar' };
   deps.AppDialog = { name: 'AppDialog' };
 

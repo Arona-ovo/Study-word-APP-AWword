@@ -16,17 +16,25 @@ export interface HomeModule {
   def: boolean;
 }
 
-/** 首页可选组件（顺序 = 首次进入的默认顺序） */
+/** 首页可选组件（顺序 = 首次进入的默认顺序）
+ *
+ *  ⚠️ 默认上首页的只有**四张**（book / action / stats / goal），其余默认进收纳区 ——
+ *  2026-10-15 定的原则：首页只放「做」的入口，「看」的数据不各占一层。
+ *  之前默认 9 张等权重通栏卡（5 个学习入口 + 5 个数据模块），打开 App 不知道点哪，
+ *  用户反馈"特别杂乱"。竞品（Purplish / 扇贝）首屏都只有 4~5 个元素 + 一个唯一焦点。
+ *  收纳机制是现成的（stashed / restore），用户想要随时加回来，功能一个不少。
+ *  老用户不受影响：布局已落 storage，ensureBuiltins 只补不删。
+ */
 export const MODULES: HomeModule[] = [
   { id: 'book', name: '当前词书', desc: '词书名、当前批次进度与全书记忆量', def: true },
   { id: 'action', name: '学习入口', desc: '开始 / 继续背单词、复习错题、AI 专练', def: true },
-  { id: 'worddrill', name: '刷单词', desc: '独立的背单词入口：选义 / 拼写 / 自评，与刷题句子分开', def: true },
-  { id: 'chat', name: 'AI 对话陪练', desc: '用英文和 AI 自由聊，聊到的好句子能收进收藏', def: true },
   { id: 'stats', name: '今日数据', desc: '已练习 / 待复习 / 连续天数，可点进详情', def: true },
   { id: 'goal', name: '每日目标', desc: '今日新词 / 学会进度，可点进去改目标', def: true },
-  { id: 'chart', name: '打卡走势', desc: '股票式折线图：背了就涨、没背就跌，可切 7/30 天', def: true },
-  { id: 'usage', name: '停留时长', desc: '今日在 App 里待了多久 · 圆环一整圈 = 1 小时', def: true },
-  { id: 'songs', name: '今日歌曲', desc: '词书里的词配上真实英文歌名，每天 3 首，可换一批', def: true },
+  { id: 'worddrill', name: '刷单词', desc: '独立的背单词入口：选义 / 拼写 / 自评，与刷题句子分开', def: false },
+  { id: 'chat', name: 'AI 对话陪练', desc: '用英文和 AI 自由聊，聊到的好句子能收进收藏', def: false },
+  { id: 'chart', name: '打卡走势', desc: '股票式折线图：背了就涨、没背就跌，可切 7/30 天', def: false },
+  { id: 'usage', name: '停留时长', desc: '今日在 App 里待了多久 · 圆环一整圈 = 1 小时', def: false },
+  { id: 'songs', name: '今日歌曲', desc: '词书里的词配上真实英文歌名，每天 3 首，可换一批', def: false },
   { id: 'progress', name: '掌握度概览', desc: '已学 / 已掌握 / 全书进度条', def: false },
   { id: 'favorites', name: '收藏速览', desc: '收藏数量与最近收藏的几个词', def: false },
   { id: 'streak', name: '打卡周历', desc: '近 7 天的打卡圆点与当前连续天数', def: false }

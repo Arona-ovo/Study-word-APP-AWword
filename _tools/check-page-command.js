@@ -269,14 +269,16 @@ function eq(a, b, label) {
     '到上限后 card.add 失败');
 
   // 隐藏 / 显示 / 移动
-  r = pageCommand.applyCommands(doc, [{ op: 'card.hide', args: { target: { id: 'chart' } } }], {});
-  eq(pageDoc.findCard(r.doc, 'chart').visible, false, 'card.hide 生效');
-  r = pageCommand.applyCommands(r.doc, [{ op: 'card.show', args: { target: { id: 'chart' } } }], {});
-  eq(pageDoc.findCard(r.doc, 'chart').visible, true, 'card.show 生效');
+  // （用 goal 而不是 chart：2026-10-15 起 chart 默认进收纳区、不在默认布局里，
+  //   pageDoc.defaultDoc() 播种不出来，findCard 会拿到 null → 崩）
+  r = pageCommand.applyCommands(doc, [{ op: 'card.hide', args: { target: { id: 'goal' } } }], {});
+  eq(pageDoc.findCard(r.doc, 'goal').visible, false, 'card.hide 生效');
+  r = pageCommand.applyCommands(r.doc, [{ op: 'card.show', args: { target: { id: 'goal' } } }], {});
+  eq(pageDoc.findCard(r.doc, 'goal').visible, true, 'card.show 生效');
   // 幂等：重复隐藏不算失败
   r = pageCommand.applyCommands(r.doc, [
-    { op: 'card.hide', args: { target: { id: 'chart' } } },
-    { op: 'card.hide', args: { target: { id: 'chart' } } }
+    { op: 'card.hide', args: { target: { id: 'goal' } } },
+    { op: 'card.hide', args: { target: { id: 'goal' } } }
   ], {});
   assert(r.ok, '重复隐藏是幂等的，不整批失败');
   r = pageCommand.applyCommands(doc, [{ op: 'card.move', args: { target: { id: 'goal' }, to: 'top' } }], {});
@@ -296,7 +298,7 @@ function eq(a, b, label) {
   const allDoc = pageCommand.applyCommands(pageDoc.defaultDoc(),
     [{ op: 'card.add', args: { type: 'note', title: 'A', text: 'x' } }], {}).doc;
   eq(pageDoc.indicesOfRef(allDoc, { all: true }).length, allDoc.cards.length, 'indicesOfRef({all:true}) 命中全部卡片');
-  eq(pageDoc.indicesOfRef(allDoc, { id: 'chart' }).length, 1, 'indicesOfRef 单目标只回一个下标');
+  eq(pageDoc.indicesOfRef(allDoc, { id: 'goal' }).length, 1, 'indicesOfRef 单目标只回一个下标');
   eq(pageDoc.indicesOfRef(allDoc, { title: '根本没有这张卡' }).length, 0, 'indicesOfRef 找不到回空数组');
   // indexOfRef 保持单目标口径不动（move / text.set / image.set / card.design 还在用它）
   eq(pageDoc.indexOfRef(allDoc, { all: true }), -1, 'indexOfRef 对 all 仍然回 -1（单目标口径不变）');
@@ -345,10 +347,10 @@ function eq(a, b, label) {
   r = pageCommand.applyCommands(doc, [{ op: 'card.move', args: { target: { id: 'book' }, to: 'bottom' } }], {});
   eq(r.doc.cards[r.doc.cards.length - 1].id, 'book', 'card.move 到 bottom');
   // 恢复已删除的内置卡
-  r = pageCommand.applyCommands(pageDoc.removeCard(doc, 'chart'), [
-    { op: 'card.restore', args: { id: 'chart' } }
+  r = pageCommand.applyCommands(pageDoc.removeCard(doc, 'goal'), [
+    { op: 'card.restore', args: { id: 'goal' } }
   ], {});
-  assert(pageDoc.indexOfRef(r.doc, { id: 'chart' }) >= 0, 'card.restore 加回内置卡');
+  assert(pageDoc.indexOfRef(r.doc, { id: 'goal' }) >= 0, 'card.restore 加回内置卡');
   assert(pageCommand.applyCommands(doc, [{ op: 'card.restore', args: { id: 'hack' } }], {}).ok === false,
     'card.restore 只认内置卡 id');
 
@@ -496,7 +498,7 @@ function eq(a, b, label) {
   console.log('== 6. 失败回退 / 撤销 ==');
   const before = pageDoc.defaultDoc();
   r = pageCommand.applyCommands(before, [
-    { op: 'card.hide', args: { target: { id: 'chart' } } },
+    { op: 'card.hide', args: { target: { id: 'goal' } } },
     { op: 'style.text', args: { target: { id: 'book' }, size: 30 } },
     { op: 'card.remove', args: { target: { id: '不存在的卡' } } }
   ], {});
@@ -632,7 +634,7 @@ function eq(a, b, label) {
   assert(a.ok, '越界值不失败');
   eq(a.commands[0].args.style.radius, schema.LIMITS.MAX_RADIUS, '圆角 999 被夹到上限');
 
-  a = await withReply(['这不是 JSON', '{"say":"好了","commands":[{"op":"card.hide","args":{"target":{"id":"chart"}}}]}']);
+  a = await withReply(['这不是 JSON', '{"say":"好了","commands":[{"op":"card.hide","args":{"target":{"id":"goal"}}}]}']);
   assert(a.ok, '第一次乱码 → 重试后成功');
   eq(a.attempts, 2, '重试次数 = 2');
 

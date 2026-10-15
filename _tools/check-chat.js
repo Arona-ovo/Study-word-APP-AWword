@@ -156,7 +156,9 @@ eq(chatStore.savedCount(), 0, '取消收藏生效');
 
 console.log('== 4. 首页原生卡入口 ==');
 // 卡必须是"原生"的：注册表里有、schema 认、首页有渲染分支，缺一处就是造不出来的卡
-assert(/\{\s*id:\s*'chat'[\s\S]{0,160}def:\s*true\s*\}/.test(layoutSrc), 'home-layout 注册了 chat 且默认上首页');
+// （def:false = 默认进收纳区：2026-10-15 起首页只默认摆「做」的入口，AI 陪练要用再加回，
+//   但注册 / schema / 渲染分支三件套一样都不能少，少了这张卡就真的造不出来）
+assert(/\{\s*id:\s*'chat'[\s\S]{0,160}def:\s*false\s*\}/.test(layoutSrc), 'home-layout 注册了 chat（默认进收纳区）');
 assert(/BUILTIN_TYPES[\s\S]{0,200}?'chat'/.test(schemaSrc), 'page-schema 的 BUILTIN_TYPES 认这个类型');
 assert(/c\.type === 'chat'/.test(homeSrc), '首页有 chat 的渲染分支');
 assert(/import WidgetChat from/.test(homeSrc) && /WidgetChat,/.test(homeSrc), '首页注册了组件');

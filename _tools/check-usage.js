@@ -221,9 +221,9 @@ const usage = load('utils/usage.js');
   const L = await import('file:///' + path.join(ROOT, 'utils/home-layout.ts').replace(/\\/g, '/'));
   const mod = L.MODULES.filter(m => m.id === 'usage')[0];
   assert(!!mod, 'home-layout 注册了 usage 模块');
-  eq(mod.def, true, 'usage 默认上首页');
-  assert(L.defaultLayout().indexOf('usage') >= 0, '默认布局含 usage');
-  eq(L.stashed().some(m => m.id === 'usage'), false, 'usage 不在收纳区');
+  eq(mod.def, false, 'usage 注册在案、默认进收纳区（数据类不该各占一层，2026-10-15 定）');
+  assert(L.defaultLayout().indexOf('usage') < 0, '默认布局不含 usage');
+  eq(L.stashed().some(m => m.id === 'usage'), true, 'usage 在收纳区（要用随时加回）');
 
   const home = R('pages/home/home.vue');
   assert(/import\s+WidgetUsage\s+from/.test(home), 'home.vue 导入 WidgetUsage');
@@ -258,11 +258,13 @@ const usage = load('utils/usage.js');
   const PD = await import(U('utils/page-doc.js'));
   const builtin = (id) => ({ id: id, type: id, builtin: true, visible: true, title: '', text: '', image: '', style: null, blocks: null });
 
-  // 老数据：一张"更新前"的首页（没有 usage），seenBuiltins 还是 null
+  // 老数据：一张"更新前"的首页（缺 stats/goal），seenBuiltins 还是 null。
+  // ⚠️ 2026-10-15 起 usage 不在 defaultLayout 里了（默认进收纳区），ensureBuiltins
+  //     只补 def:true 的卡 —— 所以这里改用 stats/goal 验「自动补」这套机制本身。
   settings.set({ home: { doc: { version: PD.VERSION, cards: ['book', 'action'].map(builtin) }, seenBuiltins: null } });
   let d = PD.get();
   let ids = d.cards.filter(c => c.builtin).map(c => c.id);
-  assert(ids.indexOf('usage') >= 0, '老首页自动补上新增的 usage 卡');
+  assert(ids.indexOf('stats') >= 0 && ids.indexOf('goal') >= 0, '老首页自动补上缺的内置卡（stats / goal）');
   eq(ids.slice(0, 2).join(','), 'book,action', '原有顺序不变（补在内置卡末尾）');
 
   // 补过一次就记录在案，不能每次进来都补

@@ -20,7 +20,10 @@ const R = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 // 默认布局：必须与 home-layout.ts 的 MODULES(def:true) 顺序一致。
 // 新增默认上首页的模块时**只改这一处** —— 下面凡是"去掉某模块后的布局"都由它推导，
 // 否则每加一个模块就要翻下去改四五条字面量（2026-10-14 加 songs 时踩过）。
-const DEF_LAYOUT = ['book', 'action', 'worddrill', 'chat', 'stats', 'goal', 'chart', 'usage', 'songs'];
+// 2026-10-15 起默认只留四张「做」的入口（词书/学习入口/今日数据/每日目标）：
+// 之前默认 9 张等权重通栏卡，用户反馈"特别杂乱、不知道点哪"；
+// 「看」的数据类（走势/时长/歌曲…）默认进收纳区，要用随时加回，功能不少。
+const DEF_LAYOUT = ['book', 'action', 'stats', 'goal'];
 // 收纳掉 action 之后剩下的顺序（顺序敏感，所以是推导而不是重写一遍）
 const WITHOUT_ACTION = DEF_LAYOUT.filter((id) => id !== 'action');
 

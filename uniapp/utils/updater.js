@@ -109,7 +109,14 @@ export async function check() {
 
   // size 是 GitHub 给的附件字节数 —— 下载完要拿它做完整性校验的第一道关
   // （见「静默下载」那一节）。拿不到就记 0，那一条校验自动跳过。
+  //
+  // ⚠️ 必须挑**版本最高**的那一个，不能拿第一个就走：
+  // Release 是会攒旧包的（传了新的没删旧的），而 API 按上传顺序返回 ——
+  // 于是第一个常常是**最旧**的那个。1.4.1 的用户拿 1.4.1 跟自己比，
+  // 相等 → 判定"已是最新"，新传上去的 1.4.3 永远发不出去（2026-10-15 真踩了：
+  // 用户传完新包，App 死活显示最新版）。同类里取最大值，旧包就挡不住新包了。
   const pick = (re) => {
+    let best = null
     for (let i = 0; i < list.length; i++) {
       const a = list[i] || {}
       const name = String(a.name || '')
@@ -118,9 +125,10 @@ export async function check() {
       if (!v) continue
       const url = String(a.browser_download_url || '')
       if (!url) continue
-      return { version: v, url: url, name: name, size: Number(a.size) || 0 }
+      const item = { version: v, url: url, name: name, size: Number(a.size) || 0 }
+      if (!best || cmpVersion(v, best.version) > 0) best = item
     }
-    return null
+    return best
   }
 
   const apk = pick(/\.apk$/i)

@@ -351,8 +351,8 @@ console.log('== 7. 接入 ==');
 const layoutSrc = R('utils/home-layout.ts');
 const homeSrc = R('pages/home/home.vue');
 assert(/id:\s*'songs'/.test(layoutSrc), 'home-layout 注册了 songs 模块');
-assert(/def:\s*true/.test(layoutSrc.slice(layoutSrc.indexOf("id: 'songs'"), layoutSrc.indexOf("id: 'songs'") + 200)),
-  '默认就在首页（用户不用自己去收纳区翻）');
+assert(/def:\s*false/.test(layoutSrc.slice(layoutSrc.indexOf("id: 'songs'"), layoutSrc.indexOf("id: 'songs'") + 200)),
+  '注册在案、默认进收纳区（2026-10-15 起首页只默认摆「做」的入口，歌曲卡要用再加回）');
 assert(/import WidgetSongs from '\.\.\/\.\.\/components\/home-widgets\/widget-songs\.vue'/.test(homeSrc),
   'home.vue 导入了组件');
 assert(/WidgetSongs,/.test(homeSrc), 'home.vue 注册了组件');
