@@ -23,6 +23,17 @@ export default {
   '打通（推荐）': 'Link (recommended)',
   '以后再说': 'Later',
   '不用了，我就专心背': 'No thanks, I\'ll just study',
+
+  // ---------- 首页焦点模式（背单词 / 背句子 两个入口 + 抽屉） ----------
+  '背单词': 'Memorize words',
+  '背句子': 'Practice sentences',
+  '更多功能': 'More',
+  '首页样式': 'Home style',
+  '首页布局': 'Home layout',
+  '焦点': 'Focus',
+  '卡片': 'Cards',
+  '连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}': 'Day {n} streak · {t} practiced today · {w} to review',
+  '焦点：主页只放背单词 / 背句子两个入口，其余卡片收进上拉抽屉；卡片：所有卡片平铺': 'Focus: home shows only the two study entries (memorize words / practice sentences); the rest sit in a pull-up drawer. Cards: all cards tiled.',
   '已关联 · 背完会自动把战绩记回那边': 'Linked — your results will be sent back automatically',
   '已关闭 · 设置页随时可以重新打开': 'Off — turn it back on in Settings any time',
   '已关联 · 背完会自动把战绩记回它那边': 'Linked — results go back to PWstudy automatically',

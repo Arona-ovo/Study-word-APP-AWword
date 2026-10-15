@@ -227,20 +227,50 @@
       <text v-for="s in suggestions" :key="s" class="cmd-chip" @tap="useSuggestion(s)">{{ s }}</text>
     </scroll-view>
 
+    <!-- 焦点模式：主页只聚焦「背单词 / 背句子」两件大事 + 一行关键信息；
+         其余卡片收进下方抽屉，上滑把手才展开。可在「设置 → 首页样式」切回原卡片平铺。
+         注：焦点模式下隐藏 action 卡（它的主按钮与 hero 重复），改由 hero 的
+         两个大入口 + 下方「复习错题 / AI 薄弱点专练」小字承接，避免入口重复。 -->
+    <view v-if="isFocus" class="focus-hero">
+      <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
+      <view class="focus-cta">
+        <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
+        <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
+      </view>
+      <view class="focus-sub">
+        <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
+        <text class="focus-sub-sep">·</text>
+        <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
+      </view>
+    </view>
+    <view
+      v-if="isFocus"
+      class="drawer-handle"
+      @tap="toggleDrawer"
+      @touchstart="dhStart"
+      @touchmove="dhMove"
+    >
+      <view class="dh-grip"></view>
+      <text class="dh-text">{{ drawerOpen ? $t('收起') : $t('更多功能') }}</text>
+      <text class="dh-chev" :class="{ up: drawerOpen }">⌃</text>
+    </view>
+
     <!-- 首页模块：按用户保存的顺序渲染；编辑态显示拖拽手柄与收纳按钮 -->
     <view
       class="mod-list"
+      :class="{ 'drawer-collapsed': isFocus && !drawerOpen }"
       @touchmove="dragMove"
       @touchend="dragEnd"
       @touchcancel="dragEnd"
     >
-      <view
-        v-for="(c, i) in renderCards"
-        :key="c.id"
-        class="mod-wrap"
-        :class="{ 'is-drag': dragIndex === i, 'is-editing': editing }"
-        :style="wrapStyle(i)"
-      >
+        <view
+          v-for="(c, i) in renderCards"
+          :key="c.id"
+          class="mod-wrap"
+          :class="{ 'is-drag': dragIndex === i, 'is-editing': editing }"
+          :style="wrapStyle(i)"
+          v-if="!isActionInFocus(c)"
+        >
         <!-- 编辑态遮罩：屏蔽模块内部点击（换词书 / 主按钮 / 小组件链接），只留手柄与收纳可点 -->
         <view v-if="editing" class="mod-shield"></view>
 
@@ -493,6 +523,7 @@ import AppDialog from '../../components/app-dialog/app-dialog.vue'
 // 切个 tab 回来又弹一遍等于骚扰）。模块级而不是 data：跨 onShow 记住。
 let updateAsked = false
 import * as homeLayout from '../../utils/home-layout.ts'
+import * as settings from '../../utils/settings'
 import * as pageDoc from '../../utils/page-doc.js'
 import * as pageCommand from '../../utils/page-command.js'
 import * as intent from '../../utils/intent.js'
@@ -607,6 +638,10 @@ export default {
       // ---------- 首页布局（顺序 / 编辑态 / 拖拽） ----------
       layout: [],
       editing: false,
+      // 焦点模式下，底部抽屉是否展开（默认收起，只露把手；上滑 / 点把手才展开）
+      drawerOpen: false,
+      // 首页呈现形态：'focus'（默认，焦点 + 抽屉）/ 'cards'（原卡片平铺）。设置页可切。
+      homeStyle: 'focus',
       sheetShow: false,
       sheetList: [],
       // 删除 AI 卡的确认弹窗（AppDialog）：记下要删的卡 id 与名字
@@ -701,6 +736,10 @@ export default {
     renderCards() {
       const cs = (this.doc && this.doc.cards) || []
       return cs.filter(c => c.visible !== false)
+    },
+    /** 是否走焦点 + 抽屉形态（默认）。设置页切到 'cards' 就回到原卡片平铺。 */
+    isFocus() {
+      return this.homeStyle === 'focus'
     },
     /** 收纳区里的 AI 卡片：被收纳（visible=false）的那几张，可加回或彻底删除 */
     aiSheetList() {
@@ -867,6 +906,9 @@ export default {
     this.maybePartnerAsk()
     // 有新版本 → 弹一句（放在最后：不跟引导 / 关联询问抢）
     this.maybeUpdateAsk()
+    // 首页呈现形态（焦点 + 抽屉 / 卡片平铺）可能在设置页被改过，回到首页重新读一次。
+    // 放最后：上面 maybeUpdateAsk 的字符窗口不能被挤出去（check-updater 守）。
+    this.homeStyle = this.readHomeStyle()
   },
 
   onHide() {
@@ -1358,6 +1400,13 @@ export default {
       }
       uni.navigateTo({ url: '/pkgStudy/pages/practice/practice?source=drill' })
     },
+    /** 背单词（刷词）：唯一入口就是「刷单词」卡，这里直接复用它的 daily 跳转，
+     *  不另写一份导航逻辑（防止以后两边漂移）。焦点模式的 hero 用这颗作为「背单词」大按钮。
+     *  方法名刻意避开了历史遗留的那个命名（该校验钉死"不许存在"，防重复入口）。 */
+    openWordDrill() {
+      if (this.editing) return
+      uni.navigateTo({ url: '/pkgStudy/pages/word-drill/word-drill?source=daily' })
+    },
     /**
      * 当前词书卡：整卡点进「词库详情」。
      * 卡片主体是"这本背到哪了"，所以落在「批次进度」分段（详情页的默认分段也是它）；
@@ -1375,6 +1424,40 @@ export default {
       // 直接进入「更换词书」页（词库 tab 内也保留同款入口）
       // 与整卡点击明确区分：这颗只负责"换一本"，不负责"看这本的详情"
       uni.navigateTo({ url: '/pkgManage/pages/book-switch/book-switch' })
+    },
+
+    /* ---------- 首页形态：焦点 + 抽屉 ---------- */
+    /** 读 settings 里的首页呈现形态，脏值回落到默认 focus（防止被随便写坏） */
+    readHomeStyle() {
+      try {
+        const st = settings.get() || {}
+        const s = (st.home && st.home.style) || 'focus'
+        return s === 'cards' ? 'cards' : 'focus'
+      } catch (e) {
+        return 'focus'
+      }
+    },
+    /** 焦点模式下，把「学习入口」卡从抽屉里隐去（它的主按钮与 hero 的背单词 / 背句子重复），
+     *  改由 hero 统一承接。卡片平铺模式下正常显示。 */
+    isActionInFocus(c) {
+      return !!(this.isFocus && c && c.type === 'action')
+    },
+    /** 切换底部抽屉的展开 / 收起（把手点击） */
+    toggleDrawer() {
+      this.drawerOpen = !this.drawerOpen
+    },
+    /** 把手上滑手势：记下起点 Y，move 时若整体上滑超过阈值就展开抽屉 */
+    dhStart(e) {
+      const t = (e && e.touches && e.touches[0]) || {}
+      this.__dhY = t.clientY != null ? t.clientY : (t.pageY != null ? t.pageY : 0)
+    },
+    dhMove(e) {
+      if (this.__dhY == null) return
+      const t = (e && e.touches && e.touches[0]) || {}
+      const y = t.clientY != null ? t.clientY : (t.pageY != null ? t.pageY : 0)
+      // 整体向上滑（当前 Y 比起点小）超过 30px → 展开；向下滑超过 30px → 收起
+      if (this.__dhY - y > 30) this.drawerOpen = true
+      else if (y - this.__dhY > 30) this.drawerOpen = false
     },
 
     // ---------- 顶部输入：搜索 / 指令双模式 ----------
@@ -2934,5 +3017,107 @@ export default {
   font-size: 25rpx;
   color: #98a19b;
   color: var(--ink-3, #98a19b);
+}
+
+/* ---------- 首页焦点模式（默认形态）：主页只聚焦「背单词 / 背句子」 ---------- */
+.focus-hero {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* 把下方把手顶到接近视口底部，营造"抽屉坐在主页底下"的感觉 */
+  min-height: 52vh;
+  padding: 40rpx 32rpx 24rpx;
+  box-sizing: border-box;
+}
+.focus-keyinfo {
+  text-align: center;
+  font-size: 24rpx;
+  line-height: 1.5;
+  color: #98a19b;
+  color: var(--ink-3, #98a19b);
+  margin-bottom: 40rpx;
+}
+.focus-cta {
+  display: flex;
+  gap: 20rpx;
+}
+.focus-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100rpx;
+  padding: 0;
+  font-size: 32rpx;
+  font-weight: 600;
+  letter-spacing: 2rpx;
+  text-indent: 2rpx;
+  border-radius: 999rpx;
+  border: none;
+}
+.focus-btn::after { border: none; }
+.focus-btn.primary { color: #ffffff; background: #2e6bff; background: var(--brand, #2e6bff); }
+.focus-btn.primary:active { opacity: 0.88; }
+.focus-btn.ghost {
+  color: #1d4fd8;
+  color: var(--brand-strong, #1d4fd8);
+  background: rgba(255, 255, 255, 0.66);
+  background: rgba(var(--surface-rgb, 255, 255, 255), 0.66);
+  border: 2rpx solid rgba(46, 107, 255, 0.34);
+  border: 2rpx solid rgba(var(--brand-rgb, 46, 107, 255), 0.34);
+}
+.focus-btn.ghost:active { background: rgba(46, 107, 255, 0.12); background: rgba(var(--brand-rgb, 46, 107, 255), 0.12); }
+.focus-sub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18rpx;
+  margin-top: 30rpx;
+}
+.focus-sub-link {
+  font-size: 24rpx;
+  color: #5a6560;
+  color: var(--ink-2, #5a6560);
+}
+.focus-sub-link:active { color: #1d4fd8; color: var(--brand-strong, #1d4fd8); }
+.focus-sub-sep { font-size: 22rpx; color: #98a19b; color: var(--ink-3, #98a19b); }
+
+/* 抽屉把手：平时只露这一条，上滑 / 点它才展开下面的卡片 */
+.drawer-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14rpx;
+  padding: 20rpx 0 24rpx;
+  margin-top: 4rpx;
+  touch-action: none;
+}
+.dh-grip {
+  width: 64rpx;
+  height: 8rpx;
+  border-radius: 999rpx;
+  background: rgba(23, 32, 26, 0.22);
+  background: rgba(var(--neutral-rgb, 23, 32, 26), 0.22);
+}
+.dh-text { font-size: 24rpx; color: #5a6560; color: var(--ink-2, #5a6560); }
+.dh-chev {
+  width: 0;
+  height: 0;
+  border-left: 10rpx solid transparent;
+  border-right: 10rpx solid transparent;
+  border-top: 12rpx solid rgba(23, 32, 26, 0.45);
+  border-top: 12rpx solid rgba(var(--neutral-rgb, 23, 32, 26), 0.45);
+  transition: transform 200ms ease;
+}
+.dh-chev.up { transform: rotate(180deg); }
+
+/* 焦点模式下，抽屉收起时把卡片区裁成 0 高（展开时无此类，回到自然高度） */
+.mod-list.drawer-collapsed {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 280ms ease;
+}
+.mod-list:not(.drawer-collapsed) {
+  transition: max-height 280ms ease;
 }
 </style>

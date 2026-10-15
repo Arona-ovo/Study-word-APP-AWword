@@ -24,7 +24,10 @@ function defaults() {
     // seenBuiltins：这张首页"见过"哪些内置卡（见 page-doc.js 的 ensureBuiltins），
     // 用来区分「新模块还没加进来」和「用户自己收纳掉了」—— 后者不能再塞回去。
     // 默认 null（不是 []）：表示"从没记过"= 老数据，新增模块才需要补进来。
-    home: { layout: [], seenBuiltins: null },
+    // style：首页呈现形态。'focus' = 焦点 + 抽屉（主页只放背单词 / 背句子两个入口，
+    //   其余卡片收进底部上拉抽屉，默认形态）；'cards' = 原来的卡片平铺。用户可在
+    //   「设置 → 首页样式」里切换，但默认用 focus（2026-10-15 定）。
+    home: { layout: [], seenBuiltins: null, style: 'focus' },
     // 新手引导：首次进首页放一遍（步骤定义见 utils/onboarding.js，
     // 渲染见 components/onboarding-mask.vue）。done = 看完或跳过；
     // v 记步骤版本，以后改版可以据此让老用户再看一次；设置页可「重看」。

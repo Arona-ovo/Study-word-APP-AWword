@@ -193,6 +193,27 @@
       </view>
     </view>
 
+    <!-- ===== 首页样式：焦点 + 抽屉 / 卡片平铺 ===== -->
+    <view class="sec" :class="{ open: openSec === 'home' }">
+      <view class="sec-head" data-k="home" @tap="toggleSec">
+        <text class="sec-name">{{ $t('首页样式') }}</text>
+        <text v-if="openSec !== 'home'" class="sec-hint">{{ homeStyle === 'focus' ? $t('焦点') : $t('卡片') }}</text>
+        <text class="sec-arrow">›</text>
+      </view>
+      <view class="sec-body" v-if="openSec === 'home'">
+        <view class="row">
+          <view class="row-main">
+            <text class="row-title">{{ $t('首页布局') }}</text>
+            <text class="row-desc">{{ $t('焦点：主页只放背单词 / 背句子两个入口，其余卡片收进上拉抽屉；卡片：所有卡片平铺') }}</text>
+          </view>
+          <view class="seg">
+            <view class="seg-item" :class="{ on: homeStyle === 'focus' }" @tap="setHomeStyle('focus')">{{ $t('焦点') }}</view>
+            <view class="seg-item" :class="{ on: homeStyle === 'cards' }" @tap="setHomeStyle('cards')">{{ $t('卡片') }}</view>
+          </view>
+        </view>
+      </view>
+    </view>
+
     <!-- ===== 流畅模式（低端机退路） ===== -->
     <view class="sec" :class="{ open: openSec === 'perf' }">
       <view class="sec-head" data-k="perf" @tap="toggleSec">
@@ -1030,6 +1051,8 @@ export default {
       hsl: hexToHsl(DEFAULT_CUSTOM),
       // 大胶囊分组：一次只展开一个（'' 表示全部收起）
       openSec: '',
+      // 首页呈现形态：'focus'（默认，焦点 + 抽屉）/ 'cards'（原卡片平铺）
+      homeStyle: 'focus',
       darkOn: false,
       followSystem: false,
       systemDark: false,
@@ -1373,6 +1396,8 @@ export default {
     this.systemDark = systemPrefersDark()
     this.progressSync = barsSyncColors()
     this.version = this.readVersion()
+    // 首页呈现形态（焦点 + 抽屉 / 卡片平铺）可能被首页自身改过，进设置页重新读一次
+    this.homeStyle = this.readHomeStyle()
   },
   methods: {
     // 背景色块：深色模式下显示压暗变体，与实际背景一致、各预设之间也能区分开
@@ -1383,6 +1408,23 @@ export default {
     toggleSec(e) {
       const k = e.currentTarget.dataset.k
       this.openSec = this.openSec === k ? '' : k
+    },
+
+    /** 读首页呈现形态，脏值回落到默认 focus */
+    readHomeStyle() {
+      try {
+        const st = settings.get() || {}
+        const s = (st.home && st.home.style) || 'focus'
+        return s === 'cards' ? 'cards' : 'focus'
+      } catch (e) {
+        return 'focus'
+      }
+    },
+    /** 切换首页形态并落盘；focus / cards 之外一律当 focus，防止被随便写坏 */
+    setHomeStyle(v) {
+      const next = v === 'cards' ? 'cards' : 'focus'
+      this.homeStyle = next
+      try { settings.set({ home: { style: next } }) } catch (e) { /* 存不上不影响本次切换 */ }
     },
 
     // ---------- 在线更新（utils/updater.js）----------
@@ -2899,6 +2941,29 @@ export default {
 .row-value { font-size: 24rpx; color: var(--ink-2, #5a6560); flex-shrink: 0; text-align: right; }
 
 .row-arrow { font-size: 32rpx; color: #c8cdc9; flex-shrink: 0; }
+
+/* 两段式切换（首页样式：焦点 / 卡片） */
+.seg {
+  display: flex;
+  flex-shrink: 0;
+  padding: 4rpx;
+  border-radius: 999rpx;
+  background: rgba(23, 32, 26, 0.06);
+  background: rgba(var(--neutral-rgb, 23, 32, 26), 0.06);
+}
+.seg-item {
+  padding: 10rpx 28rpx;
+  font-size: 24rpx;
+  color: #5a6560;
+  color: var(--ink-2, #5a6560);
+  border-radius: 999rpx;
+}
+.seg-item.on {
+  color: #ffffff;
+  background: #2e6bff;
+  background: var(--brand, #2e6bff);
+  font-weight: 500;
+}
 
 /* 导出 / 导入下面那句说明：比 row-desc 更淡一号，且不带分隔线，
    读起来像"注"，不像又一行设置 */
