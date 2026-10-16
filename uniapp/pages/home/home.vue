@@ -263,6 +263,7 @@
             拆两层后：.mod-sheet 只吃 transform（transform 建 stacking context，
             但**不建** backdrop root）→ 底板能一路糊到首页背景与 hero 内容；
             淡入的 opacity 留在 .mod-list（卡片自己），不再牵连底板。 -->
+    <view class="mod-throw" :class="popClass">
     <view class="mod-sheet" :style="sheetRevealStyle">
     <view
       class="mod-list"
@@ -398,6 +399,7 @@
         <text class="home-empty-text">{{ $t('首页空空如也') }}</text>
         <text class="home-empty-link" @tap="toggleEdit">{{ $t('编辑首页，把组件加回来') }}</text>
       </view>
+    </view>
     </view>
     </view>
 
@@ -700,7 +702,11 @@ export default {
       // revealP 量化到 0.05 一档（见 syncReveal）：不是每帧都写，避免整页重渲染掉帧。
       revealP: 1,
       // 只有「焦点 + 有卡」时才接手势（其余态卡片常显、入口不淡出）
-      revealOn: false
+      revealOn: false,
+      // 抽屉"丢过来"落位那一下的回弹次数（见 popClass）
+      // ⚠️ 是**交替的两个 class** 而不是一个布尔：同一个 class 摘了立刻戴上，
+      //    Vue 会在一次渲染里合并掉 → 动画根本不会重播（第二次拉上来就没反馈了）。
+      popSeq: 0
     }
   },
   computed: {
@@ -712,6 +718,12 @@ export default {
     //    真实属性在 uni-app 各端一定生效，CSS 变量只是锦上添花。
     // ⚠️ 单位是 px 不是 rpx：uni-app 只转换 CSS 文件里的 rpx，内联样式不转换。
     //    revealOn 为 false 时返回空对象 → 卡片 / 入口回到 CSS 里的静态默认值。
+    // 抽屉落位那一记回弹挂哪个 class：pop-a / pop-b 交替，同一个 keyframes 是放不响的
+    // （摘下再戴上会被同一次渲染合并）。popSeq 为 0 时什么都不挂（首屏不放动画）。
+    popClass() {
+      if (!this.popSeq) return ''
+      return this.popSeq % 2 ? 'pop-a' : 'pop-b'
+    },
     // 玻璃底板那一层：只给 transform（视差 + 缩放）。
     // ⚠️ 这一层**绝不能带 opacity**：opacity<1 会让它自成 backdrop root，
     //    底板的 backdrop-filter 就糊不到首页内容了（玻璃感全废，见 .mod-sheet 注释）。
@@ -1053,6 +1065,14 @@ export default {
         return v / 2
       }
     },
+    // 抽屉"被丢过来"落位那一记 Q 弹：一次小阻尼回弹（先冲过头，再收回来稳住）。
+    // ⚠️ 走 CSS keyframes 而不是逐帧改响应式数据：home.vue 模板很大，
+    //    按帧写 = 整页按帧重渲染（前面 reveal 量化到 0.05 一档就是为此）。
+    // ⚠️ 动画挂在**专门的 .mod-throw 层**：那一层没有内联 transform，
+    //    keyframes 覆盖不了正在跟手的位移（两条 transform 靠父子相乘，互不打扰）。
+    playThrow() {
+      this.popSeq = (this.popSeq || 0) + 1
+    },
     // 算"卡片淡入 / 入口渐隐"的进度并推进响应式数据（由 listRevealStyle / heroRevealStyle
     // 变成内联样式下发 —— App 端唯一可用的样式通道，见那两个 computed 的注释）。
     //
@@ -1080,6 +1100,7 @@ export default {
           if (!this._drawerBuzzed) {
             this._drawerBuzzed = true
             try { haptic.tick('drawer') } catch (e) { console.warn('[home] haptic tick failed:', e) }
+            this.playThrow()
           }
         } else if (p < 0.55) {
           this._drawerBuzzed = false
@@ -2909,16 +2930,17 @@ export default {
   bottom: -28rpx;
   z-index: -1;
   border-radius: 36rpx;
-  /* 玻璃本体色（跟着主题走） */
-  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.14);
+  /* 本体色要克制：这是"隔着一层玻璃"，不是"垫了一块白板"。
+     之前 0.14 + 顶上 0.26 的高光，糊出来是一片奶白，反而最不像玻璃。 */
+  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.09);
   /* 表面：光从上方来 —— 顶部一团环境反光 + 自上而下"亮 → 透 → 底部压暗"。
      平涂半透明看着就是一块灰片；有明暗过渡才是一块"有厚度、有朝向"的玻璃。 */
   background-image:
     radial-gradient(120% 74% at 50% -12%,
-      rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 62%),
+      rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0) 62%),
     linear-gradient(180deg,
-      rgba(255, 255, 255, 0.26) 0%,
-      rgba(255, 255, 255, 0.07) 38%,
+      rgba(255, 255, 255, 0.13) 0%,
+      rgba(255, 255, 255, 0.04) 38%,
       rgba(255, 255, 255, 0) 64%,
       rgba(var(--shadow-rgb, 23, 32, 26), 0.05) 100%);
   /* 底板比卡片糊得狠一点（20px vs 卡片 12px）：大面积才吃得住，也更接近苹果的 sheet */
@@ -2930,9 +2952,9 @@ export default {
      ③ 整圈 hairline 内描边 —— 边缘折射亮边；比 border 更贴圆角，还不占位
      ④ 双层外投影 —— 近层紧实（贴边）+ 远层扩散（抬起），真的"浮"起来 */
   box-shadow:
-    inset 0 1.5rpx 0 rgba(255, 255, 255, 0.6),
+    inset 0 1.5rpx 0 rgba(255, 255, 255, 0.45),
     inset 0 -1.5rpx 0 rgba(var(--shadow-rgb, 23, 32, 26), 0.08),
-    inset 0 0 0 1rpx rgba(255, 255, 255, 0.32),
+    inset 0 0 0 1rpx rgba(255, 255, 255, 0.2),
     0 -2rpx 10rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.1),
     0 -16rpx 48rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.22);
   pointer-events: none;
@@ -2952,12 +2974,46 @@ export default {
 .perf-smooth .mod-sheet::before {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.6);
+  /* 没有模糊时靠本体色撑住可读性（比有模糊那版实一点，但仍不是纯白） */
+  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.45);
 }
-/* 不支持 backdrop-filter 的老 WebView：同样退回接近实心，
-   否则只剩一层 14% 的白，卡片会"浮在空气里"。 */
+/* 不支持 backdrop-filter 的老 WebView：同样抬起本体色（仍留较多背景透出来）。 */
 @supports not (((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) or (-webkit-backdrop-filter: blur(1px))) {
-  .mod-sheet::before { background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.62); }
+  .mod-sheet::before { background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.48); }
+}
+/* 抽屉"被丢过来"落位那一记 Q 弹：先冲过头再收回来稳住（2026-10-16 用户要的"Q 弹一点、
+   像卡片从远处丢过来"）。幅度刻意压得很小 —— 大了就成了弹窗，廉价。
+   ⚠️ 只动 transform（合成器接管），拖不动也不可能堵住跟手的位移。
+   ⚠️ 挂在专门的 .mod-throw 层：那一层不带任何内联 transform，
+      keyframes 不会覆盖 .mod-sheet 上正在跟滚动走的位移（两条相乘）。
+   ⚠️ pop-a / pop-b 必须各有一份完全一样的 keyframes ——
+      同一个 animation 名字摘了再戴上会被一次渲染合并，第二次就放不响了。 */
+@keyframes sheet-pop-a {
+  0% { transform: translateY(0) scale(1); }
+  26% { transform: translateY(-16rpx) scale(1.026); }
+  54% { transform: translateY(5rpx) scale(0.995); }
+  78% { transform: translateY(-2rpx) scale(1.003); }
+  100% { transform: translateY(0) scale(1); }
+}
+@keyframes sheet-pop-b {
+  0% { transform: translateY(0) scale(1); }
+  26% { transform: translateY(-16rpx) scale(1.026); }
+  54% { transform: translateY(5rpx) scale(0.995); }
+  78% { transform: translateY(-2rpx) scale(1.003); }
+  100% { transform: translateY(0) scale(1); }
+}
+.mod-throw.pop-a { animation: sheet-pop-a 340ms cubic-bezier(.22, .61, .36, 1); }
+.mod-throw.pop-b { animation: sheet-pop-b 340ms cubic-bezier(.22, .61, .36, 1); }
+/* 关动效的两档：回弹属于纯装饰动作，必须跟着一起停（跟 App.vue 那批动画同一套开关） */
+.fx-motion-off .mod-throw.pop-a,
+.fx-motion-off .mod-throw.pop-b,
+.fx-motion-reduced .mod-throw.pop-a,
+.fx-motion-reduced .mod-throw.pop-b {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mod-throw.pop-a,
+  .mod-throw.pop-b { animation: none; }
 }
 
 .mod-wrap { position: relative; }

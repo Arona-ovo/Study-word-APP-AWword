@@ -122,6 +122,50 @@ assert(/Math\.round\(p \* 20\) \/ 20/.test(home),
 // 抽屉拉到位震一下（用户要的"加点动效或震动"），且一次滑动只响一声。
 assert(/haptic\.tick\('drawer'\)/.test(home), '抽屉拉到位震一下');
 assert(/_drawerBuzzed/.test(home), '一次滑动只震一声（滑回去再拉才会再响）');
+// ---- 落位那一记 Q 弹（2026-10-16 用户："要有 Q 弹的动效，像卡片从远处丢过来"） ----
+assert(/playThrow\(\)/.test(home), '抽屉落位会放一次回弹（与震动同一时刻）');
+assert(/popSeq/.test(home) && /popSeq % 2 \? 'pop-a' : 'pop-b'/.test(home),
+  '回弹用 pop-a / pop-b **交替**（同一个 class 摘了戴上会被一次渲染合并，第二次放不响）');
+assert(!/this\.popSeq = true/.test(home) && /this\.popSeq = \(this\.popSeq \|\| 0\) \+ 1/.test(home),
+  'popSeq 是累加计数而不是布尔（布尔来回切 = 同一个 class，动画不会重播）');
+assert(/class="mod-throw" :class="popClass"/.test(home),
+  '回弹挂在专门的 .mod-throw 层（它没有内联 transform，动画不会盖掉跟手的位移）');
+{
+  const kb = (n) => {
+    const m = css.match(n === 'a' ? /@keyframes sheet-pop-a \{[\s\S]*?\n\}/ : /@keyframes sheet-pop-b \{[\s\S]*?\n\}/);
+    return m ? m[0] : '';
+  };
+  const a = kb('a');
+  const b = kb('b');
+  assert(a.length > 0 && b.length > 0, 'pop-a / pop-b 各有一份 keyframes（缺一份就只有单数次能响）');
+  // 幅度必须压住：大了就是廉价弹窗。峰值缩放 ≤1.04，且最后一帧必须回到原位。
+  const peak = Math.max(...[...a.matchAll(/scale\(([\d.]+)\)/g)].map((m) => Number(m[1])));
+  assert(peak > 1 && peak <= 1.04, '回弹的峰值缩放 >1 但 ≤1.04（Q 弹，不是弹窗）');
+  assert(/100% \{ transform: translateY\(0\) scale\(1\)/.test(a), '回弹收在原位（不留偏移）');
+  assert(!/opacity|width|height|margin|padding/.test(a), '回弹只动 transform（纯合成器属性，零重排）');
+  assert(/\.mod-throw\.pop-a \{ animation: sheet-pop-a/.test(css) && /\.mod-throw\.pop-b \{ animation: sheet-pop-b/.test(css),
+    '两个 class 各绑一份自己的动画名字');
+  // 关动效的档位要一起停（装饰性动作不能硬加）
+  assert(/\.fx-motion-off \.mod-throw\.pop-a[\s\S]{0,200}animation:\s*none/.test(css),
+    '动效关闭档位下不放回弹');
+  assert(/prefers-reduced-motion: reduce[\s\S]{0,200}\.mod-throw\.pop-a[\s\S]{0,120}animation:\s*none/.test(css),
+    '系统"减弱动效"下不放回弹');
+}
+  // 白得不像玻璃（2026-10-16 用户："底部背景太白了，根本不是玻璃的效果"）：
+  // 玻璃靠的是"透 + 明暗层次"，不是靠一层奶白垫片。
+  // ⚠️ 只量**表面那几层**（background-image）：那道 1.5rpx 的顶沿高光本来就该亮，
+  //    它是"线"不是"面"，混在一起量会把这条线误判成奶白。
+  {
+    const veil = rule('.mod-sheet::before');
+    // ⚠️ 锚到语句末尾的 `);`：rgba(var(--surface-rgb, 255, 255, 255), 0.09) 里
+    //    第一个能配上的数字是 var() 里兜底的 255，不锚末尾会把 alpha 读成 255。
+    const bg = (veil.match(/background-color:[^;]*?,\s*([\d.]+)\s*\);/) || [])[1];
+    assert(Number(bg) <= 0.12, '玻璃本体色 ≤0.12（太实就变成一块白板，不是玻璃）');
+    const img = (veil.match(/background-image:[\s\S]*?;/) || [''])[0];
+    const whites = [...img.matchAll(/rgba\(255, 255, 255, ([\d.]+)\)/g)].map((m) => Number(m[1]));
+    assert(whites.length > 0 && Math.max(...whites) <= 0.22,
+      '表面高光最亮处 ≤0.22（叠出来的白要能透出背景，不能糊成奶白）');
+  }
 // syncReveal 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
 // 放到 methods 外（与生命周期选项平级）就不是实例方法 → 真机报
 // "this.syncReveal is not a function"（2026-10-16 真踩，脚本全绿却炸在基座上）。
