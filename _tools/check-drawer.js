@@ -1,22 +1,26 @@
 // _tools/check-drawer.js - 首页焦点形态「往上滑看卡片」的校验
 //
-// 形态（2026-10-16 第五版，commit e032f80 → 本版）：卡片就在**正常文档流**里、
-// 排在首屏之后，往上滑 = **页面原生滚动**。没有抽屉、没有把手、也没有任何自定义纵向手势。
+// 形态（2026-10-16 第五版 → 第六版，本文件）：卡片就在**正常文档流**里、排在首屏之后，
+// 往上滑 = **页面原生滚动**。没有抽屉实体、没有把手、也没有任何自定义纵向手势。
+// 但卡片**默认隐藏**：焦点模式下 onPageScroll 把"往上滑"的进度推进 CSS 变量 `--reveal`，
+// .mod-list 随它做 opacity 淡入 + translateY 上移（合成器接管，零重排）。
+// "抽屉没有实体"= 下方卡片本身就是抽屉，靠滚动淡入 + 滑出来，而非独立浮层。
 //
-// 为什么改成这样（连改四版的教训，别再走回头路）：
-//   · 前四版都想用"自定义手势 + 高度过渡"去做这个抽屉：把手位置从窄条 → 加高 →
-//     内容层 → 根节点，每次都被真机反馈"上滑没反应"或"掉帧"。
-//   · 掉帧的根因是**动画的是布局属性**：max-height / min-height / padding-top 过渡，
-//     每帧都要重新排一遍首屏 + 重新做一次毛玻璃 backdrop-filter，手机上必然掉帧。
-//   · 而"往上滑看下面的卡片"本来就是页面滚动能做的事（合成器接管、零重排）。
-//     所以最终把卡片放回正常文档流，删掉整套手势与高度动画。
+// 为什么是这套（连改数版的教训，别再走回头路）：
+//   · 早期四版想用"自定义手势 + 高度过渡"做抽屉：把手从窄条 → 加高 → 内容层 → 根节点，
+//     每次都被真机反馈"上滑没反应"或"掉帧"。
+//   · 掉帧根因是**动画布局属性**：max-height / min-height / padding-top 过渡，
+//     每帧重排首屏 + 重做毛玻璃 backdrop-filter，手机必掉帧。
+//   · 而"往上滑看下面卡片"本就是页面滚动（合成器接管、零重排）。
+//     所以把卡片放回正常文档流、删掉手势与高度动画，只保留**滚动进度 → opacity/transform**
+//     这一条合成器友好的链路——既连贯跟手，又绝不掉帧。
 //
 // 覆盖：
-//  1) 拆干净：抽屉状态机 / 自定义手势 / 把手 / 量高 都不留
+//  1) 拆干净：抽屉状态机 / 自定义手势 / 把手 / 量高 都不留（onPageScroll 现只驱动淡入）
 //  2) 手势挂点：根节点只接左右滑页（onSlide*），不再包一层 dh* 包装方法
-//  3) hero 形态：内容收进与下方卡片同款的面板 + hero 比铺满一屏短 320rpx
-//     （下一张卡上沿从悬浮 tabbar 上方探出 ≈188rpx，首屏就看得见"下面还有一摞卡"）
-//  4) 不掉帧：不许再出现会触发重排的过渡（min-height / max-height / 出现动画）
+//  3) hero 形态：内容收进与下方卡片同款面板 + 比铺满一屏短 320rpx；
+//     .mod-list 读 --reveal 做淡入 + 上移（非焦点 / 全收纳态落到默认 1 常显）
+//  4) 不掉帧：不许再有重排型过渡（min-height / max-height / padding）；只允许 opacity / transform
 //  5) 顺序：「编辑首页」排在卡片之后（只有滑到底才看得到）
 const fs = require('fs');
 const path = require('path');
@@ -38,16 +42,26 @@ const rule = (sel) => {
   return m ? m[1].replace(/\/\*[\s\S]*?\*\//g, '') : '';
 };
 
-console.log('== 1. 抽屉那套已经拆干净 ==');
+console.log('== 1. 抽屉状态机 / 自定义手势 已拆干净（onPageScroll 现在只驱动淡入） ==');
 // 留一半最危险：半截状态机 + 原生滚动会互相打架（比如字段还在、还有人读它）
 assert(!/drawer-handle|dh-bar|dh-grip/.test(home), '模板与 CSS 里都不再有把手');
 assert(!/drawerOpen|drawerMax|drawerH|drawerStyle|drawerT/.test(home), '不留抽屉状态机字段');
 assert(!/dhStart|dhMove|dhEnd|dhFire|dhSwallowTap|dhGateY|dhFloorY|dhPoint|dhNum/.test(home),
   '不留任何自定义纵向手势方法');
-assert(!/onPageScroll|__pageTop/.test(home),
+assert(!/__pageTop/.test(home),
   '不留「页面滚动位置」字段（那是给"下滑收抽屉"区分场景用的，现在滚动就是滚动）');
 assert(!/measureDrawer/.test(home),
   '不再量卡片高度（高度不再需要被 JS 知道；拖拽排序自己那份量高不受影响）');
+// onPageScroll 现在允许存在，但只能把滚动进度推进 --reveal（卡片淡入），
+// 不能拿来做"开合抽屉"那套状态机（@touch 手势 / 折叠 class 早就被第 2 组守住了）。
+assert(/onPageScroll/.test(home), '焦点模式卡片淡入需要 onPageScroll（把滚动进度推进 --reveal）');
+assert(/setProperty\(['"]--reveal['"]/.test(home),
+  'onPageScroll 把进度写到 --reveal（CSS 变量 → 合成器接管，零重排，不掉帧）');
+assert(/scrollTop/.test(home), 'onPageScroll 读 scrollTop 推进 reveal（跟手）');
+assert(/this\._scrollTop \/ 320/.test(home),
+  'reveal 按 hero 探出量 320 归一化（与 .focus-hero 的 320rpx 对齐：淡完恰好滚进可见区）');
+assert(!/drawerCollaps|collapseDrawer|openDrawer|closeDrawer|drawerState/.test(home),
+  'onPageScroll 不接任何抽屉开合状态机');
 
 console.log('== 2. 手势挂点：根节点只负责左右滑页 ==');
 {
@@ -110,6 +124,16 @@ console.log('== 3. hero 形态：面板 + 下一张卡探出屏幕底 ==');
     '面板是毛玻璃表面（和 .card 同款令牌，深色模式自动翻转）');
   assert(/var\(--hairline/.test(panel) && /var\(--shadow-rgb/.test(panel),
     '面板带发丝边与投影（视觉上"浮"在背景之上，成第一张卡）');
+  // 卡片淡入：mod-list 读 --reveal 决定透明度与上移，纯合成器属性（不掉帧）。
+  // "抽屉没有实体"= 下方卡片本身就是抽屉，靠滚动进度淡入 + 上移，而非独立浮层。
+  const list = rule('.mod-list');
+  assert(list.length > 0, '存在 .mod-list 规则');
+  assert(/--reveal:\s*1/.test(list), 'mod-list 默认 --reveal:1（非焦点 / 全收纳态卡片常显）');
+  assert(/opacity:\s*var\(--reveal/.test(list), 'mod-list 透明度随 --reveal 变化（淡入）');
+  assert(/transform:\s*translateY/.test(list) && /--reveal/.test(list),
+    'mod-list 随 --reveal 上移（滑出感）');
+  assert(!/transition[^;{}]*(min-height|max-height|padding)/.test(list),
+    'mod-list 不接任何重排型过渡（只动 opacity / transform）');
 }
 
 console.log('== 4. 不掉帧：不许再有重排型过渡 ==');

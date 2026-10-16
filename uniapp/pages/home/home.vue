@@ -259,6 +259,7 @@
          底部「编辑首页」在最后一张卡下面，所以只有滑到底才会出现。 -->
     <view
       class="mod-list"
+      ref="modList"
       @touchmove="dragMove"
       @touchend="dragEnd"
       @touchcancel="dragEnd"
@@ -941,6 +942,39 @@ export default {
     if (this.editing) { this.finishEdit(); return true }
     if (this.searching) { this.clearSearch(); return true }
     return false
+  },
+  onReady() {
+    // 卡片淡入需要 .mod-list 的真实 DOM；ref 首次渲染后才就绪，所以放 onReady。
+    this._listEl = null
+    this.syncReveal(this._scrollTop || 0)
+  },
+  onPageScroll(e) {
+    // 焦点模式下，把"往上滑"的进度推进到 --reveal：卡片随之淡入 + 上移，
+    // 手势与下方卡片连贯统一。只动 opacity / transform（合成器接管，零重排，不掉帧）。
+    this.syncReveal((e && e.scrollTop) || 0)
+  },
+  // 计算卡片淡入进度并写进 CSS 变量（非响应式直接写 DOM，避免逐帧重渲染）。
+  // 非焦点模式 / 没卡片（兜底态）一律 --reveal:1（卡片常显，不接手势）。
+  syncReveal(top) {
+    this._scrollTop = top || 0
+    const refs = this.$refs || {}
+    const ref = refs.modList
+    const el = this._listEl || (ref && (ref.$el || ref))
+    if (!el) return
+    this._listEl = el
+    if (!this.isFocus || !this.renderCards || !this.renderCards.length) {
+      el.style.setProperty('--reveal', '1')
+      return
+    }
+    // 320 = hero 探出量：滚完这一截卡片全显（见 .focus-hero 的 320rpx）
+    let r = this._scrollTop / 320
+    r = r < 0 ? 0 : r > 1 ? 1 : r
+    el.style.setProperty('--reveal', r.toFixed(3))
+  },
+  watch: {
+    // 形态切换 / 卡片增减都要重新对齐 reveal（否则切到卡片平铺还停在 0 → 卡片消失）
+    isFocus() { this.syncReveal(this._scrollTop || 0) },
+    renderCards() { this.syncReveal(this._scrollTop || 0) },
   },
   methods: {
     // ---------- 新版本提示弹窗 ----------
@@ -2719,7 +2753,17 @@ export default {
 .stat-item:active .stat-num { opacity: 0.6; }
 
 /* ---------- 首页模块编辑（拖拽 / 收纳） ---------- */
-.mod-list { position: relative; }
+.mod-list {
+  position: relative;
+  /* 焦点模式：卡片默认"消失"（CSS 初值 1，但 onPageScroll 在焦点态会从 0 推起）。
+     往上滑时滚动进度被推进 --reveal（0→1）→ 卡片淡入 + 上移，手势与下方卡片连贯统一。
+     非焦点 / 全收纳态不写这个变量，落到默认 1（常显）。
+     ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
+  --reveal: 1;
+  opacity: var(--reveal, 1);
+  transform: translateY(calc((1 - var(--reveal, 1)) * 56rpx));
+  will-change: opacity, transform;
+}
 
 .mod-wrap { position: relative; }
 
