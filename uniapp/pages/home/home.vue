@@ -211,7 +211,22 @@
     </view>
 
     <!-- 内容区：切 tab 时整体左右滑动（顶栏与底栏留在外面，不跟着滑） -->
-    <view class="page-slide" :class="slideCls" :style="slideStyle">
+    <!-- 上滑手势挂在这一层：它包住了 hero、把手、卡片区和底部链接，
+         所以在下半屏**任何位置**往上滑都能把卡片拉出来。
+         ⚠️ 不能只挂在把手上：把手做得再高也只是中间一条带子，手指落在它下面
+         （底部链接、tabbar 上方那截空白）时 touchmove 根本没人接 ——
+         表现就是"只有点在把手上有用，在首页上滑毫无反应"。
+         起手点在 hero 里也不拦：那里是两颗入口按钮的地盘，滑动会顺带触发
+         按钮自己的 click，变成"一边开抽屉一边跳走"（见 dhStart 里的门槛线）。 -->
+    <view
+      class="page-slide"
+      :class="slideCls"
+      :style="slideStyle"
+      @touchstart="dhStart"
+      @touchmove="dhMove"
+      @touchend="dhEnd"
+      @touchcancel="dhEnd"
+    >
     <!-- AI 指令：加载态 / 执行结果 / 错误提示 / 撤销 -->
     <view v-if="cmdBar" class="cmd-bar" :class="'is-' + cmdState">
       <view v-if="cmdBusy" class="cmd-spin"></view>
@@ -243,22 +258,11 @@
         <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
       </view>
     </view>
-    <!-- 抽屉把手 = 手势区：从屏幕下半部分往上滑就把卡片拉上来，点中间那条也能开关。
-         ⚠️ 手势区必须做「高」：收起时它占掉 hero 以下到屏幕底的整块空白。
-         之前它只是 hero 下面一条窄把手，手指落在它下方时 touchmove 根本没人接 ——
-         表现就是"只有点在把手上有用，上滑毫无反应"。
-         但也不能往上占：hero 里是两颗入口按钮，在按钮上滑会顺带触发按钮自己的
-         click（一边开抽屉一边跳走），所以手势只到 hero 为止。
-         @tap 也因此只挂在内条上：大手势区若整体响应点击，点空白就会误开抽屉。 -->
-    <view
-      v-if="isFocus"
-      class="drawer-handle"
-      :class="{ 'dh-open': drawerOpen }"
-      @touchstart="dhStart"
-      @touchmove="dhMove"
-      @touchend="dhEnd"
-      @touchcancel="dhEnd"
-    >
+    <!-- 抽屉把手：视觉上的"这里可以往上拉"+ 点击开关。
+         手势不挂在这儿，挂在外层 .page-slide（原因见上面的注释）。
+         收起时它是 hero 下面一整条高的空白带，展开后收窄成中间那条。
+         @tap 只挂在内条 .dh-bar 上：整块空白若响应点击，点一下就会误开抽屉。 -->
+    <view v-if="isFocus" class="drawer-handle" :class="{ 'dh-open': drawerOpen }">
       <view class="dh-bar" @tap="toggleDrawer">
         <view class="dh-grip"></view>
         <text class="dh-text">{{ drawerOpen ? $t('收起') : $t('上滑查看全部功能') }}</text>
@@ -949,6 +953,13 @@ export default {
     setTimeout(() => { this.measureDrawer() }, 60)
   },
 
+  // 页面滚动位置：抽屉「往下滑收起」要用它来区分手势场景 ——
+  // 只有页面已经停在顶部（scrollTop ≈ 0）时，往下滑才可能是"想收起抽屉"；
+  // 已经滚下去一大截还往下滑，那是用户在往回翻内容，收起就把人家翻的东西弄没了。
+  onPageScroll(e) {
+    this.__pageTop = (e && e.scrollTop) || 0
+  },
+
   onHide() {
     if (this.searchTimer) { clearTimeout(this.searchTimer); this.searchTimer = 0 }
     // 推荐条的延迟收起定时器也一并清掉，回来时重新由 focus 驱动
@@ -1546,35 +1557,84 @@ export default {
           if (h > 0) this.drawerH = h
         }).exec()
       } catch (e) { /* 量不到就保持 0，走宽松上限兜底 */ }
+      // 顺带量把手顶边 → 抽屉手势的起手门槛线（hero 是入口按钮区，不参与手势）
+      try {
+        uni.createSelectorQuery().in(this).select('.drawer-handle').boundingClientRect(res => {
+          const r = Array.isArray(res) ? res[0] : res
+          if (r && r.top != null) this.__dhGate = r.top
+        }).exec()
+      } catch (e) { /* 量不到就退回 dhGateY 的兜底比例 */ }
     },
-    /** 上滑手势：记下起点坐标。坐标在不同端放的位置不一样，多兜几个来源。 */
+    /** 触摸点在不同端放的位置不一样（touches / targetTouches / changedTouches），多兜几个来源 */
+    dhPoint(e) {
+      if (!e) return null
+      const a = e.touches || e.targetTouches || e.changedTouches
+      return (a && a[0]) || null
+    },
+    /** 取第一个像样（有限）的数值，取不到就用兜底值 */
+    dhNum(a, b) {
+      if (typeof a === 'number' && isFinite(a)) return a
+      return (typeof b === 'number' && isFinite(b)) ? b : 0
+    },
+    /**
+     * 起手门槛线：只有落点在这条线**以下**，本次触摸才参与抽屉手势。
+     * 线取把手顶边（measureDrawer 实测）；没量到就退回视口高的 60%。
+     * 为什么要有这条线：hero 里是「背句子 / 背单词」两颗入口按钮，
+     * 手指从按钮上往上划会顺带触发按钮自己的 click ——
+     * 变成"一边开抽屉一边跳走"。门槛线以下（把手整条空白带、底部链接、
+     * tabbar 上方那截空白）才放行，那也正是用户"从下往上滑"时手指落下的地方。
+     */
+    dhGateY() {
+      return (this.__dhGate != null) ? this.__dhGate : (this.guideViewportH() * 0.6)
+    },
+    /** 上滑手势：记下起点坐标，并判定本次触摸要不要参与 */
     dhStart(e) {
       // 卡片平铺形态没有抽屉，不该拦任何东西（那个形态下页面是要正常滚动的）
       if (!this.isFocus) return
-      const t = (e && e.touches && e.touches[0]) || (e && e.targetTouches && e.targetTouches[0]) ||
-        (e && e.changedTouches && e.changedTouches[0]) || {}
-      this.__dhY = t.clientY != null ? t.clientY : (t.pageY != null ? t.pageY : 0)
-      this.__dhX = t.clientX != null ? t.clientX : 0
+      // 编辑态手指是在拖卡片排序，纵向手势归拖拽，抽屉一律不参与
+      if (this.editing) { this.__dhY = null; return }
+      const t = this.dhPoint(e)
+      if (!t) { this.__dhY = null; return }
+      const y = this.dhNum(t.clientY, t.pageY)
+      // 落点在 hero 里（门槛线以上）→ 本次不参与，把触摸完整留给入口按钮
+      if (y < this.dhGateY()) { this.__dhY = null; return }
+      this.__dhY = y
+      this.__dhX = this.dhNum(t.clientX, 0)
+      // 0 未定轴 / 1 横向 / -1 纵向（定轴只做一次，见 dhMove）
+      this.__dhAxis = 0
     },
     dhMove(e) {
       if (!this.isFocus || this.__dhY == null) return
-      const t = (e && e.touches && e.touches[0]) || (e && e.targetTouches && e.targetTouches[0]) ||
-        (e && e.changedTouches && e.changedTouches[0]) || {}
-      const y = t.clientY != null ? t.clientY : (t.pageY != null ? t.pageY : 0)
-      const x = t.clientX != null ? t.clientX : 0
-      const dy = this.__dhY - y          // > 0 表示手指在往上走
+      const t = this.dhPoint(e)
+      if (!t) return
+      const y = this.dhNum(t.clientY, t.pageY)
+      const x = this.dhNum(t.clientX, this.__dhX)
+      const dy = this.__dhY - y          // > 0 = 手指在往上走
       const dx = x - this.__dhX
-      // 横向位移更大 → 这是左右滑页 / 图表拖动，本次手势作废，不跟它们抢
-      if (Math.abs(dx) > Math.abs(dy)) { this.__dhY = null; return }
-      // 往上滑过阈值 → 卡片上来；往下滑过阈值 → 收回去。触发一次就把起点作废，
-      // 避免一次手势里反复开关。阈值 28px（比原先的 40 松）：这是屏幕下半区唯一的
-      // 纵向手势，收紧一点用户就觉得"滑了没反应"，误开的代价也只是一滑回去。
-      const UP = 28
-      if (dy > UP) { this.__dhY = null; this.openDrawer() }
-      else if (-dy > UP) { this.__dhY = null; this.closeDrawer() }
+      // 先定轴：只有纵向为主才归抽屉。横向 = 左右滑页 / 图表拖动，本次全程作废，
+      // 不跟它们抢。定轴只做一次（定了就不再改），避免一次手势里反复开关。
+      if (!this.__dhAxis) {
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+        this.__dhAxis = (Math.abs(dx) > Math.abs(dy)) ? 1 : -1
+      }
+      if (this.__dhAxis !== -1) return
+      // 方向一明确就立刻触发，不等着攒距离 ——
+      // Android WebView 一旦把这次触摸判成"页面滚动"就会发 touchcancel，
+      // move 事件往往只来 1~2 次；等累计到阈值再判定，多半已经被取消了。
+      // 这正是"在首页上滑毫无反应"的真身。
+      // 阈值 18px 略大于系统触摸容差（约 8~12px）：既躲开手抖，又赶在 touchcancel 之前落地。
+      const NEED = 18
+      if (dy > NEED) { this.__dhY = null; this.openDrawer() }
+      else if (-dy > NEED) {
+        // 往下划 = 想收起；但页面已经滚下去时不收（那是在往回翻内容，见 __pageTop）
+        if ((this.__pageTop || 0) > 4) { this.__dhY = null; return }
+        this.__dhY = null
+        this.closeDrawer()
+      }
     },
     dhEnd() {
       this.__dhY = null
+      this.__dhAxis = 0
     },
 
     // ---------- 顶部输入：搜索 / 指令双模式 ----------

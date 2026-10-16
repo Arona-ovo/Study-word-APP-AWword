@@ -1,11 +1,13 @@
 // _tools/check-drawer.js - 首页焦点模式的「上滑抽屉」校验
 // 覆盖：
-//  1) 手势挂点：把手是手势区；hero 上绝不能挂 touchmove（会误触两颗入口按钮）
+//  1) 手势挂点：手势挂在整个内容层 .page-slide 上（不是只挂把手那条）；
+//     hero 上绝不能挂 touchmove（会误触两颗入口按钮）
 //  2) 开合状态机：0 ↔ 实测内容高 的真实过渡（0 ↔ none 不可插值 = 没有动画）
 //  3) drawerStyle：卡片平铺形态零干预；展开完成后交还自然高度（不裁卡片）
 //  4) CSS：动画期间要裁、展开后必须放开（否则编辑态拖动排序会被裁掉）
 //  5) 上滑阈值滑动：够阈值才开/关，且一次滑动只触发一次
-//  6) 定时器不泄漏：单一实例 + onHide 清掉
+//  6) 起手门槛线：落点在 hero 里不参与手势；页面已滚动时下滑不收起
+//  7) 定时器不泄漏：单一实例 + onHide 清掉
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..', 'uniapp');
@@ -20,11 +22,22 @@ const R = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g
 const home = R('pages/home/home.vue');
 
 console.log('== 1. 手势挂点 ==');
-assert(/class="drawer-handle"/.test(home), '存在抽屉把手（手势区）');
-assert(/@touchstart="dhStart"/.test(home) && /@touchmove="dhMove"/.test(home), '把手接住了 touchstart / touchmove');
-assert(/@touchend="dhEnd"/.test(home), '把手接住了 touchend（抬手清掉起点）');
-// hero 里是两颗入口按钮，在按钮上滑动会顺带触发按钮自己的 click
-// （一边开抽屉一边跳走），所以手势只能挂在把手上。
+assert(/class="drawer-handle"/.test(home), '存在抽屉把手（视觉提示 + 点击开关）');
+// ⚠️ 关键：手势必须挂在整个内容层 .page-slide 上。
+//    第一/二版只挂在把手上 —— 把手做得再高也只是中间一条带子，手指落在它下面
+//    （底部链接、tabbar 上方那截空白）时 touchmove 根本没人接，
+//    用户反馈的就是"只有点在把手上有用，在首页上滑毫无反应"。
+{
+  const i = home.indexOf('class="page-slide"');
+  const openTag = i > 0 ? home.slice(i, home.indexOf('>', i)) : '';
+  assert(openTag.length > 0, '能抠出内容层 .page-slide 的开标签');
+  assert(/@touchstart="dhStart"/.test(openTag) && /@touchmove="dhMove"/.test(openTag),
+    '上滑手势挂在内容层 .page-slide 上（覆盖 hero 以下的整片区域，不只是把手）');
+  assert(/@touchend="dhEnd"/.test(openTag) && /@touchcancel="dhEnd"/.test(openTag),
+    'touchend / touchcancel 都清起点（抬手 / 被系统抢走都不留残状态）');
+}
+// hero 里是两颗入口按钮：在按钮上滑动会顺带触发按钮自己的 click
+// （一边开抽屉一边跳走），所以起手点落在 hero 里时手势不参与（见 dhStart 门槛线）。
 {
   const i = home.indexOf('class="focus-hero"');
   const hero = i > 0 ? home.slice(i, home.indexOf('\n    </view>', i)) : '';
@@ -55,17 +68,35 @@ const bodyOf = (name) => {
   const m = home.match(new RegExp('\\n    ' + name + '\\([^)]*\\) \\{([\\s\\S]*?)\\n    \\},'));
   return m ? m[1] : '';
 };
-const mkSelf = (extra) => Object.assign({
-  isFocus: true,
-  drawerOpen: false,
-  drawerH: 800,
-  drawerMax: null,
-  drawerT: 0,
-  __timers: [],
-  setDrawerTimer(fn, ms) { this.__timers.push({ fn, ms }) },
-  openDrawer() { this.drawerOpen = true },
-  closeDrawer() { this.drawerOpen = false }
-}, extra || {});
+// 被 dhStart / dhMove 依赖的小工具也用**真方法体**拼进去：
+// 拷一份逻辑来测等于没测（改动两边会漂移，断言永远绿）
+const mkSelf = (extra) => {
+  const base = {
+    isFocus: true,
+    drawerOpen: false,
+    drawerH: 800,
+    drawerMax: null,
+    drawerT: 0,
+    __timers: [],
+    __dhY: null,
+    __dhX: 0,
+    __dhAxis: 0,
+    __pageTop: 0,
+    __dhGate: 300,          // 门槛线：模拟"把手在视口 y=300 处"
+    guideViewportH() { return 800 },
+    setDrawerTimer(fn, ms) { this.__timers.push({ fn, ms }) },
+    openDrawer() { this.drawerOpen = true },
+    closeDrawer() { this.drawerOpen = false }
+  };
+  // ⚠️ 形参要按原方法补齐：拼接时统一写成 function () 会让带参方法 ReferenceError
+  const HELPERS = { dhPoint: 'e', dhNum: 'a, b', dhGateY: '' };
+  Object.keys(HELPERS).forEach(n => {
+    const b = bodyOf(n);
+    assert(b.length > 0, '能抠出 ' + n + '() 方法体');
+    base[n] = new Function('return function (' + HELPERS[n] + ') {' + b + '}')();
+  });
+  return Object.assign(base, extra || {});
+};
 const runWith = (name, self) => {
   const b = bodyOf(name);
   if (!b) return null;
@@ -134,8 +165,8 @@ console.log('== 3. 上滑手势 ==');
   };
   const swipe = (s, y) => new Function('return function (e) {' + move + '}')().call(s, { touches: [{ clientY: y }] });
 
-  // 阈值 28px：原先 40，放松是刻意的 —— 这是屏幕下半区唯一的纵向手势，
-  // 收紧到用户在 LB 机上"滑了没反应"就是白做，误开的代价只是再往下滑回去。
+  // 阈值 18px：略大于系统触摸容差（约 8~12px），既躲开手抖，又赶在
+  // 浏览器判成"页面滚动"并发出 touchcancel 之前落地（见 home.vue 里的注释）。
   const up = mk(500, false);
   swipe(up, 485);
   assert(up.__opened === 0, '上滑 15px（手抖级别）不展开');
@@ -168,7 +199,47 @@ console.log('== 3. 上滑手势 ==');
   const flat = mkSelf({ isFocus: false });
   run('dhStart', flat, { touches: [{ clientY: 500, clientX: 100 }] });
   assert(flat.__dhY == null, '卡片平铺形态下 dhStart 不记录起点');
+
+  // ⚠️ 起手门槛线：落点在 hero（门槛线以上）时不记录起点 ——
+  //    hero 里是两颗入口按钮，在按钮上滑会顺带触发它自己的 click。
+  //    这条线是"手势区要大"和"不能误触按钮"的唯一交汇点，删了就二选一。
+  const inHero = mk(80, false);
+  assert(inHero.__dhY == null, '落点在 hero 里（门槛线以上）不记录起点');
+  swipe(inHero, 20);
+  assert(inHero.__opened === 0, 'hero 区上滑不会拉开抽屉（不误触入口按钮）');
+
+  // 门槛线以下（把手整条空白带、底部链接、tabbar 上方空白）必须响应 ——
+  // 用户"从下往上滑"手指就落在这一带，这里不响应就是"上滑没反应"
+  const below = mk(600, false);
+  assert(below.__dhY === 600, '落点在门槛线以下 → 记录起点');
+  swipe(below, 575);
+  assert(below.__opened === 1, '门槛线以下上滑 → 拉开抽屉');
+
+  // 编辑态：手指是在拖卡片排序，纵向手势归拖拽，抽屉一律不参与
+  // （否则拖到一半被"下滑收起"判定，卡片区直接塌掉）
+  const editing = mkSelf({ drawerOpen: false, editing: true });
+  editing.__opened = 0;
+  editing.openDrawer = function () { this.__opened++ };
+  run('dhStart', editing, { touches: [{ clientY: 600, clientX: 100 }] });
+  assert(editing.__dhY == null, '编辑态下不记录起点（纵向手势归拖拽排序）');
+  swipe(editing, 500);
+  assert(editing.__opened === 0, '编辑态下上滑不会拉开抽屉');
+
+  // 页面已经滚下去时，往下滑是在往回翻内容，不该把抽屉收了
+  const scrolled = mk(600, true);
+  scrolled.__pageTop = 120;
+  swipe(scrolled, 660);
+  assert(scrolled.__closed === 0, '页面已滚动时下滑不收起（那是在往回翻内容）');
+  // 停在顶部时往下滑 = 想收起
+  const atTop = mk(600, true);
+  atTop.__pageTop = 0;
+  swipe(atTop, 660);
+  assert(atTop.__closed === 1, '页面在顶部时下滑 → 收起');
 }
+
+console.log('== 3b. 滚动位置来源 ==');
+assert(/onPageScroll\(e\)/.test(home) && /__pageTop\s*=/.test(home),
+  '首页用 onPageScroll 记录滚动位置（供"下滑收起"区分手势场景）');
 
 console.log('== 4. CSS：手势区要高、有滑入动画、动画期间裁切、展开后放开 ==');
 {
