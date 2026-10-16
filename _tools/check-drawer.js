@@ -19,9 +19,11 @@
 //  1) 拆干净：抽屉状态机 / 自定义手势 / 把手 / 量高 都不留（onPageScroll 现只驱动淡入）
 //  2) 手势挂点：根节点只接左右滑页（onSlide*），不再包一层 dh* 包装方法
 //  3) hero 形态：铺满到屏幕底边（卡片静止时结构性藏在折叠线之下，不靠 opacity）+
-//     内容收进与下方卡片同款面板 + 上下留白对称（入口在屏幕正中）；
+//     上下留白对称（入口在屏幕正中）；首屏只有裸的两个按钮（.focus-panel 背景卡
+//     已按用户要求下线，不许再回来）；
 //     .mod-list 默认 --reveal:1（常显），滚动时 syncReveal 按"卡片真实入屏高度"
-//     （getBoundingClientRect + 缓存视口高）把 0→1 推进 --reveal 做淡入 + 上移；
+//     （getBoundingClientRect + 缓存视口高）把 0→1 推进 --reveal 做淡入 + 上移，
+//     同一条进度同时写进 --hero-fade → 两个入口渐隐（滑回去则回来）；
 //     ⚠️ 严禁 .reveal-idle 这类把初值锁 0 的强制类（onPageScroll 不触发就永久隐藏）
 //  4) 不掉帧：不许再有重排型过渡（min-height / max-height / padding）；只允许 opacity / transform
 //  5) 顺序：「编辑首页」排在卡片之后（只有滑到底才看得到）
@@ -71,8 +73,16 @@ assert(/window\.innerHeight|getSystemInfoSync/.test(home), '视口高被缓存�
 // onPageScroll 每帧一条全局错误）。必须先验 style.setProperty 可用再用。
 assert(/typeof c\.style\.setProperty === 'function'|typeof el\.style\.setProperty === 'function'/.test(home),
   '写 --reveal 前先验目标节点的 style.setProperty 可用（App 端 ref 可能不是 DOM 节点）');
-assert(/if \(!el\) return/.test(home),
+assert(/if \(list\) list\.style\.setProperty/.test(home),
   '拿不到节点就静默跳过（卡片默认 --reveal:1 常显，只是没有淡入，不能报错）');
+// 入口渐隐与卡片淡入必须共用同一条进度（focus ? p : 0）：
+// 非焦点 / 全收纳（没有任何卡可滑出来）时 fade 必须恒 0，否则那屏只剩空背景。
+assert(/const fade = focus \? p : 0/.test(home),
+  '入口渐隐只在"焦点 + 有卡"时生效（没卡可滑出来时入口必须一直显示）');
+assert(/hero\.style\.setProperty\('--hero-fade'/.test(home),
+  'syncReveal 把进度写进 --hero-fade（卡片出来→入口淡出，卡收回去→入口回来）');
+assert(/--hero-pe', fade > 0\.9 \? 'none' : 'auto'/.test(home),
+  '淡到 0.9 以上才关 pointer-events（半透明时入口仍可点）');
 // syncReveal 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
 // 放到 methods 外（与生命周期选项平级）就不是实例方法 → 真机报
 // "this.syncReveal is not a function"（2026-10-16 真踩，脚本全绿却炸在基座上）。
@@ -121,12 +131,15 @@ console.log('== 2. 手势挂点：根节点只负责左右滑页 ==');
   assert(!/@touch/.test(hero), 'hero 上没有触摸手势（两颗入口按钮要能正常点、页面要能滚）');
   assert(/@tap="startPractice"/.test(hero) && /@tap="openWordDrill"/.test(hero),
     'hero 两颗入口仍在（背句子 / 背单词）');
-  assert(/class="focus-panel"/.test(hero), 'hero 内容收在面板里（首屏第一眼是一张卡，不是散落的文字）');
   assert(/class="focus-keyinfo"/.test(hero) && /class="focus-sub"/.test(hero),
-    '面板内仍是「关键信息 + 两个大入口 + 小字」三段');
+    'hero 仍是「关键信息 + 两个大入口 + 小字」三段');
+  // 2026-10-16 用户要求"中间的背单词/背句子只保留 button，不需要背景的卡片"：
+  // .focus-panel（毛玻璃面板）已下线，首屏就是裸的两个按钮，不再有背景卡。
+  assert(!/focus-panel/.test(home),
+    '不再有 .focus-panel 背景卡（入口只要裸按钮，面板已下线）');
 }
 
-console.log('== 3. hero 形态：铺满一屏 + 面板 + reveal 双保险 ==');
+console.log('== 3. hero 形态：铺满一屏 + 裸按钮入口渐隐 + 卡片淡入 ==');
 {
   const hero = rule('.focus-hero');
   assert(hero.length > 0, '存在 .focus-hero 规则');
@@ -143,19 +156,19 @@ console.log('== 3. hero 形态：铺满一屏 + 面板 + reveal 双保险 ==');
   assert(!/220rpx/.test(mh),
     'min-height 里不出现底栏预留 220rpx（底栏让位由 padding 承担）');
   const pad = (hero.match(/padding:\s*[^;]*;/) || [''])[0];
-  // 左右 0：面板与下方卡片同宽；上下留白对称于整屏 → 两个入口落在屏幕正中
+  // 左右 0：入口与下方卡片同宽；上下留白对称于整屏 → 两个入口落在屏幕正中
   // （底栏 220 + 24、顶栏 136，差值 108 补在 padding-top）。
   assert(/108rpx/.test(pad) && /220rpx/.test(pad) && /safe-area-inset-bottom/.test(pad),
     'padding 上下对称于整屏（108 = 24 + 220 − 136）→ 入口在屏幕正中');
   assert(/justify-content:\s*center/.test(hero), 'hero 内容垂直居中');
   assert(!/transition/.test(hero), 'hero 上没有任何过渡（高度 / 内边距不参与动画）');
-  // 面板 = 下方卡片同款"窗体"：半透明表面 + 模糊 + 发丝边 + 投影
-  const panel = rule('.focus-panel');
-  assert(panel.length > 0, '存在 .focus-panel 规则');
-  assert(/rgba\(var\(--surface-rgb/.test(panel) && /backdrop-filter/.test(panel) && /--glass-lg/.test(panel),
-    '面板是毛玻璃表面（和 .card 同款令牌，深色模式自动翻转）');
-  assert(/var\(--hairline/.test(panel) && /var\(--shadow-rgb/.test(panel),
-    '面板带发丝边与投影（视觉上"浮"在背景之上，成第一张卡）');
+  // 入口渐隐（2026-10-16 用户要求）：上滑时卡片淡入、两个入口渐隐；
+  // 卡片滑回去 → fade 归 0 → 入口回来。同一条进度的正反两面。
+  // ⚠️ 默认值必须是 0（全显示）：JS 一环没跑时入口一定要在，绝不能默认藏。
+  assert(/opacity:\s*calc\(1 - var\(--hero-fade, 0\)\)/.test(hero),
+    'hero 透明度 = 1 − --hero-fade（默认 0 = 全显示，JS 失效也不会藏起入口）');
+  assert(/pointer-events:\s*var\(--hero-pe, auto\)/.test(hero),
+    '淡到近乎全隐时关掉 pointer-events（不许点到看不见的按钮）');
   // 卡片淡入：mod-list 读 --reveal 决定透明度与上移，纯合成器属性（不掉帧）。
   // "抽屉没有实体"= 下方卡片本身就是抽屉，靠滚动进度淡入 + 上移，而非独立浮层。
   const list = rule('.mod-list');
@@ -199,8 +212,8 @@ console.log('== 5. 顺序：「编辑首页」在卡片之后 ==');{
     'hero 在"卡片全被收纳"时挂 hero-empty');
   const empty = rule('.focus-hero.hero-empty');
   assert(/min-height:\s*0/.test(empty), 'hero-empty 时 hero 不再缩短（兜底入口全在首屏）');
-  // hero-empty 也不补左右边距：面板宽度与其他态一致
-  assert(/padding:\s*40rpx 0/.test(empty), 'hero-empty 的左右仍是 0（面板同宽）');
+  // hero-empty 也不补左右边距：入口宽度与其他态一致
+  assert(/padding:\s*40rpx 0/.test(empty), 'hero-empty 的左右仍是 0（入口与其他态同宽）');
 }
 
 console.log(fail === 0 ? '\n上滑看卡片全部通过' : '\n失败 ' + fail + ' 项');

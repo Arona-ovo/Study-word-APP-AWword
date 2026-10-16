@@ -239,18 +239,16 @@
          层次（2026-10-16 起）：hero 内容收进一张与下方卡片同宽的毛玻璃面板，
          且 hero 比"铺满一屏"短 320rpx —— 下一张卡的上沿会从悬浮 tabbar 上方
          探出来，首屏就看得见"下面还有一摞卡"，不再是空背景后面藏卡片。 -->
-    <view v-if="isFocus" class="focus-hero" :class="{ 'hero-empty': !renderCards.length }">
-      <view class="focus-panel">
-        <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
-        <view class="focus-cta">
-          <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
-          <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
-        </view>
-        <view class="focus-sub">
-          <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
-          <text class="focus-sub-sep">·</text>
-          <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
-        </view>
+    <view v-if="isFocus" class="focus-hero" ref="heroEl" :class="{ 'hero-empty': !renderCards.length }">
+      <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
+      <view class="focus-cta">
+        <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
+        <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
+      </view>
+      <view class="focus-sub">
+        <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
+        <text class="focus-sub-sep">·</text>
+        <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
       </view>
     </view>
 
@@ -976,13 +974,19 @@ export default {
     // ⚠️ 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
     //    放到 methods 外（和生命周期选项平级）它就不是实例方法 → 真机报
     //    "this.syncReveal is not a function"（2026-10-16 真踩）。
-    // 取 .mod-list 的真实节点。⚠️ App 端 uni 给内置组件 ref 的对象**不一定是
-    // 真 DOM 节点**（ref.style 可能是 null），直接 el.style.setProperty 会炸
-    // （2026-10-16 真机："Cannot read property 'setProperty' of null"）。
-    // 所以候选逐个验"能不能写 style"，能写才用；拿不到就返回 null。
-    pickListEl() {
+    // 从一个候选列表里挑"能写 style 的节点"：对象存在 ≠ 能写（见上）。
+    pickStyleEl(cands, cacheKey) {
       const ok = (c) => !!(c && c.style && typeof c.style.setProperty === 'function')
-      if (ok(this._listEl)) return this._listEl
+      if (ok(this[cacheKey])) return this[cacheKey]
+      for (let i = 0; i < cands.length; i++) {
+        if (ok(cands[i])) {
+          this[cacheKey] = cands[i]
+          return this[cacheKey]
+        }
+      }
+      return null
+    },
+    pickListEl() {
       const refs = this.$refs || {}
       const r = refs.modList
       const cands = [r && r.$el, r]
@@ -990,30 +994,36 @@ export default {
       if (typeof document !== 'undefined' && document && document.querySelector) {
         cands.push(document.querySelector('.mod-list'))
       }
-      for (let i = 0; i < cands.length; i++) {
-        if (ok(cands[i])) {
-          this._listEl = cands[i]
-          return this._listEl
-        }
-      }
-      return null
+      return this.pickStyleEl(cands, '_listEl')
+    },
+    pickHeroEl() {
+      const refs = this.$refs || {}
+      const r = refs.heroEl
+      return this.pickStyleEl([r && r.$el, r], '_heroEl')
     },
     syncReveal() {
-      const el = this.pickListEl()
-      if (!el) return            // 拿不到节点就跳过：卡片默认 --reveal:1 常显，只是没有淡入
-      if (!this.isFocus || !this.renderCards || !this.renderCards.length) {
-        el.style.setProperty('--reveal', '1')
-        return
-      }
+      const list = this.pickListEl()
+      // 只有"焦点 + 有卡"才接手势：非焦点 / 全收纳态卡片常显、入口不淡出
+      const focus = !!(this.isFocus && this.renderCards && this.renderCards.length)
       // 320 = 淡入距离（rpx）：卡片从"刚进视口"到"上移 320rpx"这段里由 0→1
-      const vh = this._vh || ((typeof window !== 'undefined' && window.innerHeight) || 0)
       let p = 1
-      if (vh && typeof el.getBoundingClientRect === 'function') {
-        const rect = el.getBoundingClientRect()
-        p = (vh - rect.top) / 320
-        p = p < 0 ? 0 : p > 1 ? 1 : p
+      if (focus && list && typeof list.getBoundingClientRect === 'function') {
+        const vh = this._vh || ((typeof window !== 'undefined' && window.innerHeight) || 0)
+        if (vh) {
+          const rect = list.getBoundingClientRect()
+          p = (vh - rect.top) / 320
+          p = p < 0 ? 0 : p > 1 ? 1 : p
+        }
       }
-      el.style.setProperty('--reveal', p.toFixed(3))
+      if (list) list.style.setProperty('--reveal', p.toFixed(3))
+      // 入口渐隐 = 同一条进度的反面（卡片出来 → 入口淡出；卡片滑回去 → 入口回来）。
+      // ⚠️ 非焦点 / 没卡时 fade 恒 0：那一屏全靠入口，淡掉就是空屏。
+      const hero = this.pickHeroEl()
+      if (hero) {
+        const fade = focus ? p : 0
+        hero.style.setProperty('--hero-fade', fade.toFixed(3))
+        hero.style.setProperty('--hero-pe', fade > 0.9 ? 'none' : 'auto')
+      }
     },
     // ---------- 新版本提示弹窗 ----------
     // 启动那次自检只负责"查到"，把结果落到 storage（updater.noteUpdate），
@@ -3094,11 +3104,10 @@ export default {
 }
 
 /* ---------- 首页焦点模式（默认形态）：主页只聚焦「背单词 / 背句子」 ---------- */
-/* 焦点模式的 hero：从顶栏底边开始，但比"铺满一屏"短 320rpx ——
-   下一张卡的上沿因此从悬浮 tabbar（约占 132rpx）上方探出来约 188rpx：
-   首屏就能看见"下面还有一摞卡"，往上滑只是把这摞卡拉上来，不是去揭一块布。
-   内容仍居中在可见区：hero 盒顶 = 顶栏底边，盒底 = 屏幕底边上方 320rpx，
-   上下各补 24rpx 后，内容中心距屏幕正中只差约 26px（偏上一点，视觉上仍是居中）。
+/* 焦点模式的 hero：从顶栏底边一直铺到屏幕底边 ——
+   下一张卡静止时**必然**在折叠线之下（结构保证，不靠 opacity）。
+   ⚠️ 之前试过"缩短 320rpx 让卡片探出"——探出量依赖 --reveal 归零才不可见，
+   JS 一环没跑卡片就露在首屏（真机翻车），别再走回头路。
    ⚠️ 136rpx 是顶栏占的高度，要和 App.vue 的 .page-nav 对齐（状态栏 + 顶栏胶囊）。 */
 .focus-hero {
   display: flex;
@@ -3119,27 +3128,18 @@ export default {
   /* 同 .page-tabbar：env() 在 Android webview 常报 0，用实测 --safe-b 兜底，
      否则两个入口的"正中"会往系统导航条里偏 */
   padding-bottom: calc(24rpx + 220rpx + max(env(safe-area-inset-bottom, 0px), var(--safe-b, 0px)));
+  /* 上滑时两个入口**渐隐**：--hero-fade 与卡片淡入共用同一条进度（syncReveal 写），
+     卡片出来 → 入口淡出；卡片滑回去 → fade 归 0 → 入口回来。
+     ⚠️ 默认必须是 0（全显示）：JS 一环没跑时入口一定要在，不能反过来藏起来。
+     ⚠️ 只动 opacity（合成器接管），指针事件在淡到 0.9 之后关掉，避免点空气。 */
+  opacity: calc(1 - var(--hero-fade, 0));
+  pointer-events: var(--hero-pe, auto);
 }
 /* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再缩短 ——
-   这一态要的就是"面板 + 兜底入口"挤在首屏，探出量反而会把兜底入口推到折叠线下。 */
+   这一态要的就是"入口 + 兜底入口"挤在首屏。 */
 .focus-hero.hero-empty {
   min-height: 0;
   padding: 40rpx 0 24rpx;
-}
-/* hero 面板：与 .mod-list 里的卡片同款"窗体"语言（表面 + 模糊 + 发丝边 + 投影），
-   只是圆角略大、内边距略深 —— 它是这一摞卡的第一张。 */
-.focus-panel {
-  background: #ffffff;
-  background: rgba(var(--surface-rgb, 255, 255, 255), 0.72);
-  -webkit-backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
-  backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
-  border: 2rpx solid rgba(23, 32, 26, 0.08);
-  border: 2rpx solid var(--hairline, rgba(23, 32, 26, 0.08));
-  border-radius: 32rpx;
-  padding: 44rpx 36rpx 40rpx;
-  box-shadow: 0 12rpx 36rpx rgba(23, 32, 26, 0.1), 0 2rpx 8rpx rgba(23, 32, 26, 0.05);
-  box-shadow: 0 12rpx 36rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.1), 0 2rpx 8rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.05);
-  box-sizing: border-box;
 }
 .focus-keyinfo {
   text-align: center;
