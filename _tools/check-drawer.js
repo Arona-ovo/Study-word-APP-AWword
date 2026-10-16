@@ -14,7 +14,8 @@
 // 覆盖：
 //  1) 拆干净：抽屉状态机 / 自定义手势 / 把手 / 量高 都不留
 //  2) 手势挂点：根节点只接左右滑页（onSlide*），不再包一层 dh* 包装方法
-//  3) hero 几何：铺到屏幕底边（卡片正好从下一屏开始）+ 内容盒对称于整屏（两入口在正中）
+//  3) hero 形态：内容收进与下方卡片同款的面板 + hero 比铺满一屏短 320rpx
+//     （下一张卡上沿从悬浮 tabbar 上方探出 ≈188rpx，首屏就看得见"下面还有一摞卡"）
 //  4) 不掉帧：不许再出现会触发重排的过渡（min-height / max-height / 出现动画）
 //  5) 顺序：「编辑首页」排在卡片之后（只有滑到底才看得到）
 const fs = require('fs');
@@ -73,9 +74,12 @@ console.log('== 2. 手势挂点：根节点只负责左右滑页 ==');
   assert(!/@touch/.test(hero), 'hero 上没有触摸手势（两颗入口按钮要能正常点、页面要能滚）');
   assert(/@tap="startPractice"/.test(hero) && /@tap="openWordDrill"/.test(hero),
     'hero 两颗入口仍在（背句子 / 背单词）');
+  assert(/class="focus-panel"/.test(hero), 'hero 内容收在面板里（首屏第一眼是一张卡，不是散落的文字）');
+  assert(/class="focus-keyinfo"/.test(hero) && /class="focus-sub"/.test(hero),
+    '面板内仍是「关键信息 + 两个大入口 + 小字」三段');
 }
 
-console.log('== 3. hero 几何：铺到屏幕底边 + 两个入口落在正中 ==');
+console.log('== 3. hero 形态：面板 + 下一张卡探出屏幕底 ==');
 {
   const hero = rule('.focus-hero');
   assert(hero.length > 0, '存在 .focus-hero 规则');
@@ -83,19 +87,29 @@ console.log('== 3. hero 几何：铺到屏幕底边 + 两个入口落在正中 =
   assert(mh.length > 0 && /100vh/.test(mh), 'hero 高度按视口算（一直铺下去）');
   assert(/136rpx/.test(mh) && /status-bar-height/.test(mh),
     '算式里让出顶栏 136rpx 与状态栏（与 App.vue 的 .page-nav 对齐）');
-  // 关键：不减底栏预留，hero 才会一直铺到屏幕底边 —— 卡片正好从"下一屏"开始，
-  // 首屏干净得只剩两个入口（这也是"没有把手也不觉得少了什么"的原因）。
+  // 关键：探出量 320rpx。hero 从"铺满一屏"缩短 320rpx → 下一张卡上沿落在
+  // 屏幕底边上方 320rpx，而悬浮 tabbar 只占约 132rpx → 首屏就能看到约 188rpx
+  // 的下一张卡（2026-10-16 真机反馈"像故意留空把卡片藏底下"的直接对策）。
+  // 改这个数 = 改探出量：调大露得多，调小露得少；内容仍在可见区居中（上下各 24rpx）。
+  assert(/320rpx/.test(mh),
+    'min-height 比铺满一屏短 320rpx（下一张卡上沿从悬浮 tabbar 上方探出）');
   assert(!/220rpx/.test(mh),
-    'min-height 不减底栏预留（铺到屏幕底边 → 卡片正好从下一屏开始）');
+    'min-height 里不出现底栏预留 220rpx（那会把探出量又算回去，卡片重新藏住）');
   const pad = (hero.match(/padding:\s*[^;]*;/) || [''])[0];
-  assert(/220rpx/.test(pad) && /safe-area-inset-bottom/.test(pad),
-    '底部留白含 tabbar 预留的 220rpx 与安全区');
-  // 上下留白相等 → 内容盒对称于整屏，两个入口才落在屏幕正中。
-  // 顶栏占了 136rpx、底栏留了 220rpx，差值要补在 padding-top 上。
-  assert(/108rpx/.test(pad),
-    '顶部留白补上「底栏比顶栏多留的那一截」（内容盒对称于整屏 → 入口在正中）');
+  // 面板自己就是窗体，hero 不再补 tabbar 预留，左右边距也让给面板（与卡片同宽）
+  assert(/padding:\s*24rpx 0/.test(hero),
+    'hero 只留 24rpx 上下白、左右 0（面板与下方卡片同宽）');
+  assert(!/safe-area-inset-bottom/.test(pad),
+    'hero 不再单独吃安全区（tabbar 的安全区在 App.vue 的 .page-tabbar 与胶囊自己身上）');
   assert(/justify-content:\s*center/.test(hero), 'hero 内容垂直居中');
   assert(!/transition/.test(hero), 'hero 上没有任何过渡（高度 / 内边距不参与动画）');
+  // 面板 = 下方卡片同款"窗体"：半透明表面 + 模糊 + 发丝边 + 投影
+  const panel = rule('.focus-panel');
+  assert(panel.length > 0, '存在 .focus-panel 规则');
+  assert(/rgba\(var\(--surface-rgb/.test(panel) && /backdrop-filter/.test(panel) && /--glass-lg/.test(panel),
+    '面板是毛玻璃表面（和 .card 同款令牌，深色模式自动翻转）');
+  assert(/var\(--hairline/.test(panel) && /var\(--shadow-rgb/.test(panel),
+    '面板带发丝边与投影（视觉上"浮"在背景之上，成第一张卡）');
 }
 
 console.log('== 4. 不掉帧：不许再有重排型过渡 ==');
@@ -124,7 +138,9 @@ console.log('== 5. 顺序：「编辑首页」在卡片之后 ==');{
   assert(/:class="\{ 'hero-empty': !renderCards\.length \}"/.test(home),
     'hero 在"卡片全被收纳"时挂 hero-empty');
   const empty = rule('.focus-hero.hero-empty');
-  assert(/min-height:\s*0/.test(empty), 'hero-empty 时 hero 不再撑满一屏（兜底入口露在首屏）');
+  assert(/min-height:\s*0/.test(empty), 'hero-empty 时 hero 不再缩短（兜底入口全在首屏）');
+  // hero-empty 也不补左右边距：面板宽度与其他态一致
+  assert(/padding:\s*40rpx 0/.test(empty), 'hero-empty 的左右仍是 0（面板同宽）');
 }
 
 console.log(fail === 0 ? '\n上滑看卡片全部通过' : '\n失败 ' + fail + ' 项');

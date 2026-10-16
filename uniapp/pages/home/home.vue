@@ -232,20 +232,25 @@
     </scroll-view>
 
     <!-- 焦点模式：主页只聚焦「背单词 / 背句子」两件大事 + 一行关键信息；
-         其余卡片排在**下面一屏之后**，往上滑（原生滚动）就到。
+         其余卡片排在下面一屏，往上滑（原生滚动）就到。
          可在「设置 → 首页样式」切回原卡片平铺。
-         注：焦点模式下隐藏 action 卡（它的主按钮与 hero 重复），改由 hero 的
-         两个大入口 + 下方「复习错题 / AI 薄弱点专练」小字承接，避免入口重复。 -->
+         注：焦点模式下隐藏 action 卡（它的主按钮与 hero 重复），改由 hero
+         的两个大入口 + 下方「复习错题 / AI 薄弱点专练」小字承接，避免入口重复。
+         层次（2026-10-16 起）：hero 内容收进一张与下方卡片同宽的毛玻璃面板，
+         且 hero 比"铺满一屏"短 320rpx —— 下一张卡的上沿会从悬浮 tabbar 上方
+         探出来，首屏就看得见"下面还有一摞卡"，不再是空背景后面藏卡片。 -->
     <view v-if="isFocus" class="focus-hero" :class="{ 'hero-empty': !renderCards.length }">
-      <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
-      <view class="focus-cta">
-        <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
-        <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
-      </view>
-      <view class="focus-sub">
-        <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
-        <text class="focus-sub-sep">·</text>
-        <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
+      <view class="focus-panel">
+        <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
+        <view class="focus-cta">
+          <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
+          <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
+        </view>
+        <view class="focus-sub">
+          <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
+          <text class="focus-sub-sep">·</text>
+          <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
+        </view>
       </view>
     </view>
 
@@ -3007,28 +3012,42 @@ export default {
 }
 
 /* ---------- 首页焦点模式（默认形态）：主页只聚焦「背单词 / 背句子」 ---------- */
-/* 焦点模式的 hero：从顶栏底边一直铺到**屏幕底边**。
-   这样一屏之内只有「背单词 / 背句子」两个入口，卡片恰好从下一屏开始 ——
-   往上滑 = 页面原生滚动（合成器接管），没有任何布局动画，所以不会掉帧。
+/* 焦点模式的 hero：从顶栏底边开始，但比"铺满一屏"短 320rpx ——
+   下一张卡的上沿因此从悬浮 tabbar（约占 132rpx）上方探出来约 188rpx：
+   首屏就能看见"下面还有一摞卡"，往上滑只是把这摞卡拉上来，不是去揭一块布。
+   内容仍居中在可见区：hero 盒顶 = 顶栏底边，盒底 = 屏幕底边上方 320rpx，
+   上下各补 24rpx 后，内容中心距屏幕正中只差约 26px（偏上一点，视觉上仍是居中）。
    ⚠️ 136rpx 是顶栏占的高度，要和 App.vue 的 .page-nav 对齐（状态栏 + 顶栏胶囊）。 */
 .focus-hero {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: calc(100vh - var(--status-bar-height, 0px) - 136rpx);
+  min-height: calc(100vh - var(--status-bar-height, 0px) - 136rpx - 320rpx);
   box-sizing: border-box;
-  /* 上下留白相等 → 内容盒对称于整屏，两个入口落在屏幕正中。
-     底栏那 220rpx 是给悬浮 tabbar 让位的、顶栏占了 136rpx，
-     差值 (24 + 220 − 136) 补在 padding-top 上；状态栏也要从顶侧扣掉。 */
-  padding: calc(108rpx - var(--status-bar-height, 0px)) 32rpx
-           calc(24rpx + 220rpx + env(safe-area-inset-bottom, 0px));
+  /* 不写左右内边距：面板与下方卡片同宽（都只吃 .container 的 28rpx），
+     一眼看过去是"一摞卡"，而不是两套宽度叠在一起。 */
+  padding: 24rpx 0;
 }
-/* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再撑满一屏 ——
-   否则「＋ 添加组件 / 编辑首页」整块都在下一屏之后，而页面又几乎没得滚，
-   用户会以为"组件加不回来了"。这一态让 hero 退回自然高度，兜底入口就露在首屏。 */
+/* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再缩短 ——
+   这一态要的就是"面板 + 兜底入口"挤在首屏，探出量反而会把兜底入口推到折叠线下。 */
 .focus-hero.hero-empty {
   min-height: 0;
-  padding: 40rpx 32rpx 24rpx;
+  padding: 40rpx 0 24rpx;
+}
+/* hero 面板：与 .mod-list 里的卡片同款"窗体"语言（表面 + 模糊 + 发丝边 + 投影），
+   只是圆角略大、内边距略深 —— 它是这一摞卡的第一张。 */
+.focus-panel {
+  background: #ffffff;
+  background: rgba(var(--surface-rgb, 255, 255, 255), 0.72);
+  -webkit-backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
+  backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
+  border: 2rpx solid rgba(23, 32, 26, 0.08);
+  border: 2rpx solid var(--hairline, rgba(23, 32, 26, 0.08));
+  border-radius: 32rpx;
+  padding: 44rpx 36rpx 40rpx;
+  box-shadow: 0 12rpx 36rpx rgba(23, 32, 26, 0.1), 0 2rpx 8rpx rgba(23, 32, 26, 0.05);
+  box-shadow: 0 12rpx 36rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.1), 0 2rpx 8rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.05);
+  box-sizing: border-box;
 }
 .focus-keyinfo {
   text-align: center;

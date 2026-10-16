@@ -214,6 +214,28 @@ export function nativeUiStyleFor() {
   return currentFollowSystem() ? 'auto' : (currentDark() ? 'dark' : 'light');
 }
 
+// 底部系统导航条（手势条 / 三大金刚键）底色：webview 只铺到页面底边为止，
+// 再往下那一条是系统画的，窗口的 navigationBarColor 没设过就是纯白 ——
+// 换壁纸、切深色都不跟（真机 2026-10-16 反馈）。这里把窗口导航条底色
+// 同步成当前背景的实色兜底（背景图时用浅/深兜底色），换背景即时联动。
+// ⚠️ 只在 App 端走 plus.android；H5 / 小程序没有这个概念。
+function syncNavBarColor(hex) {
+  // #ifdef APP-PLUS
+  try {
+    if (typeof plus === 'undefined' || !plus.android || !hex) return;
+    const main = plus.android.runtimeMainActivity();
+    if (!main) return;
+    const win = main.getWindow();
+    // FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS：不设这个，setNavigationBarColor 不生效
+    win.addFlags(0x80000000);
+    const Color = plus.android.importClass('android.graphics.Color');
+    win.setNavigationBarColor(Color.parseColor(hex));
+  } catch (e) {
+    /* 个别 ROM 不给权限或 API 不支持：静默忽略，白条只是丑，不影响功能 */
+  }
+  // #endif
+}
+
 // 状态栏文字颜色：页面全是 custom 导航，uni.setNavigationBarColor 管不到状态栏，
 // 只能用 plus.navigator.setStatusBarStyle —— 否则深色底上状态栏图标还是黑的。
 function syncStatusBarStyle(dark) {
@@ -363,6 +385,8 @@ function applyBackground(key, image, mask, blur, dark) {
   } catch (e) {
     /* 部分端不支持，忽略 */
   }
+  // 底部系统导航条那条白的根源（见函数注释）：窗口级 navigationBarColor 跟背景走
+  syncNavBarColor(nativeBg);
   return bg;
 }
 
