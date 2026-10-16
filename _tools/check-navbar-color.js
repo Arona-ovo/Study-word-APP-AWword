@@ -52,6 +52,13 @@ console.log('== 1.5 底部遮挡：env()=0 时用实测 --safe-b 让位 ==');
 // 底部让位必须拿实测 inset（safeInsetPx）兜，否则卡片滑到最底被导航条切掉。
 assert(/--safe-b/.test(code) && /safeInsetPx/.test(code) && /safeArea/.test(code),
   'theme.js 用 safeArea 算真实底部 inset，经 rootStyle 下发 --safe-b');
+// 有 ROM 的 safeArea 会报出离谱的脏数据（真机出现过 inset≈270px：胶囊被顶到
+// 屏幕中段）。必须有合理性上限（≤96px 且 ≤屏幕高的 8%），超限丢弃并 console.warn
+// 原始值 —— 否则脏数据直接进 --safe-b，胶囊/内容被顶飞，且无从排查。
+assert(/Math\.min\(96,\s*Math\.round\(\(\(sys && sys\.screenHeight\) \|\| 800\) \* 0\.08\)\)/.test(code),
+  'safeInsetPx 有封顶：min(96px, 屏幕高的 8%)（脏 safeArea 不许进 --safe-b）');
+assert(/safe-b 超限丢弃/.test(code) && /_safeB = 0;\s*\}\s*return _safeB;/.test(code.replace(/\r\n/g, '\n')),
+  '超限的 inset 丢弃为 0（退回 env() 兜底）并 console.warn 原始值');
 const appSrc = fs.readFileSync(path.join(__dirname, '..', 'uniapp', 'App.vue'), 'utf8');
 assert(/padding-bottom:\s*calc\(220rpx \+ max\(env\(safe-area-inset-bottom\), var\(--safe-b, 0px\)\)\)/.test(appSrc),
   'App.vue .page-tabbar 底部让位用 max(env, var(--safe-b))');

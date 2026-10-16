@@ -407,22 +407,34 @@ let _safeB = -1;
 function safeInsetPx() {
   if (_safeB >= 0) return _safeB;
   _safeB = 0;
+  let sys = null;
   try {
-    if (typeof uni !== 'undefined' && uni.getSystemInfoSync) {
-      const sys = uni.getSystemInfoSync();
-      if (sys) {
-        // 首选 safeArea：bottom 之下就是系统条/手势区
-        if (sys.safeArea && sys.screenHeight) {
-          _safeB = Math.max(0, (sys.screenHeight - sys.safeArea.bottom) || 0);
-        }
-        // 兜底 safeAreaInsets（部分机型只给这个）
-        if (!_safeB && sys.safeAreaInsets && sys.safeAreaInsets.bottom) {
-          _safeB = sys.safeAreaInsets.bottom;
-        }
-      }
-    }
+    if (typeof uni !== 'undefined' && uni.getSystemInfoSync) sys = uni.getSystemInfoSync() || null;
   } catch (e) {
-    /* 拿不到系统信息就保持 0：env() 那条还在兜底 */
+    // 拿不到系统信息就保持 0：env() 那条还在兜底
+    console.warn('[theme] safeInsetPx sysinfo failed:', e);
+  }
+  let diag = '';
+  if (sys) {
+    // 首选 safeArea：bottom 之下就是系统条/手势区
+    if (sys.safeArea && sys.screenHeight) {
+      _safeB = Math.max(0, (sys.screenHeight - sys.safeArea.bottom) || 0);
+      diag = 'screenHeight=' + sys.screenHeight + ' safeArea.bottom=' + sys.safeArea.bottom;
+    }
+    // 兜底 safeAreaInsets（部分机型只给这个）
+    if (!_safeB && sys.safeAreaInsets && sys.safeAreaInsets.bottom) {
+      _safeB = sys.safeAreaInsets.bottom;
+      diag = 'safeAreaInsets.bottom=' + sys.safeAreaInsets.bottom;
+    }
+  }
+  // ⚠️ 有 ROM 的 safeArea 会报出离谱的脏数据（2026-10-16 真机：inset≈270px，
+  // 悬浮胶囊被顶到屏幕中段、hero 内容整体偏上）。真实导航条/手势区不可能
+  // 超过屏幕高的 8%（且 ≤96px）—— 超限一律视为脏数据丢弃，退回 env() 兜底，
+  // 并把原始值打进控制台（下次再飘还能看到是哪个字段报的）。
+  const cap = Math.min(96, Math.round(((sys && sys.screenHeight) || 800) * 0.08));
+  if (_safeB > cap) {
+    console.warn('[theme] safe-b 超限丢弃: ' + _safeB + 'px（cap=' + cap + 'px，' + diag + '）');
+    _safeB = 0;
   }
   return _safeB;
 }
