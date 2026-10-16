@@ -6,6 +6,15 @@
 // 两个入口随之渐隐（合成器接管，零重排）。
 // "抽屉没有实体"= 下方卡片本身就是抽屉，靠滚动淡入 + 滑出来，而非独立浮层。
 //
+// ⚠️ 第八版（2026-10-16 末）：只改了"玻璃不像玻璃"这一件事 —— 底板从 .mod-list::before
+//   搬到**外层 .mod-sheet::before**。CSS 里 backdrop root 由 opacity<1 / filter / mask /
+//   mix-blend-mode / will-change(这些) 创建：底板挂在要淡入的 .mod-list 身上时，
+//   它的 backdrop 被隔离在自己那一层里，背后只剩卡片自己 → 糊了个寂寞，
+//   看到的就是一块平涂半透明白片（用户："缺少立体感，不像苹果那种玻璃"）。
+//   拆两层后 .mod-sheet 只吃 transform（transform 建 stacking context，但**不建**
+//   backdrop root）→ 底板能一路糊到首页背景与 hero 内容。同时给玻璃加上
+//   立体四件套（顶沿内高光 / 底沿内暗边 / 整圈 hairline / 双层投影）+ 渐变表面。
+//
 // ⚠️ 第七版只改了一件事，但它是"真机完全没动画"的根因：
 //   进度**不再写 DOM**（`el.style.setProperty('--reveal', …)`），改成**响应式数据 +
 //   响应式 :style 绑定**下发。因为 App 端逻辑层**没有 document**，ref 拿到的也不是
@@ -85,10 +94,14 @@ assert(/revealP: 1/.test(home) && /revealOn: false/.test(home),
   'reveal 进度进 data（响应式），默认常显、不接手势');
 assert(/:style="listRevealStyle"/.test(home) && /:style="heroRevealStyle"/.test(home),
   '卡片与入口的样式都由 :style 绑定下发（App 端唯一可用的样式通道）');
+// 玻璃底板那一层也要走同一条通道（它吃位移，跟着卡片一起被"拉上来"）
+assert(/:style="sheetRevealStyle"/.test(home), '玻璃底板层也走 :style 绑定下发位移');
 // 内联写**真实属性**（opacity / transform）而不只是 CSS 变量：真实属性各端一定生效，
 // CSS 变量在部分端可能拿不到 —— 动画这种"看不见就等于没做"的东西不能押在变量上。
-assert(/opacity: String\(p\)/.test(home) && /translate3d/.test(home),
-  '卡片内联写真实 opacity / transform（不依赖 CSS 变量，各端一定生效）');
+assert(/opacity: String\(this\.revealP\)/.test(home),
+  '卡片内联写真实 opacity（不依赖 CSS 变量，各端一定生效）');
+assert(/transform: 'translate3d/.test(home),
+  '底板层内联写真实 transform（不依赖 CSS 变量，各端一定生效）');
 assert(/opacity: \(1 - fade\)\.toFixed\(3\)/.test(home),
   '入口内联写真实 opacity（卡片出来→入口淡出，滑回去→入口回来）');
 // 非焦点 / 没卡（全收纳）必须常显、入口不淡出：那一屏全靠入口，淡掉就是空屏。
@@ -206,22 +219,50 @@ console.log('== 3. hero 形态：铺满一屏 + 裸按钮入口渐隐 + 卡片�
   // （布局）保证，绝不靠 CSS 把初值锁 0 —— 否则 onPageScroll 一不触发就永久隐藏（真机已踩）。
   assert(/--reveal:\s*1/.test(list), 'mod-list 默认 --reveal:1（卡片常显；藏卡只靠布局，不靠 opacity）');
   assert(/opacity:\s*var\(--reveal/.test(list), 'mod-list 透明度随 --reveal 变化（淡入）');
-  assert(/transform:\s*translateY/.test(list) && /--reveal/.test(list),
-    'mod-list 随 --reveal 上移（滑出感）');
+  // 位移不在这一层了：放在外层 .mod-sheet（下面第 3 组单独守），
+  // 因为带 opacity 的层不能同时当玻璃底板的宿主（会把 backdrop 隔离）。
   // 抽屉感①：这摞卡要**落后于滚动**才看得出"被拉上来"（视差）。
   // 之前只有 56rpx，跟着页面一起平移 → 真机反馈"没有任何动画、层级和首页没区别"。
-  const slide = (list.match(/translateY\([^)]*\(1 - var\(--reveal, 1\)\) \* (\d+)rpx\)/) || [])[1];
+  // ⚠️ 位移在**外层 .mod-sheet** 上（底板跟着卡片一起走），不在 .mod-list 上。
+  const sheet = rule('.mod-sheet');
+  assert(sheet.length > 0, '存在 .mod-sheet 规则（玻璃底板的宿主层）');
+  const slide = (sheet.match(/translateY\([^)]*\(1 - var\(--reveal, 1\)\) \* (\d+)rpx\)/) || [])[1];
   assert(Number(slide) >= 140,
-    'mod-list 的上滑视差 ≥140rpx（太小就跟页面同速平移，看不出抽屉被拉上来）');
-  // 抽屉感②：整摞卡共用一张毛玻璃底板（缝隙里露出被模糊的首页背景）→ 另一层的证据。
-  const veil = rule('.mod-list::before');
-  assert(/backdrop-filter/.test(veil) && /--glass-lg/.test(veil),
-    'mod-list::before 是毛玻璃底板（卡片缝隙露出被模糊的首页背景）');
-  assert(/opacity:\s*var\(--reveal/.test(veil),
-    '底板透明度随 --reveal 淡入（不能逐帧改 blur 半径，那是掉帧老路）');
+    '抽屉的上滑视差 ≥140rpx（太小就跟页面同速平移，看不出抽屉被拉上来）');
+  // ⚠️ 底板宿主层**绝不能带 opacity**：backdrop root 由 opacity<1 / filter / mask /
+  //    mix-blend-mode / will-change(这些) 创建，一带上，底板的 backdrop-filter 就只能
+  //    糊到自己这一层里（背后只剩卡片自己）→ 糊了个寂寞，看着就是一块平涂半透明白片。
+  //    这正是 2026-10-16 用户"玻璃缺少立体感、不像苹果那种"的根因。
+  assert(!/opacity|filter:|mask|mix-blend-mode/.test(sheet),
+    '底板宿主层不带 opacity / filter / mask（否则 backdrop 被隔离，玻璃糊不到首页内容）');
+  assert(!/\.mod-list::before/.test(css),
+    '底板不再挂在 .mod-list 上（.mod-list 带淡入 opacity，会把 backdrop 隔离在自己层里）');
+  // 抽屉感②：整摞卡共用一张玻璃底板（缝隙里露出被模糊的首页内容）→ 另一层的证据。
+  const veil = rule('.mod-sheet::before');
+  assert(veil.length > 0, '存在 .mod-sheet::before 玻璃底板规则');
+  assert(/backdrop-filter/.test(veil) && /--glass-sheet/.test(veil),
+    'mod-sheet::before 是玻璃底板（卡片缝隙露出被模糊的首页内容）');
+  assert(!/opacity/.test(veil),
+    '底板自身不带 opacity（一有就把 backdrop 隔离，玻璃感全废；出场靠位移）');
+  // 立体感四件套：顶沿内高光（最关键的一条）+ 底沿内暗边（厚度）+ 整圈 hairline +
+  // 双层外投影。只有"半透明 + 一层投影"就是一块灰片，不是玻璃。
+  assert((veil.match(/inset/g) || []).length >= 3,
+    '底板至少三道 inset（顶沿高光 / 底沿暗边 / 整圈描边）→ 玻璃才有厚度与朝向');
+  assert((veil.match(/box-shadow[^;]*0 -2rpx|box-shadow[^;]*-2rpx/g) || []).length > 0,
+    '外投影是双层的（近层紧实 + 远层扩散 → 真的浮起来）');
+  assert(/background-image/.test(veil) && /gradient/.test(veil),
+    '玻璃表面是渐变而不是平涂（有明暗过渡才像一块有朝向的玻璃）');
   assert(/box-shadow/.test(veil) && /border-radius/.test(veil),
-    '底板带上沿投影与圆角（抽屉是从下面推上来的）');
+    '底板带投影与圆角（抽屉是从下面推上来的）');
   assert(/pointer-events:\s*none/.test(veil), '底板不吃点击');
+  // App.vue 的 .bg-flat 会 !important 关掉所有 backdrop-filter（背景是平滑渐变时
+  // 糊背景赚不到观感）。但底板背后是**首页内容**，必须抢回来；同时给流畅模式兜底。
+  assert(/\.bg-flat \.mod-sheet::before[\s\S]{0,300}!important/.test(css),
+    'bg-flat（无自定义背景图）下底板的模糊要抢回来（它糊的是首页内容，不是背景）');
+  assert(/\.perf-smooth \.mod-sheet::before/.test(css),
+    '流畅模式给底板兜底（关掉模糊时要抬起本体色，不能剩一层 14% 的白）');
+  assert(css.indexOf('.bg-flat .mod-sheet::before') < css.indexOf('.perf-smooth .mod-sheet::before'),
+    'perf-smooth 那条排在 bg-flat 之后（同特异性，后者覆盖前者）');
   assert(!/transition[^;{}]*(min-height|max-height|padding)/.test(list),
     'mod-list 不接任何重排型过渡（只动 opacity / transform）');
   // 逆向契约：绝不允许"CSS 强制藏卡"的类/初值 0（那是上一版卡死隐藏的根）

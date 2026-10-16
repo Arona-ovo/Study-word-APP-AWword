@@ -454,6 +454,27 @@ if (settings.defaults && settings.defaults().theme.progressSync === true) {
   // 窗体必须保持半透明毛玻璃（不能被改成不透明）
   if (/var\(--surface-rgb[^)]*\)\s*,\s*0?\.\d+\)/.test(appVue) && /backdrop-filter/.test(appVue)) ok('.card / .glass 仍是半透明 + 背景模糊');
   else bad('窗体被改成了不透明（应保留毛玻璃）');
+  // 玻璃三档：卡片 sm / 顶栏底栏 lg / 首页抽屉底板 sheet（2026-10-16 新增）。
+  // sheet 必须比 lg 更狠（大面积才吃得住"隔着一层玻璃"的观感），
+  // 且跟 sm / lg 同一套开关：glass:off 时三档一起退回 none。
+  {
+    const st = theme.rootStyle();
+    const px = (v) => Number((String(v).match(/blur\((\d+(?:\.\d+)?)px\)/) || [])[1]);
+    const lg = px(st['--glass-lg']);
+    const sheet = px(st['--glass-sheet']);
+    if (st['--glass-sm'] && st['--glass-lg'] && st['--glass-sheet']) ok('rootStyle 下发三档玻璃变量（sm / lg / sheet）');
+    else bad('rootStyle 少下了玻璃档位：' + JSON.stringify([st['--glass-sm'], st['--glass-lg'], st['--glass-sheet']]));
+    if (sheet > lg) ok('抽屉底板那档比卡片档更狠（' + sheet + 'px > ' + lg + 'px，大面积才吃得住）');
+    else bad('抽屉底板档没有比卡片档更狠：sheet=' + sheet + ' lg=' + lg);
+    if (sheet <= 30) ok('抽屉底板档有上限（≤30px，不糊成一片死白）');
+    else bad('抽屉底板档没有封顶：' + sheet);
+    // 关掉玻璃（glass:off）时三档必须一起 none：否则"关了毛玻璃"还留一块真玻璃
+    settings.set({ performance: { fx: { glass: 'off' } } });
+    const off = theme.rootStyle();
+    settings.set({ performance: { fx: { glass: 'full' } } });
+    if (off['--glass-sheet'] === 'none') ok('glass:off 时抽屉档一起退回 none（不偷偷留一块真玻璃）');
+    else bad('glass:off 时抽屉档没关：' + off['--glass-sheet']);
+  }
 
   console.log(fail === 0 ? '\n外观主题全部通过' : '\n存在 ' + fail + ' 项失败');
   process.exitCode = fail === 0 ? 0 : 1;

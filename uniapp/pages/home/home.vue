@@ -254,7 +254,16 @@
 
     <!-- 首页模块：按用户保存的顺序渲染；编辑态显示拖拽手柄与收纳按钮。
          焦点模式下它们排在首屏之后：往上滑就看到了，不需要显隐开关。
-         底部「编辑首页」在最后一张卡下面，所以只有滑到底才会出现。 -->
+         底部「编辑首页」在最后一张卡下面，所以只有滑到底才会出现。
+         ⚠️ .mod-sheet 是玻璃底板的宿主层，必须独立在 .mod-list 之外：
+            CSS 里 backdrop root 由 filter / opacity<1 / mask / mix-blend-mode /
+            will-change(上述) 创建 —— .mod-list 要淡入就必然带 opacity<1，
+            底板挂在它身上时 backdrop 被隔离在那一个层里，背后只剩卡片自己，
+            于是"糊了个寂寞"（看到的就是一块平涂半透明白片 = 没有立体感）。
+            拆两层后：.mod-sheet 只吃 transform（transform 建 stacking context，
+            但**不建** backdrop root）→ 底板能一路糊到首页背景与 hero 内容；
+            淡入的 opacity 留在 .mod-list（卡片自己），不再牵连底板。 -->
+    <view class="mod-sheet" :style="sheetRevealStyle">
     <view
       class="mod-list"
       :style="listRevealStyle"
@@ -389,6 +398,7 @@
         <text class="home-empty-text">{{ $t('首页空空如也') }}</text>
         <text class="home-empty-link" @tap="toggleEdit">{{ $t('编辑首页，把组件加回来') }}</text>
       </view>
+    </view>
     </view>
 
     <!-- 底部操作行：非编辑态只留一个入口，保持简洁 -->
@@ -702,15 +712,23 @@ export default {
     //    真实属性在 uni-app 各端一定生效，CSS 变量只是锦上添花。
     // ⚠️ 单位是 px 不是 rpx：uni-app 只转换 CSS 文件里的 rpx，内联样式不转换。
     //    revealOn 为 false 时返回空对象 → 卡片 / 入口回到 CSS 里的静态默认值。
-    listRevealStyle() {
+    // 玻璃底板那一层：只给 transform（视差 + 缩放）。
+    // ⚠️ 这一层**绝不能带 opacity**：opacity<1 会让它自成 backdrop root，
+    //    底板的 backdrop-filter 就糊不到首页内容了（玻璃感全废，见 .mod-sheet 注释）。
+    //    底板的"出场"靠它随滚动从屏幕下方推上来（苹果的 sheet 也是靠位移，不靠淡入）。
+    sheetRevealStyle() {
       if (!this.revealOn) return {}
       const p = this.revealP
       const off = ((1 - p) * this._parallaxPx).toFixed(1)
       const sc = (0.955 + 0.045 * p).toFixed(4)
       return {
-        opacity: String(p),
         transform: 'translate3d(0,' + off + 'px,0) scale(' + sc + ')'
       }
+    },
+    // 卡片那一层：只淡入（位移在上层 .mod-sheet 上，底板跟着一起被拉上来）
+    listRevealStyle() {
+      if (!this.revealOn) return {}
+      return { opacity: String(this.revealP) }
     },
     heroRevealStyle() {
       if (!this.revealOn) return {}
@@ -2851,28 +2869,37 @@ export default {
 .stat-item:active .stat-num { opacity: 0.6; }
 
 /* ---------- 首页模块编辑（拖拽 / 收纳） ---------- */
-.mod-list {
+/* 玻璃底板的宿主层：只负责"抽屉被拉上来"的位移与缩放。
+   ⚠️ 这一层**不许带 opacity / filter / mask / mix-blend-mode / will-change(这些)**：
+      它们会把底板的 backdrop 隔离在这一层里 → backdrop-filter 糊不到首页内容
+      （看到的就是一块平涂半透明白片，正是"没有立体感"的根因）。
+      transform 只建 stacking context、**不建** backdrop root，所以可以放心用。 */
+.mod-sheet {
   position: relative;
-  /* 焦点模式：卡片随上滑淡入 + 上移（滚动时 syncReveal 把进度推进 --reveal）。
-     静止态默认 --reveal:1（卡片常显）——"首屏看不到卡片"靠 hero 铺满到屏幕底边
-     （布局）保证，与 opacity 无关；绝不靠 CSS 把初值锁 0（JS 没覆盖就永久隐藏，已踩坑）。
-     ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
-  --reveal: 1;
-  opacity: var(--reveal, 1);
   /* 抽屉感①：这摞卡**落后于滚动**上滑（视差 220rpx）——滑的时候能看见它
      从下面被"拉上来"，而不是跟着页面一起平移（那看着就是同一层）。
      再加一点点缩放：卡片是从"后面"被推上来的，不是原地淡入。
-     ⚠️ 运行时由 listRevealStyle 的内联样式覆盖（App 端没有 CSS 变量的写入通道，
+     ⚠️ 运行时由 sheetRevealStyle 的内联样式覆盖（App 端没有 CSS 变量的写入通道，
         内联必须自己给出完整值）；这条只作为 JS 没跑时的静态兜底。
-     ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
+     ⚠️ 只用 transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
   transform: translateY(calc((1 - var(--reveal, 1)) * 220rpx))
              scale(calc(0.955 + 0.045 * var(--reveal, 1)));
-  will-change: opacity, transform;
 }
-/* 抽屉感②：整摞卡共用一张**毛玻璃底板** —— 卡片之间的缝隙、上下边缘露出
-   被模糊的首页背景，一眼就看出"这是浮在首页之上的另一层"（不是接排下去的）。
-   ⚠️ 只动 opacity（跟着 --reveal 淡入）；绝不逐帧改 blur 半径，那是掉帧的老路。 */
-.mod-list::before {
+/* 卡片层：只负责淡入（位移在上层 .mod-sheet，底板跟着一起被拉上来）。
+   静止态默认 --reveal:1（卡片常显）——"首屏看不到卡片"靠 hero 铺满到屏幕底边
+   （布局）保证，与 opacity 无关；绝不靠 CSS 把初值锁 0（JS 没覆盖就永久隐藏，已踩坑）。 */
+.mod-list {
+  position: relative;
+  --reveal: 1;
+  opacity: var(--reveal, 1);
+}
+/* 抽屉感②：整摞卡共用一张**玻璃底板** —— 卡片之间的缝隙、上下边缘露出
+   被模糊的首页内容（按钮 / 文字滑过它底下会被糊掉），一眼就看出"这是浮在
+   首页之上的另一层"（不是接排下去的）。
+   ⚠️ 这块**不能带 opacity**（见 .mod-sheet 注释：一带就把 backdrop 隔离了）；
+      它的出场靠"随滚动从屏幕下方推上来"，跟苹果的 sheet 一样，不靠淡入。
+   ⚠️ 绝不逐帧改 blur 半径（那是掉帧的老路），模糊半径恒定。 */
+.mod-sheet::before {
   content: '';
   position: absolute;
   /* 撑到屏幕两边：底板比卡片宽，边缘才像"抽屉的边" */
@@ -2882,15 +2909,55 @@ export default {
   bottom: -28rpx;
   z-index: -1;
   border-radius: 36rpx;
-  background: #ffffff;
-  background: rgba(var(--surface-rgb, 255, 255, 255), 0.16);
-  -webkit-backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
-  backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
-  /* 上沿投影：抽屉是从下面推上来的，顶边要有"抬起来"的影子。
-     2026-10-16 加重（10→14rpx、0.14→0.2）：原来的影子太淡，真机上看不出分层。 */
-  box-shadow: 0 -14rpx 44rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.2);
-  opacity: var(--reveal, 1);
+  /* 玻璃本体色（跟着主题走） */
+  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.14);
+  /* 表面：光从上方来 —— 顶部一团环境反光 + 自上而下"亮 → 透 → 底部压暗"。
+     平涂半透明看着就是一块灰片；有明暗过渡才是一块"有厚度、有朝向"的玻璃。 */
+  background-image:
+    radial-gradient(120% 74% at 50% -12%,
+      rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 62%),
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.26) 0%,
+      rgba(255, 255, 255, 0.07) 38%,
+      rgba(255, 255, 255, 0) 64%,
+      rgba(var(--shadow-rgb, 23, 32, 26), 0.05) 100%);
+  /* 底板比卡片糊得狠一点（20px vs 卡片 12px）：大面积才吃得住，也更接近苹果的 sheet */
+  -webkit-backdrop-filter: var(--glass-sheet, blur(20px) saturate(190%));
+  backdrop-filter: var(--glass-sheet, blur(20px) saturate(190%));
+  /* 立体感四件套：
+     ① 顶沿内高光 —— 玻璃上缘接光的那道亮线（立体感最明显的一条）
+     ② 底沿内暗边 —— 给玻璃一点"厚度"
+     ③ 整圈 hairline 内描边 —— 边缘折射亮边；比 border 更贴圆角，还不占位
+     ④ 双层外投影 —— 近层紧实（贴边）+ 远层扩散（抬起），真的"浮"起来 */
+  box-shadow:
+    inset 0 1.5rpx 0 rgba(255, 255, 255, 0.6),
+    inset 0 -1.5rpx 0 rgba(var(--shadow-rgb, 23, 32, 26), 0.08),
+    inset 0 0 0 1rpx rgba(255, 255, 255, 0.32),
+    0 -2rpx 10rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.1),
+    0 -16rpx 48rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.22);
   pointer-events: none;
+}
+/* ⚠️ App.vue 的 .bg-flat 会用 !important 关掉**所有** backdrop-filter —— 理由是
+   "背景是平滑渐变时，糊了也看不出差别、白付逐帧成本"。抽屉底板是唯一的反例：
+   它背后不是背景，是**首页内容**（按钮 / 文字会滑过它底下），糊掉那些才是玻璃。
+   所以这块必须用同等级别的 !important 抢回来。只有一块、面积有界，
+   成本跟已经开白的顶栏 / 底栏一个量级，不是几十张卡片那种量。 */
+.bg-flat .mod-sheet::before {
+  -webkit-backdrop-filter: var(--glass-sheet, blur(20px) saturate(190%)) !important;
+  backdrop-filter: var(--glass-sheet, blur(20px) saturate(190%)) !important;
+}
+/* 流畅模式（低端机退路）：不模糊 = 一块半透明白片 → 抬起本体色退回接近实心，
+   立体感由高光 / 描边 / 投影撑住（跟 App.vue 对 .card 的处理是一个思路）。
+   ⚠️ 必须排在 .bg-flat 那条**之后**：两条特异性相同，谁在后谁生效。 */
+.perf-smooth .mod-sheet::before {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.6);
+}
+/* 不支持 backdrop-filter 的老 WebView：同样退回接近实心，
+   否则只剩一层 14% 的白，卡片会"浮在空气里"。 */
+@supports not (((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) or (-webkit-backdrop-filter: blur(1px))) {
+  .mod-sheet::before { background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.62); }
 }
 
 .mod-wrap { position: relative; }

@@ -647,6 +647,10 @@ export function rootStyle() {
     // 变量（App 端样式隔离的情况），观感自动退回改造前的样子。
     '--glass-sm': glassFilter(fx.blurSm, fx.glass),
     '--glass-lg': glassFilter(fx.blurLg, fx.glass),
+    // 首页抽屉底板专用：面积大得多（整摞卡一整块），卡片那档 12px 糊不出
+    // "隔着一层玻璃"的感觉，所以要更狠；但仍按 lg 等比缩放 → 轻量 / 极简档
+    // 自动跟着变淡，glass:off 也照样退回 none（跟上面两档同一套开关）。
+    '--glass-sheet': glassFilter(Math.min(30, Math.round(fx.blurLg * 1.7)), fx.glass),
     // 字体与密度：AI 指令 theme.set 改的就是这两个，靠变量下发才有实际观感
     '--app-font': FONT_STACKS[currentFont()] || FONT_STACKS.system,
     '--app-gap': DENSITY_GAP[currentDensity()] || DENSITY_GAP.cozy
