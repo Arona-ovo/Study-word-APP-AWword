@@ -584,6 +584,9 @@ uni-tabbar,
 .page-tabbar {
   padding-bottom: calc(220rpx + constant(safe-area-inset-bottom));
   padding-bottom: calc(220rpx + env(safe-area-inset-bottom));
+  /* Android webview 常报 env()=0，但系统导航条画在 webview 上面 → 实测 inset 兜底
+     （theme.js 的 rootStyle 下发 --safe-b；没有这行，卡片滑到最底会被导航条切掉） */
+  padding-bottom: calc(220rpx + max(env(safe-area-inset-bottom), var(--safe-b, 0px)));
 }
 
 /* 使用自定义悬浮顶栏（components/float-navbar）的页面：顶部预留状态栏 + 胶囊高度 */

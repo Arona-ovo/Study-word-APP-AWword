@@ -46,6 +46,18 @@ assert(/console\.warn\(/.test(fnBody),
 // plus 晚于 apply 就绪时（启动时序），syncNavBarColor 会被守卫挡掉 → 必须补刷一次。
 assert(/plusready/.test(code),
   'theme.init 里挂 plusready 补刷 apply（plus 晚就绪时窗口级同步不能漏掉）');
+
+console.log('== 1.5 底部遮挡：env()=0 时用实测 --safe-b 让位 ==');
+// webview 通铺到屏幕底、系统导航条画在它上面；Android webview 常报 env()=0 →
+// 底部让位必须拿实测 inset（safeInsetPx）兜，否则卡片滑到最底被导航条切掉。
+assert(/--safe-b/.test(code) && /safeInsetPx/.test(code) && /safeArea/.test(code),
+  'theme.js 用 safeArea 算真实底部 inset，经 rootStyle 下发 --safe-b');
+const appSrc = fs.readFileSync(path.join(__dirname, '..', 'uniapp', 'App.vue'), 'utf8');
+assert(/padding-bottom:\s*calc\(220rpx \+ max\(env\(safe-area-inset-bottom\), var\(--safe-b, 0px\)\)\)/.test(appSrc),
+  'App.vue .page-tabbar 底部让位用 max(env, var(--safe-b))');
+const ftbSrc = fs.readFileSync(path.join(__dirname, '..', 'uniapp', 'components', 'float-tabbar', 'float-tabbar.vue'), 'utf8');
+assert(/padding-bottom:\s*calc\(20rpx \+ max\(env\(safe-area-inset-bottom\), var\(--safe-b, 0px\)\)\)/.test(ftbSrc),
+  'float-tabbar 胶囊自己也让位 max(env, var(--safe-b))（否则下半截被导航条压住）');
 assert(/importClass\('android\.graphics\.Color'\)/.test(fnBody) && /Color\.parseColor/.test(fnBody),
   'importClass 拿 android.graphics.Color 再 parseColor');
 assert(/win\.setNavigationBarColor\(/.test(fnBody), '最终落到窗口 setNavigationBarColor');

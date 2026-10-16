@@ -190,6 +190,9 @@ export default {
   padding: 0 24rpx;
   padding-bottom: calc(20rpx + constant(safe-area-inset-bottom));
   padding-bottom: calc(20rpx + env(safe-area-inset-bottom));
+  /* Android webview 常报 env()=0，系统导航条却画在 webview 上面 → 实测 inset 兜底
+     （theme.js rootStyle 下发 --safe-b）；否则胶囊下半截被导航条压住 */
+  padding-bottom: calc(20rpx + max(env(safe-area-inset-bottom), var(--safe-b, 0px)));
   pointer-events: none;
 }
 

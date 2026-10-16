@@ -3097,6 +3097,9 @@ export default {
      ⚠️ 136rpx / 220rpx 要和 App.vue 的 .page-nav / .page-tabbar 对齐。 */
   padding: calc(108rpx - var(--status-bar-height, 0px)) 0
            calc(24rpx + 220rpx + env(safe-area-inset-bottom, 0px));
+  /* 同 .page-tabbar：env() 在 Android webview 常报 0，用实测 --safe-b 兜底，
+     否则两个入口的"正中"会往系统导航条里偏 */
+  padding-bottom: calc(24rpx + 220rpx + max(env(safe-area-inset-bottom, 0px), var(--safe-b, 0px)));
 }
 /* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再缩短 ——
    这一态要的就是"面板 + 兜底入口"挤在首屏，探出量反而会把兜底入口推到折叠线下。 */

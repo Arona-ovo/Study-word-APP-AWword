@@ -396,6 +396,37 @@ function applyBackground(key, image, mask, blur, dark) {
   return bg;
 }
 
+// ---------- 底部系统导航条 / 手势区的真实高度（--safe-b） ----------
+// App 端 webview 是通铺到屏幕底的（float-tabbar 探针 screen==window），
+// 系统导航条画在 webview **上面**：env(safe-area-inset-bottom) 在不少 Android
+// webview 里恒为 0 —— 靠它让位，卡片滑到最底会钻进导航条底下被切掉
+// （2026-10-16 真机："底部那条染成背景色后开始遮挡卡片"）。
+// 这里用系统信息算真实 inset，经 rootStyle() 以 --safe-b 下发；
+// 消费方一律 max(env(...), var(--safe-b, 0px))：env 报对了用它，报 0 用实测值。
+let _safeB = -1;
+function safeInsetPx() {
+  if (_safeB >= 0) return _safeB;
+  _safeB = 0;
+  try {
+    if (typeof uni !== 'undefined' && uni.getSystemInfoSync) {
+      const sys = uni.getSystemInfoSync();
+      if (sys) {
+        // 首选 safeArea：bottom 之下就是系统条/手势区
+        if (sys.safeArea && sys.screenHeight) {
+          _safeB = Math.max(0, (sys.screenHeight - sys.safeArea.bottom) || 0);
+        }
+        // 兜底 safeAreaInsets（部分机型只给这个）
+        if (!_safeB && sys.safeAreaInsets && sys.safeAreaInsets.bottom) {
+          _safeB = sys.safeAreaInsets.bottom;
+        }
+      }
+    }
+  } catch (e) {
+    /* 拿不到系统信息就保持 0：env() 那条还在兜底 */
+  }
+  return _safeB;
+}
+
 // 统一应用（主题色 + 背景 + 深色）
 export function apply() {
   const dark = isDark();
@@ -595,6 +626,9 @@ export function rootStyle() {
     '--bg-img': image ? 'url("' + cssImageUrl(image) + '")' : (/gradient/.test(bgCss) ? bgCss : 'none'),
     '--bg-mask': maskColorOf(dark, currentMask()),
     '--bg-blur': b,
+    // 底部系统条 / 手势区的真实高度：Android webview 常报 env()=0，
+    // 但导航条实实在在画在 webview 上面 —— 底部让位必须用它兜（见 safeInsetPx 注释）
+    '--safe-b': safeInsetPx() + 'px',
     // 窗体的毛玻璃：两档半径（卡片级 sm / 顶栏底栏弹窗级 lg）。
     // 全项目 120 多处 backdrop-filter 都写成 var(--glass-sm, 原值)，所以改档位
     // 只需要改这两个变量，不必碰任何一个组件。带了原值兜底：万一某端没继承到
