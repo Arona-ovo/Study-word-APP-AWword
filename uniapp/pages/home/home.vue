@@ -270,8 +270,12 @@
           class="mod-wrap"
           :class="{ 'is-drag': dragIndex === i, 'is-editing': editing }"
           :style="wrapStyle(i)"
-          v-if="!isActionInFocus(c)"
+          v-show="!isActionInFocus(c)"
         >
+        <!-- ⚠️ 这里必须是 v-show 而不是 v-if：Vue 3 里 v-if 与 v-for 同元素时
+             v-if 先求值、拿不到 c（真机报 "Property c was accessed during render"），
+             且会让 isActionInFocus(c) 恒 false → 焦点模式藏不住 action 卡。
+             v-show 在循环体内逐项求值，作用域正确，只是 display:none。 -->
         <!-- 编辑态遮罩：屏蔽模块内部点击（换词书 / 主按钮 / 小组件链接），只留手柄与收纳可点 -->
         <view v-if="editing" class="mod-shield"></view>
 
@@ -957,38 +961,41 @@ export default {
     // 手势与下方卡片连贯统一。只动 opacity / transform（合成器接管，零重排，不掉帧）。
     this.syncReveal()
   },
-  // 计算卡片淡入进度并写进 CSS 变量（非响应式直接写 DOM，避免逐帧重渲染）。
-  // 进度按"卡片真实入屏高度"算：卡片下沿刚进视口 → 0，再上移 320rpx → 1；
-  // 一旦入屏就稳定在 1 —— **就算 onPageScroll 此后不再触发，卡片也早已全显**，
-  // 绝不会卡在隐藏态（上一版靠 .reveal-idle 类把初值锁 0，JS 没覆盖就永久隐藏，已废弃）。
-  // 非焦点 / 没卡片（兜底态）一律 --reveal:1（卡片常显，不接手势）。
-  // ⚠️ 静止态的"藏卡"由 hero 铺满到屏幕底边（布局）保证，与 opacity 无关。
-  syncReveal() {
-    const refs = this.$refs || {}
-    const ref = refs.modList
-    const el = this._listEl || (ref && (ref.$el || ref))
-    if (!el) return
-    this._listEl = el
-    if (!this.isFocus || !this.renderCards || !this.renderCards.length) {
-      el.style.setProperty('--reveal', '1')
-      return
-    }
-    // 320 = 淡入距离（rpx）：卡片从"刚进视口"到"上移 320rpx"这段里由 0→1
-    const vh = this._vh || ((typeof window !== 'undefined' && window.innerHeight) || 0)
-    let p = 1
-    if (vh && typeof el.getBoundingClientRect === 'function') {
-      const rect = el.getBoundingClientRect()
-      p = (vh - rect.top) / 320
-      p = p < 0 ? 0 : p > 1 ? 1 : p
-    }
-    el.style.setProperty('--reveal', p.toFixed(3))
-  },
   watch: {
     // 形态切换 / 卡片增减都要重新对齐 reveal（否则切到卡片平铺还停在 0 → 卡片消失）
     isFocus() { this.syncReveal() },
     renderCards() { this.syncReveal() },
   },
   methods: {
+    // 计算卡片淡入进度并写进 CSS 变量（非响应式直接写 DOM，避免逐帧重渲染）。
+    // 进度按"卡片真实入屏高度"算：卡片下沿刚进视口 → 0，再上移 320rpx → 1；
+    // 一旦入屏就稳定在 1 —— **就算 onPageScroll 此后不再触发，卡片也早已全显**，
+    // 绝不会卡在隐藏态（上一版靠 .reveal-idle 类把初值锁 0，JS 没覆盖就永久隐藏，已废弃）。
+    // 非焦点 / 没卡片（兜底态）一律 --reveal:1（卡片常显，不接手势）。
+    // ⚠️ 静止态的"藏卡"由 hero 铺满到屏幕底边（布局）保证，与 opacity 无关。
+    // ⚠️ 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
+    //    放到 methods 外（和生命周期选项平级）它就不是实例方法 → 真机报
+    //    "this.syncReveal is not a function"（2026-10-16 真踩）。
+    syncReveal() {
+      const refs = this.$refs || {}
+      const ref = refs.modList
+      const el = this._listEl || (ref && (ref.$el || ref))
+      if (!el) return
+      this._listEl = el
+      if (!this.isFocus || !this.renderCards || !this.renderCards.length) {
+        el.style.setProperty('--reveal', '1')
+        return
+      }
+      // 320 = 淡入距离（rpx）：卡片从"刚进视口"到"上移 320rpx"这段里由 0→1
+      const vh = this._vh || ((typeof window !== 'undefined' && window.innerHeight) || 0)
+      let p = 1
+      if (vh && typeof el.getBoundingClientRect === 'function') {
+        const rect = el.getBoundingClientRect()
+        p = (vh - rect.top) / 320
+        p = p < 0 ? 0 : p > 1 ? 1 : p
+      }
+      el.style.setProperty('--reveal', p.toFixed(3))
+    },
     // ---------- 新版本提示弹窗 ----------
     // 启动那次自检只负责"查到"，把结果落到 storage（updater.noteUpdate），
     // 弹不弹由首页决定 —— 引导 / 关联询问同时在场时不抢，下次进首页再问。

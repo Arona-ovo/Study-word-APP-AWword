@@ -147,7 +147,11 @@ const eq = (a, b, label) => {
   assert(/uni\.\$off\(\s*'theme:change'/.test(mixinSrc), 'theme-mixin 在 onUnload 里退订（避免重复订阅）');
   // onThemeChange 回调里要把新值落盘，否则关掉跟随时会停在旧值
   const themeSrc = read('utils/theme.js');
-  assert(/onThemeChange\(\(res\)[\s\S]{0,200}settings\.set\(\{\s*theme:\s*\{\s*dark:/.test(themeSrc),
+  // 窗口 200 → 320（2026-10-16）：回调里在 settings.set 之前有一句
+  // "不跟随就 return" 的守卫 + 一行说明注释，实到 216 字符。窗口太小会因为
+  // 注释多写两行就误报（这次是它先红了才发现）—— 断言要测的是"落盘发生过"，
+  // 不是"落盘发生在多少个字以内"。
+  assert(/onThemeChange\(\(res\)[\s\S]{0,320}settings\.set\(\{\s*theme:\s*\{\s*dark:/.test(themeSrc),
     'uni.onThemeChange 回调把新 theme 写回设置');
 
   /* ================= B. 渲染开销 ================= */

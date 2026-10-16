@@ -225,13 +225,19 @@ function syncNavBarColor(hex) {
     if (typeof plus === 'undefined' || !plus.android || !hex) return;
     const main = plus.android.runtimeMainActivity();
     if (!main) return;
+    // ⚠️ plus.android 桥接规矩：方法调用拿到的 Java 对象必须先 importClass，
+    //    才能调它自己的方法 —— 漏了这一步会在 addFlags 处抛异常，被 try 吞掉，
+    //    表现就是"改了等于没改"（2026-10-16 真机白条还在的原因之一）。
+    plus.android.importClass(main);
     const win = main.getWindow();
+    plus.android.importClass(win);
     // FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS：不设这个，setNavigationBarColor 不生效
     win.addFlags(0x80000000);
     const Color = plus.android.importClass('android.graphics.Color');
     win.setNavigationBarColor(Color.parseColor(hex));
   } catch (e) {
-    /* 个别 ROM 不给权限或 API 不支持：静默忽略，白条只是丑，不影响功能 */
+    // 不能完全静默：基座控制台要能看到失败原因（白条只是丑，不影响功能）
+    console.warn('[theme] syncNavBarColor failed:', (e && e.message) || e);
   }
   // #endif
 }
@@ -664,6 +670,15 @@ export function clearBgImage() {
 // 启动时调用：恢复上次选择的外观，并监听系统主题变化
 export function init() {
   apply();
+  // plus 可能晚于本次 apply 才就绪：那时 syncNavBarColor 的守卫会直接 return，
+  // 窗口级同步（底部导航条底色）就永远差这一次 → 补刷，否则白条修不掉。
+  // #ifdef APP-PLUS
+  try {
+    if (typeof plus === 'undefined' && typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('plusready', () => { try { apply() } catch (e) {} }, { once: true });
+    }
+  } catch (e) {}
+  // #endif
   initStatusBarVar();
   watchSystemTheme();
   return {

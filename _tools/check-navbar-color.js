@@ -30,8 +30,22 @@ assert(/typeof plus === 'undefined' \|\| !plus\.android/.test(fnBody),
   '调用前判 plus 与 plus.android 存在（H5 / 小程序端不会走进来）');
 assert(/try\s*{/.test(fnBody) && /catch/.test(fnBody), '整段包 try/catch（个别 ROM 不给权限也不能炸主线程）');
 assert(/runtimeMainActivity\(\)/.test(fnBody) && /getWindow\(\)/.test(fnBody), '走 plus.android.runtimeMainActivity 取窗口');
+// plus.android 桥接规矩：方法调用拿到的 Java 对象必须先 importClass 才能调它的方法。
+// 漏了 importClass(main)/importClass(win) 会在 addFlags 处抛异常被 try 吞掉 →
+// 表现是"改了等于没改"（2026-10-16 真机白条还在的原因之一）。
+assert(/importClass\(main\)/.test(fnBody) && /importClass\(win\)/.test(fnBody),
+  '对 main / win 先 importClass（否则调它们的方法直接抛异常，被 try 吞掉等于没改）');
+const flagsAt = fnBody.indexOf('addFlags(0x80000000)');
+const impAt = fnBody.indexOf('importClass(win)');
+assert(flagsAt >= 0 && impAt >= 0 && impAt < flagsAt,
+  'importClass(win) 在 addFlags 之前（顺序反了照样抛异常）');
 assert(/addFlags\(0x80000000\)/.test(fnBody),
   '加 FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS（不设这个 flag，setNavigationBarColor 不生效）');
+assert(/console\.warn\(/.test(fnBody),
+  'catch 里要 console.warn（不能完全静默：基座控制台要能看到失败原因）');
+// plus 晚于 apply 就绪时（启动时序），syncNavBarColor 会被守卫挡掉 → 必须补刷一次。
+assert(/plusready/.test(code),
+  'theme.init 里挂 plusready 补刷 apply（plus 晚就绪时窗口级同步不能漏掉）');
 assert(/importClass\('android\.graphics\.Color'\)/.test(fnBody) && /Color\.parseColor/.test(fnBody),
   'importClass 拿 android.graphics.Color 再 parseColor');
 assert(/win\.setNavigationBarColor\(/.test(fnBody), '最终落到窗口 setNavigationBarColor');

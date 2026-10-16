@@ -65,6 +65,20 @@ assert(/setProperty\(['"]--reveal['"]/.test(home),
 // 且一旦 onPageScroll 不触发就暴露出"卡片藏不住/卡死"的隐患。
 assert(/getBoundingClientRect/.test(home), 'syncReveal 读 .mod-list 真实位置算入屏进度');
 assert(/window\.innerHeight|getSystemInfoSync/.test(home), '视口高被缓存（算入屏进度用，不逐帧取系统信息）');
+// syncReveal 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
+// 放到 methods 外（与生命周期选项平级）就不是实例方法 → 真机报
+// "this.syncReveal is not a function"（2026-10-16 真踩，脚本全绿却炸在基座上）。
+const mStart = home.indexOf('methods: {');
+const rStart = home.indexOf('syncReveal() {');
+assert(mStart >= 0 && rStart >= 0 && rStart > mStart,
+  'syncReveal 定义在 methods 之内（在 methods 外它不是实例方法，this.syncReveal 会炸）');
+// mod-wrap 上隐藏 action 卡必须用 v-show：Vue 3 里 v-if 与 v-for 同元素时
+// v-if 先求值、拿不到循环变量 c（真机报 "Property c was accessed during render"，
+// 且 isActionInFocus(c) 恒 false → 焦点模式藏不住 action 卡）。
+assert(/v-show="!isActionInFocus\(c\)"/.test(home),
+  'mod-wrap 用 v-show 隐藏 action 卡（v-show 在循环体内求值，作用域正确）');
+assert(!/v-if="!isActionInFocus\(c\)"/.test(home),
+  'mod-wrap 不许用 v-if 隐藏 action 卡（v-if 与 v-for 同元素先求值，c 未定义）');
 assert(!/this\._scrollTop \/ 320/.test(home),
   'reveal 不再按绝对 scrollTop/320 归一化（那是上一版"淡入看不到 + 卡死"的根）');
 // ⚠️ 静止态"藏卡"只能由布局（hero 铺满屏幕底边）保证，绝不能靠 CSS 把 --reveal 锁 0：
