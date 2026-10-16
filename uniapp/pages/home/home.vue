@@ -259,7 +259,6 @@
          底部「编辑首页」在最后一张卡下面，所以只有滑到底才会出现。 -->
     <view
       class="mod-list"
-      :class="{ 'reveal-idle': revealIdle }"
       ref="modList"
       @touchmove="dragMove"
       @touchend="dragEnd"
@@ -742,12 +741,6 @@ export default {
     isFocus() {
       return this.homeStyle === 'focus'
     },
-    /** 焦点模式下卡片初始"消失"（--reveal:0）：挂类不挂 JS ——
-        就算 onPageScroll / onReady 一环都没跑，静止态卡片也绝不在首屏露出来。
-        滚动时 syncReveal 写内联 style，优先级高于类，接管淡入进度。 */
-    revealIdle() {
-      return this.isFocus && !!this.renderCards.length
-    },
     /** 收纳区里的 AI 卡片：被收纳（visible=false）的那几张，可加回或彻底删除 */
     aiSheetList() {
       return ((this.doc && this.doc.cards) || []).filter(c => !c.builtin && c.visible === false)
@@ -953,17 +946,24 @@ export default {
   onReady() {
     // 卡片淡入需要 .mod-list 的真实 DOM；ref 首次渲染后才就绪，所以放 onReady。
     this._listEl = null
-    this.syncReveal(this._scrollTop || 0)
+    try {
+      const info = (typeof uni !== 'undefined' && uni.getSystemInfoSync) ? uni.getSystemInfoSync() : null
+      this._vh = (typeof window !== 'undefined' && window.innerHeight) || (info && info.windowHeight) || 0
+    } catch (e) { this._vh = 0 }
+    this.syncReveal()
   },
-  onPageScroll(e) {
-    // 焦点模式下，把"往上滑"的进度推进到 --reveal：卡片随之淡入 + 上移，
+  onPageScroll() {
+    // 焦点模式下，把"卡片入屏进度"推进到 --reveal：卡片随之淡入 + 上移，
     // 手势与下方卡片连贯统一。只动 opacity / transform（合成器接管，零重排，不掉帧）。
-    this.syncReveal((e && e.scrollTop) || 0)
+    this.syncReveal()
   },
   // 计算卡片淡入进度并写进 CSS 变量（非响应式直接写 DOM，避免逐帧重渲染）。
-  // 非焦点模式 / 没卡片（兜底态）一律 --reveal:1（卡片常显，不接手势）。
-  syncReveal(top) {
-    this._scrollTop = top || 0
+  // 进度按"卡片真实入屏高度"算：卡片下沿刚进视口 → 0，再上移 320rpx → 1；
+  // 一旦入屏就稳定在 1 —— **就算 onPageScroll 此后不再触发，卡片也早已全显**，
+  // 绝不会卡在隐藏态（上一版靠 .reveal-idle 类把初值锁 0，JS 没覆盖就永久隐藏，已废弃）。
+  // 非焦点 / 没卡片（兜底态）一律 --reveal:1（卡片常显，不接手势）。
+  // ⚠️ 静止态的"藏卡"由 hero 铺满到屏幕底边（布局）保证，与 opacity 无关。
+  syncReveal() {
     const refs = this.$refs || {}
     const ref = refs.modList
     const el = this._listEl || (ref && (ref.$el || ref))
@@ -973,16 +973,20 @@ export default {
       el.style.setProperty('--reveal', '1')
       return
     }
-    // 320 = 淡入距离（rpx）：滑过这一截卡片从全隐到全显；
-    // hero 已铺满一屏，卡片从折叠线之下淡入，这个数只管"多快淡完"
-    let r = this._scrollTop / 320
-    r = r < 0 ? 0 : r > 1 ? 1 : r
-    el.style.setProperty('--reveal', r.toFixed(3))
+    // 320 = 淡入距离（rpx）：卡片从"刚进视口"到"上移 320rpx"这段里由 0→1
+    const vh = this._vh || ((typeof window !== 'undefined' && window.innerHeight) || 0)
+    let p = 1
+    if (vh && typeof el.getBoundingClientRect === 'function') {
+      const rect = el.getBoundingClientRect()
+      p = (vh - rect.top) / 320
+      p = p < 0 ? 0 : p > 1 ? 1 : p
+    }
+    el.style.setProperty('--reveal', p.toFixed(3))
   },
   watch: {
     // 形态切换 / 卡片增减都要重新对齐 reveal（否则切到卡片平铺还停在 0 → 卡片消失）
-    isFocus() { this.syncReveal(this._scrollTop || 0) },
-    renderCards() { this.syncReveal(this._scrollTop || 0) },
+    isFocus() { this.syncReveal() },
+    renderCards() { this.syncReveal() },
   },
   methods: {
     // ---------- 新版本提示弹窗 ----------
@@ -2763,19 +2767,14 @@ export default {
 /* ---------- 首页模块编辑（拖拽 / 收纳） ---------- */
 .mod-list {
   position: relative;
-  /* 焦点模式：卡片初始"消失"、随上滑淡入 + 上移。双保险结构：
-     ① `.reveal-idle` 类（revealIdle computed）把初值定成 0 —— 纯 CSS，不依赖 JS 时机；
-     ② 滚动时 syncReveal 写内联 style（优先级更高），把进度实时推给 --reveal。
-     非焦点 / 全收纳态两个都不挂 → 落到默认 1（常显）。
+  /* 焦点模式：卡片随上滑淡入 + 上移（滚动时 syncReveal 把进度推进 --reveal）。
+     静止态默认 --reveal:1（卡片常显）——"首屏看不到卡片"靠 hero 铺满到屏幕底边
+     （布局）保证，与 opacity 无关；绝不靠 CSS 把初值锁 0（JS 没覆盖就永久隐藏，已踩坑）。
      ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
   --reveal: 1;
   opacity: var(--reveal, 1);
   transform: translateY(calc((1 - var(--reveal, 1)) * 56rpx));
   will-change: opacity, transform;
-}
-/* 焦点 + 有卡的静止态：卡片藏住（reveal 0）。内联 style 一来就被覆盖。 */
-.mod-list.reveal-idle {
-  --reveal: 0;
 }
 
 .mod-wrap { position: relative; }

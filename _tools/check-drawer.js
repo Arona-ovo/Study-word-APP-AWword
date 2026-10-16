@@ -20,8 +20,9 @@
 //  2) 手势挂点：根节点只接左右滑页（onSlide*），不再包一层 dh* 包装方法
 //  3) hero 形态：铺满到屏幕底边（卡片静止时结构性藏在折叠线之下，不靠 opacity）+
 //     内容收进与下方卡片同款面板 + 上下留白对称（入口在屏幕正中）；
-//     .mod-list 读 --reveal 做淡入 + 上移，且焦点静止态由 .reveal-idle **类**
-//     把初值定成 0（双保险：不依赖 onReady / onPageScroll 有没有跑）
+//     .mod-list 默认 --reveal:1（常显），滚动时 syncReveal 按"卡片真实入屏高度"
+//     （getBoundingClientRect + 缓存视口高）把 0→1 推进 --reveal 做淡入 + 上移；
+//     ⚠️ 严禁 .reveal-idle 这类把初值锁 0 的强制类（onPageScroll 不触发就永久隐藏）
 //  4) 不掉帧：不许再有重排型过渡（min-height / max-height / padding）；只允许 opacity / transform
 //  5) 顺序：「编辑首页」排在卡片之后（只有滑到底才看得到）
 const fs = require('fs');
@@ -54,14 +55,22 @@ assert(!/__pageTop/.test(home),
   '不留「页面滚动位置」字段（那是给"下滑收抽屉"区分场景用的，现在滚动就是滚动）');
 assert(!/measureDrawer/.test(home),
   '不再量卡片高度（高度不再需要被 JS 知道；拖拽排序自己那份量高不受影响）');
-// onPageScroll 现在允许存在，但只能把滚动进度推进 --reveal（卡片淡入），
+// onPageScroll 现在允许存在，但只能触发淡入（卡片真实入屏进度推进 --reveal），
 // 不能拿来做"开合抽屉"那套状态机（@touch 手势 / 折叠 class 早就被第 2 组守住了）。
-assert(/onPageScroll/.test(home), '焦点模式卡片淡入需要 onPageScroll（把滚动进度推进 --reveal）');
+assert(/onPageScroll/.test(home), '焦点模式卡片淡入需要 onPageScroll（触发 reveal 重算）');
 assert(/setProperty\(['"]--reveal['"]/.test(home),
   'onPageScroll 把进度写到 --reveal（CSS 变量 → 合成器接管，零重排，不掉帧）');
-assert(/scrollTop/.test(home), 'onPageScroll 读 scrollTop 推进 reveal（跟手）');
-assert(/this\._scrollTop \/ 320/.test(home),
-  'reveal 按淡入距离 320 归一化（滑过 320rpx 卡片全显）');
+// 进度按"卡片真实入屏高度"算（getBoundingClientRect + 缓存视口高），
+// 不是按绝对 scrollTop / 320 —— 后者会让 reveal 在卡片入屏前就到 1（淡入永远看不到），
+// 且一旦 onPageScroll 不触发就暴露出"卡片藏不住/卡死"的隐患。
+assert(/getBoundingClientRect/.test(home), 'syncReveal 读 .mod-list 真实位置算入屏进度');
+assert(/window\.innerHeight|getSystemInfoSync/.test(home), '视口高被缓存（算入屏进度用，不逐帧取系统信息）');
+assert(!/this\._scrollTop \/ 320/.test(home),
+  'reveal 不再按绝对 scrollTop/320 归一化（那是上一版"淡入看不到 + 卡死"的根）');
+// ⚠️ 静止态"藏卡"只能由布局（hero 铺满屏幕底边）保证，绝不能靠 CSS 把 --reveal 锁 0：
+// 否则 onPageScroll 没覆盖上就永久隐藏（真机已踩）。所以这里禁止 reveal-idle 这类强制类。
+assert(!/\.mod-list\.reveal-idle/.test(home), '禁止 .mod-list.reveal-idle 强制 0（会卡死隐藏）');
+assert(!/revealIdle/.test(home), '模板 / computed 不许再出现 revealIdle（藏卡不靠 JS 时机）');
 assert(!/drawerCollaps|collapseDrawer|openDrawer|closeDrawer|drawerState/.test(home),
   'onPageScroll 不接任何抽屉开合状态机');
 
@@ -129,22 +138,16 @@ console.log('== 3. hero 形态：铺满一屏 + 面板 + reveal 双保险 ==');
   // "抽屉没有实体"= 下方卡片本身就是抽屉，靠滚动进度淡入 + 上移，而非独立浮层。
   const list = rule('.mod-list');
   assert(list.length > 0, '存在 .mod-list 规则');
-  assert(/--reveal:\s*1/.test(list), 'mod-list 默认 --reveal:1（非焦点 / 全收纳态卡片常显）');
+  // ⚠️ 默认必须 --reveal:1（卡片常显）：静止态"看不到卡片"由 hero 铺满屏幕底边
+  // （布局）保证，绝不靠 CSS 把初值锁 0 —— 否则 onPageScroll 一不触发就永久隐藏（真机已踩）。
+  assert(/--reveal:\s*1/.test(list), 'mod-list 默认 --reveal:1（卡片常显；藏卡只靠布局，不靠 opacity）');
   assert(/opacity:\s*var\(--reveal/.test(list), 'mod-list 透明度随 --reveal 变化（淡入）');
   assert(/transform:\s*translateY/.test(list) && /--reveal/.test(list),
     'mod-list 随 --reveal 上移（滑出感）');
   assert(!/transition[^;{}]*(min-height|max-height|padding)/.test(list),
     'mod-list 不接任何重排型过渡（只动 opacity / transform）');
-  // 双保险①：焦点 + 有卡的静止态必须由**类**把初值定成 0 —— 纯 CSS，
-  // 不依赖 onReady / onPageScroll 有没有跑（上一版就栽在只靠 JS 写 DOM）。
-  const idle = rule('.mod-list.reveal-idle');
-  assert(/--reveal:\s*0/.test(idle),
-    '存在 .mod-list.reveal-idle 类（焦点静止态结构性藏卡，不依赖 JS 时机）');
-  // 双保险②：模板把类挂到 revealIdle computed 上（模板不能写函数调用）
-  assert(/:class="\{ 'reveal-idle': revealIdle \}"/.test(home),
-    'mod-list 模板挂 reveal-idle 类（revealIdle computed 驱动）');
-  assert(/revealIdle\(\)\s*\{\s*return this\.isFocus && !!this\.renderCards\.length/.test(home.replace(/\r\n/g, '\n')),
-    'revealIdle = 焦点 且 有卡（其余形态卡片常显）');
+  // 逆向契约：绝不允许"CSS 强制藏卡"的类/初值 0（那是上一版卡死隐藏的根）
+  assert(!/\.mod-list\.reveal-idle/.test(css), '不允许 .mod-list.reveal-idle 这类强制 0 规则');
 }
 
 console.log('== 4. 不掉帧：不许再有重排型过渡 ==');
