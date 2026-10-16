@@ -1,10 +1,17 @@
 // _tools/check-drawer.js - 首页焦点形态「往上滑看卡片」的校验
 //
-// 形态（2026-10-16 第五版 → 第六版，本文件）：卡片就在**正常文档流**里、排在首屏之后，
+// 形态（2026-10-16 第六版 → 第七版，本文件）：卡片就在**正常文档流**里、排在首屏之后，
 // 往上滑 = **页面原生滚动**。没有抽屉实体、没有把手、也没有任何自定义纵向手势。
-// 但卡片**默认隐藏**：焦点模式下 onPageScroll 把"往上滑"的进度推进 CSS 变量 `--reveal`，
-// .mod-list 随它做 opacity 淡入 + translateY 上移（合成器接管，零重排）。
+// 焦点模式下 onPageScroll 把"往上滑了多少"推进成 0→1 的进度，卡片随之淡入 + 上移、
+// 两个入口随之渐隐（合成器接管，零重排）。
 // "抽屉没有实体"= 下方卡片本身就是抽屉，靠滚动淡入 + 滑出来，而非独立浮层。
+//
+// ⚠️ 第七版只改了一件事，但它是"真机完全没动画"的根因：
+//   进度**不再写 DOM**（`el.style.setProperty('--reveal', …)`），改成**响应式数据 +
+//   响应式 :style 绑定**下发。因为 App 端逻辑层**没有 document**，ref 拿到的也不是
+//   能写 style 的 DOM 节点 —— 上一版那套"先验 setProperty 可用再用"的写法，
+//   在真机上每一次都验不过 → 整条链路静默失效（脚本全绿，按钮不渐隐、抽屉没动画）。
+//   App 端唯一可用的样式通道就是 `:style` 绑定，且内联只认 px（rpx 不被转换）。
 //
 // 为什么是这套（连改数版的教训，别再走回头路）：
 //   · 早期四版想用"自定义手势 + 高度过渡"做抽屉：把手从窄条 → 加高 → 内容层 → 根节点，
@@ -60,40 +67,53 @@ assert(!/measureDrawer/.test(home),
 // onPageScroll 现在允许存在，但只能触发淡入（卡片真实入屏进度推进 --reveal），
 // 不能拿来做"开合抽屉"那套状态机（@touch 手势 / 折叠 class 早就被第 2 组守住了）。
 assert(/onPageScroll/.test(home), '焦点模式卡片淡入需要 onPageScroll（触发 reveal 重算）');
-assert(/setProperty\(['"]--reveal['"]/.test(home),
-  'onPageScroll 把进度写到 --reveal（CSS 变量 → 合成器接管，零重排，不掉帧）');
-// 进度按"卡片真实入屏高度"算（getBoundingClientRect + 缓存视口高），
-// 不是按绝对 scrollTop / 320 —— 后者会让 reveal 在卡片入屏前就到 1（淡入永远看不到），
-// 且一旦 onPageScroll 不触发就暴露出"卡片藏不住/卡死"的隐患。
-assert(/getBoundingClientRect/.test(home), 'syncReveal 读 .mod-list 真实位置算入屏进度');
-assert(/window\.innerHeight|getSystemInfoSync/.test(home), '视口高被缓存（算入屏进度用，不逐帧取系统信息）');
-// ⚠️ ref 拿到的对象**不一定是能写 style 的 DOM 节点**：uni 在 App 端给内置组件
-// 的 ref，.style 可能是 null → 直接 el.style.setProperty 会炸
-// （2026-10-16 真机："Cannot read property 'setProperty' of null"，onReady /
-// onPageScroll 每帧一条全局错误）。必须先验 style.setProperty 可用再用。
-assert(/typeof c\.style\.setProperty === 'function'|typeof el\.style\.setProperty === 'function'/.test(home),
-  '写 --reveal 前先验目标节点的 style.setProperty 可用（App 端 ref 可能不是 DOM 节点）');
-assert(/if \(list\) list\.style\.setProperty/.test(home),
-  '拿不到节点就静默跳过（卡片默认 --reveal:1 常显，只是没有淡入，不能报错）');
-// 入口渐隐与卡片淡入必须共用同一条进度（focus ? p : 0）：
-// 非焦点 / 全收纳（没有任何卡可滑出来）时 fade 必须恒 0，否则那屏只剩空背景。
-assert(/const fade = focus \? p : 0/.test(home),
-  '入口渐隐只在"焦点 + 有卡"时生效（没卡可滑出来时入口必须一直显示）');
-assert(/hero\.style\.setProperty\('--hero-fade'/.test(home),
-  'syncReveal 把进度写进 --hero-fade（卡片出来→入口淡出，卡收回去→入口回来）');
-assert(/--hero-pe', fade > 0\.9 \? 'none' : 'auto'/.test(home),
+// 进度**只能**来自 onPageScroll 报的 scrollTop。App 端逻辑层没有 document（硬规矩 42），
+// 量节点那条路（getBoundingClientRect / ref.$el.style.setProperty）在真机上每次都验不过
+// → 整条链路静默失效：2026-10-16 真机"按钮不渐隐、抽屉没动画"，而脚本全绿。别再走回去。
+// ⚠️ "不许出现某能力"这类断言必须**先剥注释再扫**，否则测的是注释、永远红
+// （注释里写着"别再去 getBoundingClientRect"也会被正则扫到）。
+const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+assert(!/getBoundingClientRect/.test(strip(home)),
+  '不再量节点算进度（App 端逻辑层没有 document，量了也拿不到 → 整条动画静默失效）');
+assert(!/\.style\.setProperty\(/.test(strip(home)),
+  '不许再直接写 DOM style（App 端拿不到节点；只能走响应式 :style 绑定）');
+assert(/onPageScroll\(e\)/.test(home) && /e\.scrollTop/.test(home),
+  'onPageScroll 收 scrollTop 作为唯一进度来源（不依赖任何 DOM）');
+// 进度必须落到**响应式数据**上，再由 :style 下发 —— App 端唯一的样式通道。
+// 默认 p=1 / revealOn=false：JS 一环没跑时卡片常显、入口不淡出（绝不能反过来藏起来）。
+assert(/revealP: 1/.test(home) && /revealOn: false/.test(home),
+  'reveal 进度进 data（响应式），默认常显、不接手势');
+assert(/:style="listRevealStyle"/.test(home) && /:style="heroRevealStyle"/.test(home),
+  '卡片与入口的样式都由 :style 绑定下发（App 端唯一可用的样式通道）');
+// 内联写**真实属性**（opacity / transform）而不只是 CSS 变量：真实属性各端一定生效，
+// CSS 变量在部分端可能拿不到 —— 动画这种"看不见就等于没做"的东西不能押在变量上。
+assert(/opacity: String\(p\)/.test(home) && /translate3d/.test(home),
+  '卡片内联写真实 opacity / transform（不依赖 CSS 变量，各端一定生效）');
+assert(/opacity: \(1 - fade\)\.toFixed\(3\)/.test(home),
+  '入口内联写真实 opacity（卡片出来→入口淡出，滑回去→入口回来）');
+// 非焦点 / 没卡（全收纳）必须常显、入口不淡出：那一屏全靠入口，淡掉就是空屏。
+assert(/let p = 1[\s\S]{0,200}if \(focus\) \{/.test(home),
+  '只有"焦点 + 有卡"才接手势，其余态 p 恒 1（卡片常显、入口不淡出）');
+assert(/'--hero-pe': fade > 0\.9 \? 'none' : 'auto'/.test(home),
   '淡到 0.9 以上才关 pointer-events（半透明时入口仍可点）');
-// 淡入距离：320 时一甩就滑完（真机反馈"没有任何动画"），必须 ≥480。
-assert(/\(vh - rect\.top\) \/ (4\d\d|5\d\d|6\d\d)/.test(home),
-  'reveal 的淡入距离 ≥480rpx（太短则一帧滑完，看不出动画）');
-// 两个节点都拿不到 = 动画完全没写上去：必须留线索，不能静默（theme.js 那次的教训）
-assert(/syncReveal: no writable node/.test(home),
-  'list/hero 都拿不到时 console.warn 一条（真机"没动画"时有线索可查）');
+// 单位是 px：uni-app **只转换 CSS 文件里的 rpx**，内联样式里的 rpx 不会被转换 → 必须自己换。
+assert(/uni\.upx2px/.test(home),
+  '内联位移走 uni.upx2px 换成 px（内联样式里的 rpx 不会被 uni-app 转换）');
+// 淡入距离：320 时一甩就滑完（真机反馈"没有任何动画"），必须 ≥480rpx。
+assert(/this\.upx\((4\d\d|5\d\d|6\d\d)\)/.test(home),
+  '淡入距离 ≥480rpx（太短则一甩就滑完，看不出动画）');
+// 量化到 0.05 一档：home.vue 模板很大，整页重渲染的代价不能按帧付。
+// 0.05 的 opacity 跳变肉眼看不见，但渲染次数从"每帧一次"降到"一次滑动最多 20 次"。
+assert(/Math\.round\(p \* 20\) \/ 20/.test(home),
+  '进度量化到 0.05 一档（不是每帧写一次，避免整页重渲染掉帧）');
+// 抽屉拉到位震一下（用户要的"加点动效或震动"），且一次滑动只响一声。
+assert(/haptic\.tick\('drawer'\)/.test(home), '抽屉拉到位震一下');
+assert(/_drawerBuzzed/.test(home), '一次滑动只震一声（滑回去再拉才会再响）');
 // syncReveal 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
 // 放到 methods 外（与生命周期选项平级）就不是实例方法 → 真机报
 // "this.syncReveal is not a function"（2026-10-16 真踩，脚本全绿却炸在基座上）。
 const mStart = home.indexOf('methods: {');
-const rStart = home.indexOf('syncReveal() {');
+const rStart = home.indexOf('syncReveal(scrollTop) {');
 assert(mStart >= 0 && rStart >= 0 && rStart > mStart,
   'syncReveal 定义在 methods 之内（在 methods 外它不是实例方法，this.syncReveal 会炸）');
 // mod-wrap 上隐藏 action 卡必须用 v-show：Vue 3 里 v-if 与 v-for 同元素时
@@ -226,9 +246,13 @@ console.log('== 5. 顺序：「编辑首页」在卡片之后 ==');{
   assert(iFoot > iList, '「编辑首页」排在卡片之后 → 只有滑到卡片最底下才看得到');
   const foot = home.slice(iFoot, home.indexOf('\n    </view>', iFoot));
   assert(/class="foot-link"/.test(foot), '非编辑态仍是那颗「编辑首页」链接');
-  // 卡片区不能带内联高度/显隐样式（那正是上一版的抽屉做法）
+  // 卡片区允许带内联样式，但**只能是 reveal 的那一份**（opacity / transform）——
+  // 高度 / 显隐绝不能由 JS 控（那正是上一版"自定义抽屉"的做法，已废弃）。
   const list = home.slice(iList - 40, home.indexOf('>', iList) + 1);
-  assert(!/:style=/.test(list), '.mod-list 上没有内联样式（不再由 JS 控高度）');
+  assert(/:style="listRevealStyle"/.test(list),
+    '.mod-list 上只挂 reveal 的内联样式（不再由 JS 控高度 / 显隐）');
+  assert(!/height|display/.test(list),
+    '.mod-list 内联样式里不许出现高度 / display（那正是上一版抽屉的做法）');
   // 空态兜底：卡片被全部收纳时 hero 必须退回自然高度 ——
   // 否则"＋ 添加组件 / 编辑首页"全在下一屏之后，而页面又几乎没得滚，用户以为加不回来。
   assert(/:class="\{ 'hero-empty': !renderCards\.length \}"/.test(home),

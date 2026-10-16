@@ -83,7 +83,13 @@ assert(/class="menu-dot"/.test(pf) && /v-if="updateDot"/.test(pf), '「设置」
 assert(/\.menu-dot \{/.test(pf), '红点有样式（不然是个不显示的空 view）');
 assert(/onShow[\s\S]{0,300}updateDot = updater\.hasPending\(\)/.test(pf), '切回「我的」会重读红点状态');
 assert(/utils\/updater\.js/.test(hm), '首页引入了 updater');
-assert(/maybeUpdateAsk\(\)/.test(hm) && /onShow[\s\S]{0,900}maybeUpdateAsk\(\)/.test(hm), '首页 onShow 会问一次');
+// ⚠️ 别再用"onShow 之后 N 个字符内出现"这种距离窗口：onShow 只是多写了几行就会超窗口
+// → 契约还在、断言却假红（2026-10-16 首页 onShow 加了 4 行就撞上）。直接抠函数体。
+const iShow = hm.indexOf('\n  onShow() {');
+const iShowEnd = iShow > 0 ? hm.indexOf('\n  },', iShow) : -1;
+const showBody = iShow > 0 && iShowEnd > iShow ? hm.slice(iShow, iShowEnd) : '';
+assert(showBody.length > 0, '能抠出首页 onShow 的函数体');
+assert(/maybeUpdateAsk\(\)/.test(showBody), '首页 onShow 会问一次');
 assert(/if \(updateAsked\) return/.test(hm), '本次进程只弹一次（切 tab 回来不重复骚扰）');
 assert(/guide\.show \|\| this\.partnerAsk\.show/.test(hm), '引导 / 关联询问在场时不抢弹窗');
 assert(/@confirm="onUpdateConfirm"/.test(hm) && /@cancel="onUpdateCancel"/.test(hm), '弹窗两个按钮都接了');

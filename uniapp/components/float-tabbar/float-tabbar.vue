@@ -45,6 +45,8 @@ import {
   TABS, tabIndex, tabText, markSwitch, requestLeave, LEAVE,
   onPreview, offPreview, watchTabUI, moveIndicator, highlightTab, settleTab, scheduleNav
 } from '../../utils/tab-slide.js';
+// 点底栏震一下（设置 › 触感反馈 可关 / 可调强度）
+import * as haptic from '../../utils/haptic.js';
 
 // 图标能不能用 CSS mask 上色：能的话「换主题色 → 图标跟着变色」，
 // 不能就退回两张图切换（老行为）。detect 一次就够，不用每个实例都问。
@@ -135,6 +137,9 @@ export default {
       const t = this.tabs.find(x => x.key === key);
       // 点当前 tab：不重复导航、不重播动画（activeKey 已是全局真相，连点的同一格会被拦掉）
       if (!t || t.key === this.activeKey) return;
+      // 触感反馈：确认"点中了"，在切页动画之前就给到（晚了就分不清是哪一下的反馈）。
+      // 开关关掉 / 平台不支持都只是不震，不影响切页。
+      try { haptic.tick('tap') } catch (err) { /* 震不动也要把页切了 */ }
       // 胶囊与高亮同时动：不然高亮先跳、胶囊隔一会儿才追，看着像"晃了两下"
       moveIndicator(tabIndex(t.key));
       highlightTab(t.key);

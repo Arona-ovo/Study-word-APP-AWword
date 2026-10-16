@@ -214,6 +214,42 @@
       </view>
     </view>
 
+    <!-- ===== 触感反馈（震动） ===== -->
+    <view class="sec" :class="{ open: openSec === 'haptic' }">
+      <view class="sec-head" data-k="haptic" @tap="toggleSec">
+        <text class="sec-name">{{ $t('触感反馈') }}</text>
+        <text v-if="openSec !== 'haptic'" class="sec-hint">{{ hapticOn ? $t('开') : $t('关') }}</text>
+        <text class="sec-arrow">›</text>
+      </view>
+      <view class="sec-body" v-if="openSec === 'haptic'">
+        <view class="row">
+          <view class="row-main">
+            <text class="row-title">{{ $t('震动反馈') }}</text>
+            <text class="row-desc">{{ $t('点底部导航、把首页的卡片抽屉拉到位时，震一下') }}</text>
+          </view>
+          <switch :checked="hapticOn" :color="brandMain" @change="e => setHaptic('on', e.detail.value)" />
+        </view>
+        <view v-if="hapticOn" class="row">
+          <view class="row-main">
+            <text class="row-title">{{ $t('震动强度') }}</text>
+            <text class="row-desc">{{ $t('轻一点是「哒」一下，强一点是明显的一记') }}</text>
+          </view>
+          <view class="seg">
+            <view class="seg-item" :class="{ on: hapticLevel === 'light' }" @tap="setHaptic('level', 'light')">{{ $t('轻') }}</view>
+            <view class="seg-item" :class="{ on: hapticLevel === 'mid' }" @tap="setHaptic('level', 'mid')">{{ $t('中') }}</view>
+            <view class="seg-item" :class="{ on: hapticLevel === 'strong' }" @tap="setHaptic('level', 'strong')">{{ $t('强') }}</view>
+          </view>
+        </view>
+        <view v-if="hapticOn" class="row">
+          <view class="row-main">
+            <text class="row-desc">{{ $t('点一下试试手感（连点会被挡掉，隔一下再点）') }}</text>
+          </view>
+          <text class="row-action" @tap="previewHaptic">{{ $t('试一下') }}</text>
+        </view>
+        <view v-if="hapticFail" class="bg-hint">{{ $t('这一下没震成：多半是现在这个包 / 调试基座里没打进震动权限，云打包一次就有了；本来就不带马达的设备也不会震。') }}</view>
+      </view>
+    </view>
+
     <!-- ===== 流畅模式（低端机退路） ===== -->
     <view class="sec" :class="{ open: openSec === 'perf' }">
       <view class="sec-head" data-k="perf" @tap="toggleSec">
@@ -959,6 +995,7 @@ import * as updater from '../../../utils/updater.js'
 import * as confusion from '../../../utils/confusion.js'
 import { speakSentence as aiSpeak } from '../../../services/voice.js'
 import * as sfx from '../../../utils/sfx.js'
+import * as haptic from '../../../utils/haptic.js'
 import * as backup from '../../../utils/backup.js'
 import * as backupIO from '../../../utils/backup-io.js'
 // 自家后端的唯一出口（services/api.js）。这一版还没接服务器，所以这里只用到
@@ -1053,6 +1090,11 @@ export default {
       openSec: '',
       // 首页呈现形态：'focus'（默认，焦点 + 抽屉）/ 'cards'（原卡片平铺）
       homeStyle: 'focus',
+      // 触感反馈（utils/haptic.js）：on = 总开关，level = light / mid / strong。
+      // hapticFail 只在"试过一次且没震成"时才亮 —— 不能一进来就断言设备不支持。
+      hapticOn: true,
+      hapticLevel: 'mid',
+      hapticFail: false,
       darkOn: false,
       followSystem: false,
       systemDark: false,
@@ -1398,6 +1440,7 @@ export default {
     this.version = this.readVersion()
     // 首页呈现形态（焦点 + 抽屉 / 卡片平铺）可能被首页自身改过，进设置页重新读一次
     this.homeStyle = this.readHomeStyle()
+    this.readHaptic()
   },
   methods: {
     // 背景色块：深色模式下显示压暗变体，与实际背景一致、各预设之间也能区分开
@@ -1425,6 +1468,40 @@ export default {
       const next = v === 'cards' ? 'cards' : 'focus'
       this.homeStyle = next
       try { settings.set({ home: { style: next } }) } catch (e) { /* 存不上不影响本次切换 */ }
+    },
+    /** 读触感反馈的开关与强度（脏值回落：开 + mid） */
+    readHaptic() {
+      try {
+        this.hapticOn = haptic.isEnabled()
+        this.hapticLevel = haptic.level()
+      } catch (e) {
+        this.hapticOn = true
+        this.hapticLevel = 'mid'
+      }
+    },
+    /** 改触感反馈并落盘；开的时候顺手震一下，让用户立刻知道"这就是它" */
+    setHaptic(key, v) {
+      if (key === 'on') {
+        haptic.setOn(v)
+        this.hapticOn = !!v
+        if (this.hapticOn) {
+          this.hapticFail = false
+          this.previewHaptic()
+        }
+        return
+      }
+      haptic.setLevel(v)
+      this.hapticLevel = haptic.level()
+      if (this.hapticOn) this.previewHaptic()
+    },
+    /** 试一下：真的震一次；没震成就把提示露出来（多半是包里没打震动权限） */
+    previewHaptic() {
+      // 连点被 70ms 保护挡掉不算"没震成"（那时 lastError 还是空的）——
+      // 只有真的调用了却失败（没权限 / 没 API）才提示，否则会误导用户。
+      let ok = false
+      try { ok = haptic.tick('switch') } catch (e) { ok = false }
+      if (ok) this.hapticFail = false
+      else if (!haptic.hasApi() || haptic.lastError()) this.hapticFail = true
     },
 
     // ---------- 在线更新（utils/updater.js）----------

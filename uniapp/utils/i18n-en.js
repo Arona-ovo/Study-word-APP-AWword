@@ -34,6 +34,21 @@ export default {
   '卡片': 'Cards',
   '连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}': 'Day {n} streak · {t} practiced today · {w} to review',
   '焦点：主页只放背单词 / 背句子两个入口，其余卡片收进上拉抽屉；卡片：所有卡片平铺': 'Focus: home shows only the two study entries (memorize words / practice sentences); the rest sit in a pull-up drawer. Cards: all cards tiled.',
+  // ---------- 触感反馈（utils/haptic.js，设置 › 触感反馈） ----------
+  '触感反馈': 'Haptics',
+  '震动反馈': 'Vibration',
+  '震动强度': 'Strength',
+  '轻': 'Light',
+  // '中' 早就在表里（'Mid'），别重复声明 —— check-i18n 第 2 组会判重复键
+  '强': 'Strong',
+  '开': 'On',
+  '关': 'Off',
+  '试一下': 'Try it',
+  '点底部导航、把首页的卡片抽屉拉到位时，震一下': 'Buzz once when you tap the bottom tabs, and when the home card drawer is pulled all the way up',
+  '轻一点是「哒」一下，强一点是明显的一记': 'Light is a soft tap, strong is a distinct thud',
+  '点一下试试手感（连点会被挡掉，隔一下再点）': 'Tap to feel it (rapid taps are throttled — wait a moment between taps)',
+  '这一下没震成：多半是现在这个包 / 调试基座里没打进震动权限，云打包一次就有了；本来就不带马达的设备也不会震。':
+    'That one didn\'t buzz — most likely this build (or the debug base) was packaged without the vibration permission; a cloud build will include it. Devices without a vibration motor stay silent too.',
   '已关联 · 背完会自动把战绩记回那边': 'Linked — your results will be sent back automatically',
   '已关闭 · 设置页随时可以重新打开': 'Off — turn it back on in Settings any time',
   '已关联 · 背完会自动把战绩记回它那边': 'Linked — results go back to PWstudy automatically',

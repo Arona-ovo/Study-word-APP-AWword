@@ -239,7 +239,7 @@
          层次（2026-10-16 起）：hero 内容收进一张与下方卡片同宽的毛玻璃面板，
          且 hero 比"铺满一屏"短 320rpx —— 下一张卡的上沿会从悬浮 tabbar 上方
          探出来，首屏就看得见"下面还有一摞卡"，不再是空背景后面藏卡片。 -->
-    <view v-if="isFocus" class="focus-hero" ref="heroEl" :class="{ 'hero-empty': !renderCards.length }">
+    <view v-if="isFocus" class="focus-hero" :class="{ 'hero-empty': !renderCards.length }" :style="heroRevealStyle">
       <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
       <view class="focus-cta">
         <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
@@ -257,7 +257,7 @@
          底部「编辑首页」在最后一张卡下面，所以只有滑到底才会出现。 -->
     <view
       class="mod-list"
-      ref="modList"
+      :style="listRevealStyle"
       @touchmove="dragMove"
       @touchend="dragEnd"
       @touchcancel="dragEnd"
@@ -534,6 +534,7 @@ import * as pageAgent from '../../services/page-agent.js'
 import * as cardSpec from '../../utils/card-spec.js'
 import { speak as speakAny } from '../../services/voice.js'
 import * as updater from '../../utils/updater.js'
+import * as haptic from '../../utils/haptic.js'
 import * as onboarding from '../../utils/onboarding.js'
 import * as partner from '../../utils/partner.js'
 import OnboardingMask from '../../components/onboarding-mask.vue'
@@ -680,10 +681,50 @@ export default {
       cmdError: '',
       cmdCanUndo: false,
       cmdRunning: false,
-      suggestions: intent.SUGGESTIONS
+      suggestions: intent.SUGGESTIONS,
+      // ---------- 焦点模式「上滑看卡片」的进度（抽屉淡入 + 入口渐隐） ----------
+      // ⚠️ 这两个必须进 data：App 端**逻辑层没有 document**（项目硬规矩 42），
+      //    拿不到 .mod-list / .focus-hero 的 DOM 节点去写 CSS 变量 —— 上一版正是
+      //    卡在这里：setProperty 那整条链路静默失效，真机"一点动画都没有"。
+      //    App 端唯一可用的样式通道是**响应式 :style 绑定**，所以进度必须是响应式数据。
+      // revealP 量化到 0.05 一档（见 syncReveal）：不是每帧都写，避免整页重渲染掉帧。
+      revealP: 1,
+      // 只有「焦点 + 有卡」时才接手势（其余态卡片常显、入口不淡出）
+      revealOn: false
     }
   },
   computed: {
+    // ---------- 焦点模式「上滑看卡片」的内联样式 ----------
+    // ⚠️ 走的是**响应式 :style 绑定**，不是 el.style.setProperty：App 端逻辑层没有
+    //    document（硬规矩 42），setProperty 那条路拿不到节点、整条动画静默失效
+    //    （2026-10-16 真机："按钮不渐隐、抽屉没动画"，脚本全绿却一点效果没有）。
+    //    这里同时写**真实属性**（opacity / transform）而不是只写 CSS 变量：
+    //    真实属性在 uni-app 各端一定生效，CSS 变量只是锦上添花。
+    // ⚠️ 单位是 px 不是 rpx：uni-app 只转换 CSS 文件里的 rpx，内联样式不转换。
+    //    revealOn 为 false 时返回空对象 → 卡片 / 入口回到 CSS 里的静态默认值。
+    listRevealStyle() {
+      if (!this.revealOn) return {}
+      const p = this.revealP
+      const off = ((1 - p) * this._parallaxPx).toFixed(1)
+      const sc = (0.955 + 0.045 * p).toFixed(4)
+      return {
+        opacity: String(p),
+        transform: 'translate3d(0,' + off + 'px,0) scale(' + sc + ')'
+      }
+    },
+    heroRevealStyle() {
+      if (!this.revealOn) return {}
+      // 入口渐隐比卡片淡入**早一点到位**（×1.2）：按钮先让位，卡片再补上，
+      // 上滑时看得出"主页在退场"，而不是两层一起平移。
+      let fade = this.revealP * 1.2
+      fade = fade > 1 ? 1 : fade
+      return {
+        opacity: (1 - fade).toFixed(3),
+        transform: 'scale(' + (1 - 0.05 * fade).toFixed(4) + ')',
+        // 淡到基本看不见了就别再吃点击（CSS 里 pointer-events: var(--hero-pe, auto) 兜底）
+        '--hero-pe': fade > 0.9 ? 'none' : 'auto'
+      }
+    },
     /**
      * 更新弹窗的正文：热更和整包必须说清楚差别（一个不动数据、一个是完整安装包）。
      * ⚠️ 这个弹窗只在"包已下载完且校验通过"后才出现（hasPending 守着），
@@ -875,6 +916,18 @@ export default {
     // （"Property _styleSrc was accessed during render but is not defined"）。
     this._styleSrc = null
     this._styleMap = {}
+    // 上滑进度用的缓存（同样必须先挂到实例：Vue 3 渲染期访问不存在的属性会告警）
+    this._scrollTop = 0        // 最近一次 onPageScroll 报上来的滚动位置（px）
+    this._spanPx = 0          // 淡入距离（px，由 upx() 换算一次就够）
+    this._parallaxPx = 0      // 卡片视差距离（px）
+    this._drawerBuzzed = false // 抽屉"拉到位"这一下震过了没有（防止滑一次震一窝）
+    try {
+      this._spanPx = this.upx(520)
+      this._parallaxPx = this.upx(220)
+    } catch (e) {
+      this._spanPx = 260
+      this._parallaxPx = 110
+    }
   },
   onLoad() {
     this.refreshDoc()
@@ -891,6 +944,12 @@ export default {
     }
     hideNativeTabBar()
     syncTabbar(this)
+    // 回到首页把上滑进度归零：切走时页面停在下面（进度=1、入口已淡出），
+    // 再回来页面多半已经回到顶部 —— 不归零就会看到"按钮没了但页面在最顶"。
+    // 真要是没回到顶，紧接着那次 onPageScroll 会立刻把它改正。
+    this._scrollTop = 0
+    this._drawerBuzzed = false
+    this.syncReveal(0)
     // 词书在词库页切换后，回到首页自动刷新
     Object.assign(this, wordbook.homeOverview())
     this.sessionSize = this.loadSessionSize()
@@ -946,95 +1005,75 @@ export default {
     return false
   },
   onReady() {
-    // 卡片淡入需要 .mod-list 的真实 DOM；ref 首次渲染后才就绪，所以放 onReady。
-    this._listEl = null
-    try {
-      const info = (typeof uni !== 'undefined' && uni.getSystemInfoSync) ? uni.getSystemInfoSync() : null
-      this._vh = (typeof window !== 'undefined' && window.innerHeight) || (info && info.windowHeight) || 0
-    } catch (e) { this._vh = 0 }
-    this.syncReveal()
+    // 换算一次尺寸就够（upx 内部会缓存），之后每次滚动只做一次除法。
+    this.syncReveal(this._scrollTop)
   },
-  onPageScroll() {
-    // 焦点模式下，把"卡片入屏进度"推进到 --reveal：卡片随之淡入 + 上移，
-    // 手势与下方卡片连贯统一。只动 opacity / transform（合成器接管，零重排，不掉帧）。
-    this.syncReveal()
+  onPageScroll(e) {
+    // 焦点模式下，把"往上滑了多少"推进成 0→1 的进度：卡片随之淡入 + 上移、
+    // 两个入口随之渐隐。只动 opacity / transform（合成器接管，零重排，不掉帧）。
+    // ⚠️ 进度来自 onPageScroll 给的 scrollTop —— 这是**唯一不依赖 DOM 的滚动数据源**：
+    //    App 端逻辑层没有 document（硬规矩 42），别再去 getBoundingClientRect / 量节点，
+    //    那条路在真机上拿不到东西（2026-10-16：整条动画静默失效，"按钮不渐隐"）。
+    const st = e && typeof e.scrollTop === 'number' ? e.scrollTop : -1
+    this.syncReveal(st)
   },
   watch: {
     // 形态切换 / 卡片增减都要重新对齐 reveal（否则切到卡片平铺还停在 0 → 卡片消失）
-    isFocus() { this.syncReveal() },
-    renderCards() { this.syncReveal() },
+    isFocus() { this.syncReveal(-1) },
+    renderCards() { this.syncReveal(-1) },
   },
   methods: {
-    // 计算卡片淡入进度并写进 CSS 变量（非响应式直接写 DOM，避免逐帧重渲染）。
-    // 进度按"卡片真实入屏高度"算：卡片下沿刚进视口 → 0，再上移 320rpx → 1；
-    // 一旦入屏就稳定在 1 —— **就算 onPageScroll 此后不再触发，卡片也早已全显**，
-    // 绝不会卡在隐藏态（上一版靠 .reveal-idle 类把初值锁 0，JS 没覆盖就永久隐藏，已废弃）。
-    // 非焦点 / 没卡片（兜底态）一律 --reveal:1（卡片常显，不接手势）。
-    // ⚠️ 静止态的"藏卡"由 hero 铺满到屏幕底边（布局）保证，与 opacity 无关。
+    // rpx → px。⚠️ uni-app **只转换 CSS 文件里的 rpx**，内联样式里的 rpx 不会被转换，
+    // 所以 JS 算位移必须自己换；换不出来（拿不到屏宽）就按 375 宽的 0.5 兜底。
+    upx(v) {
+      try {
+        if (typeof uni !== 'undefined' && typeof uni.upx2px === 'function') return uni.upx2px(v)
+        const info = (typeof uni !== 'undefined' && uni.getSystemInfoSync) ? uni.getSystemInfoSync() : null
+        const w = (info && info.windowWidth) || 375
+        return v * w / 750
+      } catch (e) {
+        return v / 2
+      }
+    },
+    // 算"卡片淡入 / 入口渐隐"的进度并推进响应式数据（由 listRevealStyle / heroRevealStyle
+    // 变成内联样式下发 —— App 端唯一可用的样式通道，见那两个 computed 的注释）。
+    //
+    // 进度 = 已滑距离 / 淡入距离（520rpx）。不量节点、不看视口高，纯粹跟着滚动走：
+    //   · 卡片静止时在折叠线之下（布局保证），p=0 → 卡片透明、入口全亮；
+    //   · 往上滑 → p 增大 → 卡片淡入并落后于滚动地上移，入口同步渐隐；
+    //   · 滑回去 → p 归 0 → 卡片透明、入口回来。
+    // ⚠️ 非焦点 / 没卡片（全收纳）一律 p=1（卡片常显、入口不淡出）：那一屏全靠入口。
     // ⚠️ 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
     //    放到 methods 外（和生命周期选项平级）它就不是实例方法 → 真机报
     //    "this.syncReveal is not a function"（2026-10-16 真踩）。
-    // 从一个候选列表里挑"能写 style 的节点"：对象存在 ≠ 能写（见上）。
-    pickStyleEl(cands, cacheKey) {
-      const ok = (c) => !!(c && c.style && typeof c.style.setProperty === 'function')
-      if (ok(this[cacheKey])) return this[cacheKey]
-      for (let i = 0; i < cands.length; i++) {
-        if (ok(cands[i])) {
-          this[cacheKey] = cands[i]
-          return this[cacheKey]
-        }
-      }
-      return null
-    },
-    pickListEl() {
-      const refs = this.$refs || {}
-      const r = refs.modList
-      const cands = [r && r.$el, r]
-      // 兜底：按类名找（uni 的 ref 对象不顶用时，DOM 层还在）
-      if (typeof document !== 'undefined' && document && document.querySelector) {
-        cands.push(document.querySelector('.mod-list'))
-      }
-      return this.pickStyleEl(cands, '_listEl')
-    },
-    pickHeroEl() {
-      const refs = this.$refs || {}
-      const r = refs.heroEl
-      return this.pickStyleEl([r && r.$el, r], '_heroEl')
-    },
-    syncReveal() {
-      const list = this.pickListEl()
-      const hero = this.pickHeroEl()
-      // 两个节点都拿不到 = 淡入 / 渐隐全都不会生效（页面照样能用，只是没动画）。
-      // 这种情况必须留一条线索，否则真机"没动画"无从排查（见 theme.js 那次的教训）。
-      if (!list && !hero) {
-        this._revealMiss = (this._revealMiss || 0) + 1
-        if (this._revealMiss === 12) {
-          // ⚠️ 日志文案保持 ASCII：中文会被 check-i18n 计入"漏网的静态中文"
-          console.warn('[home] syncReveal: no writable node -> reveal/fade disabled')
-        }
-        return
-      }
-      // 只有"焦点 + 有卡"才接手势：非焦点 / 全收纳态卡片常显、入口不淡出
+    syncReveal(scrollTop) {
+      if (typeof scrollTop === 'number' && scrollTop >= 0) this._scrollTop = scrollTop
+      // 只有"焦点 + 有卡"才接手势
       const focus = !!(this.isFocus && this.renderCards && this.renderCards.length)
-      // 480 = 淡入距离（rpx）：卡片从"刚进视口"到"上移 480rpx"这段里由 0→1。
-      // 之前是 320，一甩就滑完了、几乎看不见；拉长到 480 才看得出"抽屉被拉上来"。
       let p = 1
-      if (focus && list && typeof list.getBoundingClientRect === 'function') {
-        const vh = this._vh || ((typeof window !== 'undefined' && window.innerHeight) || 0)
-        if (vh) {
-          const rect = list.getBoundingClientRect()
-          p = (vh - rect.top) / 480
-          p = p < 0 ? 0 : p > 1 ? 1 : p
+      if (focus) {
+        const span = this._spanPx || (this._spanPx = this.upx(520))
+        // 前 16rpx 是"死区"：刚起手那一点点抖动不该让卡片先闪一下
+        const dead = this.upx(16)
+        p = (this._scrollTop - dead) / span
+        p = p < 0 ? 0 : p > 1 ? 1 : p
+        // 抽屉拉到位 → 震一下（一次滑动只响一声；滑回去再拉才会再响）
+        if (p > 0.985) {
+          if (!this._drawerBuzzed) {
+            this._drawerBuzzed = true
+            try { haptic.tick('drawer') } catch (e) { console.warn('[home] haptic tick failed:', e) }
+          }
+        } else if (p < 0.55) {
+          this._drawerBuzzed = false
         }
+      } else {
+        this._drawerBuzzed = false
       }
-      if (list) list.style.setProperty('--reveal', p.toFixed(3))
-      // 入口渐隐 = 同一条进度的反面（卡片出来 → 入口淡出；卡片滑回去 → 入口回来）。
-      // ⚠️ 非焦点 / 没卡时 fade 恒 0：那一屏全靠入口，淡掉就是空屏。
-      if (hero) {
-        const fade = focus ? p : 0
-        hero.style.setProperty('--hero-fade', fade.toFixed(3))
-        hero.style.setProperty('--hero-pe', fade > 0.9 ? 'none' : 'auto')
-      }
+      // 量化到 0.05 一档：滑一次最多 20 次赋值，不是每帧一次 ——
+      // 整页重渲染的代价不能按帧付（home.vue 模板很大），而 5% 的 opacity 跳变肉眼看不见。
+      const q = Math.round(p * 20) / 20
+      if (this.revealOn !== focus) this.revealOn = focus
+      if (Math.abs(q - this.revealP) > 0.0001) this.revealP = q
     },
     // ---------- 新版本提示弹窗 ----------
     // 启动那次自检只负责"查到"，把结果落到 storage（updater.noteUpdate），
@@ -2820,10 +2859,14 @@ export default {
      ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
   --reveal: 1;
   opacity: var(--reveal, 1);
-  /* 抽屉感①：这摞卡**落后于滚动**上滑（视差 160rpx）——滑的时候能看见它
+  /* 抽屉感①：这摞卡**落后于滚动**上滑（视差 220rpx）——滑的时候能看见它
      从下面被"拉上来"，而不是跟着页面一起平移（那看着就是同一层）。
+     再加一点点缩放：卡片是从"后面"被推上来的，不是原地淡入。
+     ⚠️ 运行时由 listRevealStyle 的内联样式覆盖（App 端没有 CSS 变量的写入通道，
+        内联必须自己给出完整值）；这条只作为 JS 没跑时的静态兜底。
      ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
-  transform: translateY(calc((1 - var(--reveal, 1)) * 160rpx));
+  transform: translateY(calc((1 - var(--reveal, 1)) * 220rpx))
+             scale(calc(0.955 + 0.045 * var(--reveal, 1)));
   will-change: opacity, transform;
 }
 /* 抽屉感②：整摞卡共用一张**毛玻璃底板** —— 卡片之间的缝隙、上下边缘露出
@@ -2843,8 +2886,9 @@ export default {
   background: rgba(var(--surface-rgb, 255, 255, 255), 0.16);
   -webkit-backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
   backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
-  /* 上沿投影：抽屉是从下面推上来的，顶边要有"抬起来"的影子 */
-  box-shadow: 0 -10rpx 32rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.14);
+  /* 上沿投影：抽屉是从下面推上来的，顶边要有"抬起来"的影子。
+     2026-10-16 加重（10→14rpx、0.14→0.2）：原来的影子太淡，真机上看不出分层。 */
+  box-shadow: 0 -14rpx 44rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.2);
   opacity: var(--reveal, 1);
   pointer-events: none;
 }
@@ -3171,8 +3215,10 @@ export default {
   opacity: calc(1 - var(--hero-fade, 0));
   pointer-events: var(--hero-pe, auto);
   /* 抽屉感③：首页这层随抽屉上来轻微缩小（景深）——抽屉在上面、首页沉下去。
+     ⚠️ 运行时由 heroRevealStyle 的内联样式覆盖（App 端没有 CSS 变量写入通道）；
+        这条只作为 JS 没跑时的静态兜底。
      ⚠️ 同样是 transform（合成器属性），不许动 height / padding。 */
-  transform: scale(calc(1 - 0.04 * var(--hero-fade, 0)));
+  transform: scale(calc(1 - 0.05 * var(--hero-fade, 0)));
   transform-origin: 50% 42%;
 }
 /* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再缩短 ——

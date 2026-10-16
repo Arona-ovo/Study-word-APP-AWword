@@ -137,6 +137,13 @@ function defaults() {
       useAI: false,        // 是否启用云端 AI 朗读
       sfx: true            // 答题音效（答对/半对/答错各一声，见 utils/sfx.js）
     },
+    // 触感反馈（utils/haptic.js）：
+    //   on    总开关（关掉就一次都不震）
+    //   level 强度：light 12ms / mid 22ms / strong 34ms
+    // ⚠️ Android 的震动权限在 manifest.json 里声明（安装时权限，不用运行时弹框），
+    //    但**改了 manifest 必须重新打包 / 重打基座** —— 老基座没这个权限时会静默失败，
+    //    失败原因记在 haptic.lastError()，设置页据此提示，而不是假装"设备不支持"。
+    haptic: { on: true, level: 'mid' },
     // AI 服务配置（统一服务层读取）
     ai: {
       enabled: false,
