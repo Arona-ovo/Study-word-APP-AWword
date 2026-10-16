@@ -33,6 +33,18 @@ assert(/@touchend="dhEnd"/.test(home), '把手接住了 touchend（抬手清掉�
   assert(/@tap="startPractice"/.test(hero) && /@tap="openWordDrill"/.test(hero), 'hero 两颗入口仍在（背句子 / 背单词）');
 }
 
+// 点击只挂在中间那条上：手势区现在很高（吃掉 hero 以下的空白），
+// 若整体响应点击，点空白就会把抽屉点开 —— 用户明确要的是"滑出来"，不是"点出来"。
+{
+  const i = home.indexOf('class="drawer-handle"');
+  // 注意只切到自己的开标签为止：children 里的 .dh-bar 是带 @tap 的（那是对的）
+  const openTag = i > 0 ? home.slice(i, home.indexOf('>', i)) : '';
+  const handle = i > 0 ? home.slice(i, home.indexOf('\n    </view>', i)) : '';
+  assert(openTag.length > 0 && handle.length > 0, '能抠出把手自身的开标签与整块模板');
+  assert(!/@tap=/.test(openTag), '大手势区本身不响应点击（避免在空白上误开抽屉）');
+  assert(/class="dh-bar" @tap="toggleDrawer"/.test(home), '点击只挂在中间那条 .dh-bar 上');
+}
+
 console.log('== 2. 开合状态机（真实高度过渡）==');
 assert(/drawerH:/.test(home) && /drawerMax:/.test(home), 'data 里有 drawerH / drawerMax');
 assert(/measureDrawer\(\)/.test(home) && /selectAll\('\.mod-wrap'\)/.test(home),
@@ -122,25 +134,43 @@ console.log('== 3. 上滑手势 ==');
   };
   const swipe = (s, y) => new Function('return function (e) {' + move + '}')().call(s, { touches: [{ clientY: y }] });
 
-  // 阈值 40px：30px 属于"手抖/想滚动"，不该开合；60px 才算一次明确的上滑
+  // 阈值 28px：原先 40，放松是刻意的 —— 这是屏幕下半区唯一的纵向手势，
+  // 收紧到用户在 LB 机上"滑了没反应"就是白做，误开的代价只是再往下滑回去。
   const up = mk(500, false);
-  swipe(up, 470);
-  assert(up.__opened === 0, '上滑 30px（未过阈值）不展开');
-  swipe(up, 440);
+  swipe(up, 485);
+  assert(up.__opened === 0, '上滑 15px（手抖级别）不展开');
+  swipe(up, 466);
   assert(up.__opened === 1, '上滑累计过阈值 → 展开一次');
-  swipe(up, 400);
+  swipe(up, 420);
   assert(up.__opened === 1, '同一次滑动不会反复触发（触发后起点作废）');
 
   const down = mk(500, true);
-  swipe(down, 530);
-  assert(down.__closed === 0, '下滑 30px（未过阈值）不收起');
-  swipe(down, 560);
+  swipe(down, 515);
+  assert(down.__closed === 0, '下滑 15px（手抖级别）不收起');
+  swipe(down, 534);
   assert(down.__closed === 1, '下滑过阈值 → 收起一次');
-  swipe(down, 600);
+  swipe(down, 580);
   assert(down.__closed === 1, '同一次滑动不会反复收起');
+
+  // 横向为主 → 本次手势作废：那可能是左右滑页 / 图表拖动，抽屉不该抢
+  const hor = mkSelf({ drawerOpen: false });
+  hor.__opened = 0;
+  hor.openDrawer = function () { this.__opened++ };
+  const run = (name, self, ev) => new Function('return function (e) {' + bodyOf(name) + '}')().call(self, ev);
+  run('dhStart', hor, { touches: [{ clientY: 500, clientX: 100 }] });
+  run('dhMove', hor, { touches: [{ clientY: 480, clientX: 170 }] });
+  assert(hor.__opened === 0, '横向位移更大时不抢（那是左右滑页 / 图表拖动）');
+  // 手势作废后即便继续往上滑也不再响应（起点已清空）
+  run('dhMove', hor, { touches: [{ clientY: 400, clientX: 170 }] });
+  assert(hor.__opened === 0, '判定为横向后，本次手势全程作废');
+
+  // 卡片平铺形态：dhStart 不记录起点（那个形态下页面要正常滚，一点都不能拦）
+  const flat = mkSelf({ isFocus: false });
+  run('dhStart', flat, { touches: [{ clientY: 500, clientX: 100 }] });
+  assert(flat.__dhY == null, '卡片平铺形态下 dhStart 不记录起点');
 }
 
-console.log('== 4. CSS：动画期间裁切，展开后放开 ==');
+console.log('== 4. CSS：手势区要高、有滑入动画、动画期间裁切、展开后放开 ==');
 {
   const css = home.slice(home.lastIndexOf('\n<style'));
   const rule = (sel) => (css.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{[^}]*\\}')) || [''])[0];
@@ -157,6 +187,20 @@ console.log('== 4. CSS：动画期间裁切，展开后放开 ==');
   const kf = (css.match(/@keyframes drawer-card-in\s*\{[\s\S]*?\n\}/) || [''])[0];
   assert(kf.length > 0, '存在 @keyframes drawer-card-in');
   assert(!/transform/.test(kf), '淡入动画不碰 transform（transform 是拖拽排序在用的）');
+  // 手势区必须是「一整块高的区域」而不是一条窄把手：窄把手只在它自己那几十 rpx 上
+  // 接得到 touchmove，手指落在它下面（屏幕下半部分）就是完全没反应。
+  const dh = rule('.drawer-handle');
+  assert(dh.length > 0, '存在 .drawer-handle 规则');
+  assert(/height:\s*\d+vh/.test(dh), '收起时把手是一整块高的手势区（vh 具体值 → 覆盖屏幕下半部）');
+  assert(/height:\s*\d+rpx/.test(rule('.drawer-handle.dh-open')),
+    '展开后把手收成窄条（两端都得是具体值，auto 不可插值 = 没有过渡）');
+  assert(/transition:[^;]*height/.test(dh), '把手收窄本身有 height 过渡');
+  // 少了这条，浏览器会把手势抢去做页面滚动 → 一滚动就发 touchcancel，手势当场断掉
+  assert(/touch-action:\s*none/.test(dh), '手势区 touch-action:none（不许浏览器抢去滚动）');
+  const kfUp = (css.match(/@keyframes drawer-list-up\s*\{[\s\S]*?\n\}/) || [''])[0];
+  assert(kfUp.length > 0 && /translateY/.test(kfUp), '抽屉是从下方滑上来的（不只是 fade）');
+  assert(!/drawer-list-up/.test(rule('.mod-list.is-drawer:not(.drawer-collapsed) .mod-wrap')),
+    '上滑位移加在容器上而不是卡片上（卡片 transform 归拖拽排序用）');
 }
 
 console.log('== 5. 定时器不泄漏 ==');

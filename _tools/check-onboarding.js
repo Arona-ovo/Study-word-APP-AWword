@@ -119,7 +119,9 @@ assert(/class="foot-link"/.test(home), '首页存在 .foot-link（「编辑首�
 // 焦点模式换了布局：action 卡被整卡隐藏，同一步要改指向 hero 上的入口；
 // 另外多了一步讲「上滑看全部功能」。这两个选择器对不上，引导就指到空气上。
 assert(/class="focus-cta"/.test(home), '首页存在 .focus-cta（焦点模式的「开始背单词」目标）');
-assert(/class="drawer-handle"/.test(home), '首页存在 .drawer-handle（「上滑看全部功能」目标）');
+// ⚠️ 目标必须是中间那条 .dh-bar，不能是 .drawer-handle：后者现在是一整块高的
+// 手势区（收起时占 hero 以下的空白），照它画框会高亮出一大块空白，像引导框错位。
+assert(/class="dh-bar"/.test(home), '首页存在 .dh-bar（「上滑看全部功能」目标）');
 const focusShapeOk = steps.every(s =>
   !s.targetFocus || (s.targetFocus && typeof s.targetFocus.sel === 'string')
 );
@@ -128,8 +130,8 @@ assert(byId('start') && byId('start').targetFocus &&
   byId('start').targetFocus.sel === '.focus-cta',
   'start 步骤在焦点模式下改指向 .focus-cta（否则该步会被当成测不到而跳过）');
 assert(byId('drawer') && byId('drawer').target &&
-  byId('drawer').target.sel === '.drawer-handle',
-  'drawer 步骤指向 .drawer-handle（讲上滑抽屉）');
+  byId('drawer').target.sel === '.dh-bar',
+  'drawer 步骤指向 .dh-bar（讲上滑抽屉；指向大手势区会高亮整块空白）');
 // 首页按当前形态挑目标：焦点模式用 targetFocus，否则用 target
 assert(/guideTarget\(st\)\s*\{[\s\S]{0,240}?targetFocus/.test(home), '首页有按形态挑目标的 guideTarget()');
 assert(/const tg = this\.guideTarget\(st\)/.test(home) && /this\.rectOf\(tg\)/.test(home),

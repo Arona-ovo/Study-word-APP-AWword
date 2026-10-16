@@ -243,22 +243,27 @@
         <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
       </view>
     </view>
-    <!-- 抽屉把手 = 手势区：往上滑 / 点一下都能把下面的卡片拉出来。
-         手势刻意只挂在把手上，不挂到 hero：hero 里是两颗入口按钮，
-         在按钮上滑动会顺带触发按钮自己的 click（一边开抽屉一边跳走），
-         而把手内部没有任何可点元素，怎么滑都不会误触。 -->
+    <!-- 抽屉把手 = 手势区：从屏幕下半部分往上滑就把卡片拉上来，点中间那条也能开关。
+         ⚠️ 手势区必须做「高」：收起时它占掉 hero 以下到屏幕底的整块空白。
+         之前它只是 hero 下面一条窄把手，手指落在它下方时 touchmove 根本没人接 ——
+         表现就是"只有点在把手上有用，上滑毫无反应"。
+         但也不能往上占：hero 里是两颗入口按钮，在按钮上滑会顺带触发按钮自己的
+         click（一边开抽屉一边跳走），所以手势只到 hero 为止。
+         @tap 也因此只挂在内条上：大手势区若整体响应点击，点空白就会误开抽屉。 -->
     <view
       v-if="isFocus"
       class="drawer-handle"
-      @tap="toggleDrawer"
+      :class="{ 'dh-open': drawerOpen }"
       @touchstart="dhStart"
       @touchmove="dhMove"
       @touchend="dhEnd"
       @touchcancel="dhEnd"
     >
-      <view class="dh-grip"></view>
-      <text class="dh-text">{{ drawerOpen ? $t('收起') : $t('上滑查看全部功能') }}</text>
-      <text class="dh-chev" :class="{ up: drawerOpen }">⌃</text>
+      <view class="dh-bar" @tap="toggleDrawer">
+        <view class="dh-grip"></view>
+        <text class="dh-text">{{ drawerOpen ? $t('收起') : $t('上滑查看全部功能') }}</text>
+        <text class="dh-chev" :class="{ up: drawerOpen }">⌃</text>
+      </view>
     </view>
 
     <!-- 首页模块：按用户保存的顺序渲染；编辑态显示拖拽手柄与收纳按钮 -->
@@ -1542,20 +1547,31 @@ export default {
         }).exec()
       } catch (e) { /* 量不到就保持 0，走宽松上限兜底 */ }
     },
-    /** 把手上滑手势：记下起点 Y，move 时若整体上滑超过阈值就展开抽屉 */
+    /** 上滑手势：记下起点坐标。坐标在不同端放的位置不一样，多兜几个来源。 */
     dhStart(e) {
-      const t = (e && e.touches && e.touches[0]) || {}
+      // 卡片平铺形态没有抽屉，不该拦任何东西（那个形态下页面是要正常滚动的）
+      if (!this.isFocus) return
+      const t = (e && e.touches && e.touches[0]) || (e && e.targetTouches && e.targetTouches[0]) ||
+        (e && e.changedTouches && e.changedTouches[0]) || {}
       this.__dhY = t.clientY != null ? t.clientY : (t.pageY != null ? t.pageY : 0)
+      this.__dhX = t.clientX != null ? t.clientX : 0
     },
     dhMove(e) {
-      if (this.__dhY == null) return
-      const t = (e && e.touches && e.touches[0]) || {}
+      if (!this.isFocus || this.__dhY == null) return
+      const t = (e && e.touches && e.touches[0]) || (e && e.targetTouches && e.targetTouches[0]) ||
+        (e && e.changedTouches && e.changedTouches[0]) || {}
       const y = t.clientY != null ? t.clientY : (t.pageY != null ? t.pageY : 0)
-      // 整体向上滑（当前 Y 比起点小）超过阈值 → 把卡片拉出来；向下滑超过阈值 → 收回去。
-      // 触发一次就把起点作废，避免同一次滑动来回开关。
-      const UP = 40
-      if (this.__dhY - y > UP) { this.__dhY = null; this.openDrawer() }
-      else if (y - this.__dhY > UP) { this.__dhY = null; this.closeDrawer() }
+      const x = t.clientX != null ? t.clientX : 0
+      const dy = this.__dhY - y          // > 0 表示手指在往上走
+      const dx = x - this.__dhX
+      // 横向位移更大 → 这是左右滑页 / 图表拖动，本次手势作废，不跟它们抢
+      if (Math.abs(dx) > Math.abs(dy)) { this.__dhY = null; return }
+      // 往上滑过阈值 → 卡片上来；往下滑过阈值 → 收回去。触发一次就把起点作废，
+      // 避免一次手势里反复开关。阈值 28px（比原先的 40 松）：这是屏幕下半区唯一的
+      // 纵向手势，收紧一点用户就觉得"滑了没反应"，误开的代价也只是一滑回去。
+      const UP = 28
+      if (dy > UP) { this.__dhY = null; this.openDrawer() }
+      else if (-dy > UP) { this.__dhY = null; this.closeDrawer() }
     },
     dhEnd() {
       this.__dhY = null
@@ -3183,15 +3199,34 @@ export default {
 .focus-sub-link:active { color: #1d4fd8; color: var(--brand-strong, #1d4fd8); }
 .focus-sub-sep { font-size: 22rpx; color: #98a19b; color: var(--ink-3, #98a19b); }
 
-/* 抽屉把手：平时只露这一条，上滑 / 点它才展开下面的卡片 */
+/* 抽屉把手 = 手势区。收起时故意很高 —— 吃掉 hero 以下到屏幕底的整块空白，
+   让"从下往上滑"有一个足够大的起手范围（窄把手只在它自己那几十 rpx 上有效）。
+   展开后收窄成中间那条。
+   ⚠️ 两端都必须是具体高度（vh / rpx 都行）：写成自然高 auto 就不可插值，
+   transition 会失效，收展看着就是硬切。
+   ⚠️ 高度别贪大：hero(52vh) + 本区 + 底部「编辑首页」要能塞进
+   内容区（100vh - 顶栏 136rpx - 底栏为 tabbar 预留的 220rpx），
+   给它 28vh 就会把「编辑首页」顶到 tabbar 后面去 —— 取 18vh，
+   正好盖住 hero 底边到 tabbar 顶边那条空白带。 */
 .drawer-handle {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  gap: 14rpx;
+  height: 18vh;
   padding: 20rpx 0 24rpx;
   margin-top: 4rpx;
+  overflow: hidden;
+  /* 不许浏览器把手势抢去做页面滚动：一滚动就会发 touchcancel，滑动当场断掉 */
   touch-action: none;
+  transition: height 320ms cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+.drawer-handle.dh-open { height: 96rpx; }
+/* 唯一响应点击的那条：点空白的地方不该把抽屉点开 */
+.dh-bar {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  padding: 8rpx 28rpx;
 }
 .dh-grip {
   width: 64rpx;
@@ -3236,5 +3271,16 @@ export default {
 @keyframes drawer-card-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+/* 整块抽屉再从下方浮上来一点 —— 光有 max-height 展开看着像"就地展开"，
+   加一段短位移才像被从底部拉上来的。
+   ⚠️ 位移加在容器上，不能加在卡片上：卡片的 transform 归编辑态拖拽排序用
+   （wrapStyle 写的内联位移），动画期间会被有 transform 的 keyframes 覆盖掉。 */
+.mod-list.is-drawer:not(.drawer-collapsed) {
+  animation: drawer-list-up 320ms cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+@keyframes drawer-list-up {
+  from { transform: translateY(56rpx); }
+  to { transform: none; }
 }
 </style>

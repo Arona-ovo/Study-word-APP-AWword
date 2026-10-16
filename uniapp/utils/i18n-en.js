@@ -975,7 +975,7 @@ export default {
   '中间：开始背单词': 'Start practicing',
   '每组都是中英互译，答错的自动进错题本；下面两个小按钮直达错题复习和 AI 薄弱点专练。': 'Each round is CN-EN translation; wrong answers go to the mistake book automatically. The two small buttons below open review and AI weak-point drills.',
   '底部：上滑看全部功能': 'Bottom: swipe up for everything else',
-  '主页只留背单词 / 背句子两个入口；把手往上滑，词书进度、今日数据、每日目标这些卡片就出来了，往下滑回去就能收起。': 'The home page keeps just the two main entries. Swipe the handle upward to bring up cards like wordbook progress, today\'s stats and your daily goal; swipe back down to collapse them.',
+  '主页只留背单词 / 背句子两个入口；在下半屏往上滑，词书进度、今日数据、每日目标这些卡片就上来了，往下滑回去就能收起。': 'The home page keeps just the two main entries. Swipe up anywhere in the lower half to bring cards like wordbook progress, today\'s stats and your daily goal into view; swipe back down to collapse them.',
   '底部：编辑首页': 'Edit the home page',
   '点「编辑首页」后卡片可以拖动排序、把不想要的收纳起来，也能从「＋ 添加组件」加回来。': 'Tap "Edit home" to drag cards into any order, stash the ones you do not want, and re-add them from "Add widget".',
   '底部导航：四个页': 'Bottom tabs: four pages',
