@@ -259,6 +259,7 @@
          底部「编辑首页」在最后一张卡下面，所以只有滑到底才会出现。 -->
     <view
       class="mod-list"
+      :class="{ 'reveal-idle': revealIdle }"
       ref="modList"
       @touchmove="dragMove"
       @touchend="dragEnd"
@@ -741,6 +742,12 @@ export default {
     isFocus() {
       return this.homeStyle === 'focus'
     },
+    /** 焦点模式下卡片初始"消失"（--reveal:0）：挂类不挂 JS ——
+        就算 onPageScroll / onReady 一环都没跑，静止态卡片也绝不在首屏露出来。
+        滚动时 syncReveal 写内联 style，优先级高于类，接管淡入进度。 */
+    revealIdle() {
+      return this.isFocus && !!this.renderCards.length
+    },
     /** 收纳区里的 AI 卡片：被收纳（visible=false）的那几张，可加回或彻底删除 */
     aiSheetList() {
       return ((this.doc && this.doc.cards) || []).filter(c => !c.builtin && c.visible === false)
@@ -966,7 +973,8 @@ export default {
       el.style.setProperty('--reveal', '1')
       return
     }
-    // 320 = hero 探出量：滚完这一截卡片全显（见 .focus-hero 的 320rpx）
+    // 320 = 淡入距离（rpx）：滑过这一截卡片从全隐到全显；
+    // hero 已铺满一屏，卡片从折叠线之下淡入，这个数只管"多快淡完"
     let r = this._scrollTop / 320
     r = r < 0 ? 0 : r > 1 ? 1 : r
     el.style.setProperty('--reveal', r.toFixed(3))
@@ -2755,14 +2763,19 @@ export default {
 /* ---------- 首页模块编辑（拖拽 / 收纳） ---------- */
 .mod-list {
   position: relative;
-  /* 焦点模式：卡片默认"消失"（CSS 初值 1，但 onPageScroll 在焦点态会从 0 推起）。
-     往上滑时滚动进度被推进 --reveal（0→1）→ 卡片淡入 + 上移，手势与下方卡片连贯统一。
-     非焦点 / 全收纳态不写这个变量，落到默认 1（常显）。
+  /* 焦点模式：卡片初始"消失"、随上滑淡入 + 上移。双保险结构：
+     ① `.reveal-idle` 类（revealIdle computed）把初值定成 0 —— 纯 CSS，不依赖 JS 时机；
+     ② 滚动时 syncReveal 写内联 style（优先级更高），把进度实时推给 --reveal。
+     非焦点 / 全收纳态两个都不挂 → 落到默认 1（常显）。
      ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
   --reveal: 1;
   opacity: var(--reveal, 1);
   transform: translateY(calc((1 - var(--reveal, 1)) * 56rpx));
   will-change: opacity, transform;
+}
+/* 焦点 + 有卡的静止态：卡片藏住（reveal 0）。内联 style 一来就被覆盖。 */
+.mod-list.reveal-idle {
+  --reveal: 0;
 }
 
 .mod-wrap { position: relative; }
@@ -3066,11 +3079,18 @@ export default {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: calc(100vh - var(--status-bar-height, 0px) - 136rpx - 320rpx);
+  /* 铺到屏幕底边：下一张卡静止时**必然**在折叠线之下（结构保证，不靠 opacity）。
+     ⚠️ 之前试过"缩短 320rpx 让卡片探出"——探出量依赖 --reveal 归零才不可见，
+     JS 一环没跑卡片就露在首屏（真机翻车），别再走回头路。 */
+  min-height: calc(100vh - var(--status-bar-height, 0px) - 136rpx);
   box-sizing: border-box;
   /* 不写左右内边距：面板与下方卡片同宽（都只吃 .container 的 28rpx），
      一眼看过去是"一摞卡"，而不是两套宽度叠在一起。 */
-  padding: 24rpx 0;
+  /* 上下留白相等 → 内容盒对称于整屏，两个入口落在屏幕正中：
+     底栏预留 220rpx + 24rpx、顶栏占 136rpx，差值 (24 + 220 − 136) 补在 padding-top。
+     ⚠️ 136rpx / 220rpx 要和 App.vue 的 .page-nav / .page-tabbar 对齐。 */
+  padding: calc(108rpx - var(--status-bar-height, 0px)) 0
+           calc(24rpx + 220rpx + env(safe-area-inset-bottom, 0px));
 }
 /* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再缩短 ——
    这一态要的就是"面板 + 兜底入口"挤在首屏，探出量反而会把兜底入口推到折叠线下。 */

@@ -18,8 +18,10 @@
 // 覆盖：
 //  1) 拆干净：抽屉状态机 / 自定义手势 / 把手 / 量高 都不留（onPageScroll 现只驱动淡入）
 //  2) 手势挂点：根节点只接左右滑页（onSlide*），不再包一层 dh* 包装方法
-//  3) hero 形态：内容收进与下方卡片同款面板 + 比铺满一屏短 320rpx；
-//     .mod-list 读 --reveal 做淡入 + 上移（非焦点 / 全收纳态落到默认 1 常显）
+//  3) hero 形态：铺满到屏幕底边（卡片静止时结构性藏在折叠线之下，不靠 opacity）+
+//     内容收进与下方卡片同款面板 + 上下留白对称（入口在屏幕正中）；
+//     .mod-list 读 --reveal 做淡入 + 上移，且焦点静止态由 .reveal-idle **类**
+//     把初值定成 0（双保险：不依赖 onReady / onPageScroll 有没有跑）
 //  4) 不掉帧：不许再有重排型过渡（min-height / max-height / padding）；只允许 opacity / transform
 //  5) 顺序：「编辑首页」排在卡片之后（只有滑到底才看得到）
 const fs = require('fs');
@@ -59,7 +61,7 @@ assert(/setProperty\(['"]--reveal['"]/.test(home),
   'onPageScroll 把进度写到 --reveal（CSS 变量 → 合成器接管，零重排，不掉帧）');
 assert(/scrollTop/.test(home), 'onPageScroll 读 scrollTop 推进 reveal（跟手）');
 assert(/this\._scrollTop \/ 320/.test(home),
-  'reveal 按 hero 探出量 320 归一化（与 .focus-hero 的 320rpx 对齐：淡完恰好滚进可见区）');
+  'reveal 按淡入距离 320 归一化（滑过 320rpx 卡片全显）');
 assert(!/drawerCollaps|collapseDrawer|openDrawer|closeDrawer|drawerState/.test(home),
   'onPageScroll 不接任何抽屉开合状态机');
 
@@ -93,7 +95,7 @@ console.log('== 2. 手势挂点：根节点只负责左右滑页 ==');
     '面板内仍是「关键信息 + 两个大入口 + 小字」三段');
 }
 
-console.log('== 3. hero 形态：面板 + 下一张卡探出屏幕底 ==');
+console.log('== 3. hero 形态：铺满一屏 + 面板 + reveal 双保险 ==');
 {
   const hero = rule('.focus-hero');
   assert(hero.length > 0, '存在 .focus-hero 规则');
@@ -101,20 +103,19 @@ console.log('== 3. hero 形态：面板 + 下一张卡探出屏幕底 ==');
   assert(mh.length > 0 && /100vh/.test(mh), 'hero 高度按视口算（一直铺下去）');
   assert(/136rpx/.test(mh) && /status-bar-height/.test(mh),
     '算式里让出顶栏 136rpx 与状态栏（与 App.vue 的 .page-nav 对齐）');
-  // 关键：探出量 320rpx。hero 从"铺满一屏"缩短 320rpx → 下一张卡上沿落在
-  // 屏幕底边上方 320rpx，而悬浮 tabbar 只占约 132rpx → 首屏就能看到约 188rpx
-  // 的下一张卡（2026-10-16 真机反馈"像故意留空把卡片藏底下"的直接对策）。
-  // 改这个数 = 改探出量：调大露得多，调小露得少；内容仍在可见区居中（上下各 24rpx）。
-  assert(/320rpx/.test(mh),
-    'min-height 比铺满一屏短 320rpx（下一张卡上沿从悬浮 tabbar 上方探出）');
+  // 关键反转（2026-10-16 真机二次反馈"首页还是能看到底部的卡片"）：
+  // 探出量方案（hero 短 320rpx 让卡片露头）依赖 --reveal 归零才不可见，
+  // JS 一环没跑卡片就明晃晃露在首屏 —— 已废弃。现在 hero 必须铺满到屏幕底边，
+  // 卡片静止时**结构性**地在折叠线之下（和 opacity 无关，怎么都看不见）。
+  assert(!/320rpx/.test(mh),
+    'min-height 里不许再出现探出量 320rpx（卡片必须整体藏在折叠线之下）');
   assert(!/220rpx/.test(mh),
-    'min-height 里不出现底栏预留 220rpx（那会把探出量又算回去，卡片重新藏住）');
+    'min-height 里不出现底栏预留 220rpx（底栏让位由 padding 承担）');
   const pad = (hero.match(/padding:\s*[^;]*;/) || [''])[0];
-  // 面板自己就是窗体，hero 不再补 tabbar 预留，左右边距也让给面板（与卡片同宽）
-  assert(/padding:\s*24rpx 0/.test(hero),
-    'hero 只留 24rpx 上下白、左右 0（面板与下方卡片同宽）');
-  assert(!/safe-area-inset-bottom/.test(pad),
-    'hero 不再单独吃安全区（tabbar 的安全区在 App.vue 的 .page-tabbar 与胶囊自己身上）');
+  // 左右 0：面板与下方卡片同宽；上下留白对称于整屏 → 两个入口落在屏幕正中
+  // （底栏 220 + 24、顶栏 136，差值 108 补在 padding-top）。
+  assert(/108rpx/.test(pad) && /220rpx/.test(pad) && /safe-area-inset-bottom/.test(pad),
+    'padding 上下对称于整屏（108 = 24 + 220 − 136）→ 入口在屏幕正中');
   assert(/justify-content:\s*center/.test(hero), 'hero 内容垂直居中');
   assert(!/transition/.test(hero), 'hero 上没有任何过渡（高度 / 内边距不参与动画）');
   // 面板 = 下方卡片同款"窗体"：半透明表面 + 模糊 + 发丝边 + 投影
@@ -134,6 +135,16 @@ console.log('== 3. hero 形态：面板 + 下一张卡探出屏幕底 ==');
     'mod-list 随 --reveal 上移（滑出感）');
   assert(!/transition[^;{}]*(min-height|max-height|padding)/.test(list),
     'mod-list 不接任何重排型过渡（只动 opacity / transform）');
+  // 双保险①：焦点 + 有卡的静止态必须由**类**把初值定成 0 —— 纯 CSS，
+  // 不依赖 onReady / onPageScroll 有没有跑（上一版就栽在只靠 JS 写 DOM）。
+  const idle = rule('.mod-list.reveal-idle');
+  assert(/--reveal:\s*0/.test(idle),
+    '存在 .mod-list.reveal-idle 类（焦点静止态结构性藏卡，不依赖 JS 时机）');
+  // 双保险②：模板把类挂到 revealIdle computed 上（模板不能写函数调用）
+  assert(/:class="\{ 'reveal-idle': revealIdle \}"/.test(home),
+    'mod-list 模板挂 reveal-idle 类（revealIdle computed 驱动）');
+  assert(/revealIdle\(\)\s*\{\s*return this\.isFocus && !!this\.renderCards\.length/.test(home.replace(/\r\n/g, '\n')),
+    'revealIdle = 焦点 且 有卡（其余形态卡片常显）');
 }
 
 console.log('== 4. 不掉帧：不许再有重排型过渡 ==');
