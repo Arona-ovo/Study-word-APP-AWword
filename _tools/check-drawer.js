@@ -83,6 +83,12 @@ assert(/hero\.style\.setProperty\('--hero-fade'/.test(home),
   'syncReveal 把进度写进 --hero-fade（卡片出来→入口淡出，卡收回去→入口回来）');
 assert(/--hero-pe', fade > 0\.9 \? 'none' : 'auto'/.test(home),
   '淡到 0.9 以上才关 pointer-events（半透明时入口仍可点）');
+// 淡入距离：320 时一甩就滑完（真机反馈"没有任何动画"），必须 ≥480。
+assert(/\(vh - rect\.top\) \/ (4\d\d|5\d\d|6\d\d)/.test(home),
+  'reveal 的淡入距离 ≥480rpx（太短则一帧滑完，看不出动画）');
+// 两个节点都拿不到 = 动画完全没写上去：必须留线索，不能静默（theme.js 那次的教训）
+assert(/syncReveal: no writable node/.test(home),
+  'list/hero 都拿不到时 console.warn 一条（真机"没动画"时有线索可查）');
 // syncReveal 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
 // 放到 methods 外（与生命周期选项平级）就不是实例方法 → 真机报
 // "this.syncReveal is not a function"（2026-10-16 真踩，脚本全绿却炸在基座上）。
@@ -169,6 +175,9 @@ console.log('== 3. hero 形态：铺满一屏 + 裸按钮入口渐隐 + 卡片�
     'hero 透明度 = 1 − --hero-fade（默认 0 = 全显示，JS 失效也不会藏起入口）');
   assert(/pointer-events:\s*var\(--hero-pe, auto\)/.test(hero),
     '淡到近乎全隐时关掉 pointer-events（不许点到看不见的按钮）');
+  // 抽屉感③：首页这层随抽屉上来轻微缩小（景深）——抽屉在上、首页沉下去。
+  assert(/transform:\s*scale\(calc\(1 - [\d.]+ \* var\(--hero-fade, 0\)\)\)/.test(hero),
+    'hero 随 --hero-fade 轻微缩小（景深：抽屉在上、首页沉下去；仍是 transform）');
   // 卡片淡入：mod-list 读 --reveal 决定透明度与上移，纯合成器属性（不掉帧）。
   // "抽屉没有实体"= 下方卡片本身就是抽屉，靠滚动进度淡入 + 上移，而非独立浮层。
   const list = rule('.mod-list');
@@ -179,6 +188,20 @@ console.log('== 3. hero 形态：铺满一屏 + 裸按钮入口渐隐 + 卡片�
   assert(/opacity:\s*var\(--reveal/.test(list), 'mod-list 透明度随 --reveal 变化（淡入）');
   assert(/transform:\s*translateY/.test(list) && /--reveal/.test(list),
     'mod-list 随 --reveal 上移（滑出感）');
+  // 抽屉感①：这摞卡要**落后于滚动**才看得出"被拉上来"（视差）。
+  // 之前只有 56rpx，跟着页面一起平移 → 真机反馈"没有任何动画、层级和首页没区别"。
+  const slide = (list.match(/translateY\([^)]*\(1 - var\(--reveal, 1\)\) \* (\d+)rpx\)/) || [])[1];
+  assert(Number(slide) >= 140,
+    'mod-list 的上滑视差 ≥140rpx（太小就跟页面同速平移，看不出抽屉被拉上来）');
+  // 抽屉感②：整摞卡共用一张毛玻璃底板（缝隙里露出被模糊的首页背景）→ 另一层的证据。
+  const veil = rule('.mod-list::before');
+  assert(/backdrop-filter/.test(veil) && /--glass-lg/.test(veil),
+    'mod-list::before 是毛玻璃底板（卡片缝隙露出被模糊的首页背景）');
+  assert(/opacity:\s*var\(--reveal/.test(veil),
+    '底板透明度随 --reveal 淡入（不能逐帧改 blur 半径，那是掉帧老路）');
+  assert(/box-shadow/.test(veil) && /border-radius/.test(veil),
+    '底板带上沿投影与圆角（抽屉是从下面推上来的）');
+  assert(/pointer-events:\s*none/.test(veil), '底板不吃点击');
   assert(!/transition[^;{}]*(min-height|max-height|padding)/.test(list),
     'mod-list 不接任何重排型过渡（只动 opacity / transform）');
   // 逆向契约：绝不允许"CSS 强制藏卡"的类/初值 0（那是上一版卡死隐藏的根）

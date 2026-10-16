@@ -1003,22 +1003,33 @@ export default {
     },
     syncReveal() {
       const list = this.pickListEl()
+      const hero = this.pickHeroEl()
+      // 两个节点都拿不到 = 淡入 / 渐隐全都不会生效（页面照样能用，只是没动画）。
+      // 这种情况必须留一条线索，否则真机"没动画"无从排查（见 theme.js 那次的教训）。
+      if (!list && !hero) {
+        this._revealMiss = (this._revealMiss || 0) + 1
+        if (this._revealMiss === 12) {
+          // ⚠️ 日志文案保持 ASCII：中文会被 check-i18n 计入"漏网的静态中文"
+          console.warn('[home] syncReveal: no writable node -> reveal/fade disabled')
+        }
+        return
+      }
       // 只有"焦点 + 有卡"才接手势：非焦点 / 全收纳态卡片常显、入口不淡出
       const focus = !!(this.isFocus && this.renderCards && this.renderCards.length)
-      // 320 = 淡入距离（rpx）：卡片从"刚进视口"到"上移 320rpx"这段里由 0→1
+      // 480 = 淡入距离（rpx）：卡片从"刚进视口"到"上移 480rpx"这段里由 0→1。
+      // 之前是 320，一甩就滑完了、几乎看不见；拉长到 480 才看得出"抽屉被拉上来"。
       let p = 1
       if (focus && list && typeof list.getBoundingClientRect === 'function') {
         const vh = this._vh || ((typeof window !== 'undefined' && window.innerHeight) || 0)
         if (vh) {
           const rect = list.getBoundingClientRect()
-          p = (vh - rect.top) / 320
+          p = (vh - rect.top) / 480
           p = p < 0 ? 0 : p > 1 ? 1 : p
         }
       }
       if (list) list.style.setProperty('--reveal', p.toFixed(3))
       // 入口渐隐 = 同一条进度的反面（卡片出来 → 入口淡出；卡片滑回去 → 入口回来）。
       // ⚠️ 非焦点 / 没卡时 fade 恒 0：那一屏全靠入口，淡掉就是空屏。
-      const hero = this.pickHeroEl()
       if (hero) {
         const fade = focus ? p : 0
         hero.style.setProperty('--hero-fade', fade.toFixed(3))
@@ -2809,8 +2820,33 @@ export default {
      ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
   --reveal: 1;
   opacity: var(--reveal, 1);
-  transform: translateY(calc((1 - var(--reveal, 1)) * 56rpx));
+  /* 抽屉感①：这摞卡**落后于滚动**上滑（视差 160rpx）——滑的时候能看见它
+     从下面被"拉上来"，而不是跟着页面一起平移（那看着就是同一层）。
+     ⚠️ 只用 opacity / transform（合成器接管，零重排），绝不加 min-height / padding 过渡。 */
+  transform: translateY(calc((1 - var(--reveal, 1)) * 160rpx));
   will-change: opacity, transform;
+}
+/* 抽屉感②：整摞卡共用一张**毛玻璃底板** —— 卡片之间的缝隙、上下边缘露出
+   被模糊的首页背景，一眼就看出"这是浮在首页之上的另一层"（不是接排下去的）。
+   ⚠️ 只动 opacity（跟着 --reveal 淡入）；绝不逐帧改 blur 半径，那是掉帧的老路。 */
+.mod-list::before {
+  content: '';
+  position: absolute;
+  /* 撑到屏幕两边：底板比卡片宽，边缘才像"抽屉的边" */
+  left: -28rpx;
+  right: -28rpx;
+  top: -28rpx;
+  bottom: -28rpx;
+  z-index: -1;
+  border-radius: 36rpx;
+  background: #ffffff;
+  background: rgba(var(--surface-rgb, 255, 255, 255), 0.16);
+  -webkit-backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
+  backdrop-filter: var(--glass-lg, blur(12px) saturate(180%));
+  /* 上沿投影：抽屉是从下面推上来的，顶边要有"抬起来"的影子 */
+  box-shadow: 0 -10rpx 32rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.14);
+  opacity: var(--reveal, 1);
+  pointer-events: none;
 }
 
 .mod-wrap { position: relative; }
@@ -3134,6 +3170,10 @@ export default {
      ⚠️ 只动 opacity（合成器接管），指针事件在淡到 0.9 之后关掉，避免点空气。 */
   opacity: calc(1 - var(--hero-fade, 0));
   pointer-events: var(--hero-pe, auto);
+  /* 抽屉感③：首页这层随抽屉上来轻微缩小（景深）——抽屉在上面、首页沉下去。
+     ⚠️ 同样是 transform（合成器属性），不许动 height / padding。 */
+  transform: scale(calc(1 - 0.04 * var(--hero-fade, 0)));
+  transform-origin: 50% 42%;
 }
 /* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再缩短 ——
    这一态要的就是"入口 + 兜底入口"挤在首屏。 */
