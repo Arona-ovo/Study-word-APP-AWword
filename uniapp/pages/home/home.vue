@@ -976,12 +976,31 @@ export default {
     // ⚠️ 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
     //    放到 methods 外（和生命周期选项平级）它就不是实例方法 → 真机报
     //    "this.syncReveal is not a function"（2026-10-16 真踩）。
-    syncReveal() {
+    // 取 .mod-list 的真实节点。⚠️ App 端 uni 给内置组件 ref 的对象**不一定是
+    // 真 DOM 节点**（ref.style 可能是 null），直接 el.style.setProperty 会炸
+    // （2026-10-16 真机："Cannot read property 'setProperty' of null"）。
+    // 所以候选逐个验"能不能写 style"，能写才用；拿不到就返回 null。
+    pickListEl() {
+      const ok = (c) => !!(c && c.style && typeof c.style.setProperty === 'function')
+      if (ok(this._listEl)) return this._listEl
       const refs = this.$refs || {}
-      const ref = refs.modList
-      const el = this._listEl || (ref && (ref.$el || ref))
-      if (!el) return
-      this._listEl = el
+      const r = refs.modList
+      const cands = [r && r.$el, r]
+      // 兜底：按类名找（uni 的 ref 对象不顶用时，DOM 层还在）
+      if (typeof document !== 'undefined' && document && document.querySelector) {
+        cands.push(document.querySelector('.mod-list'))
+      }
+      for (let i = 0; i < cands.length; i++) {
+        if (ok(cands[i])) {
+          this._listEl = cands[i]
+          return this._listEl
+        }
+      }
+      return null
+    },
+    syncReveal() {
+      const el = this.pickListEl()
+      if (!el) return            // 拿不到节点就跳过：卡片默认 --reveal:1 常显，只是没有淡入
       if (!this.isFocus || !this.renderCards || !this.renderCards.length) {
         el.style.setProperty('--reveal', '1')
         return

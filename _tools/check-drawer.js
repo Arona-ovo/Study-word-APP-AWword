@@ -65,6 +65,14 @@ assert(/setProperty\(['"]--reveal['"]/.test(home),
 // 且一旦 onPageScroll 不触发就暴露出"卡片藏不住/卡死"的隐患。
 assert(/getBoundingClientRect/.test(home), 'syncReveal 读 .mod-list 真实位置算入屏进度');
 assert(/window\.innerHeight|getSystemInfoSync/.test(home), '视口高被缓存（算入屏进度用，不逐帧取系统信息）');
+// ⚠️ ref 拿到的对象**不一定是能写 style 的 DOM 节点**：uni 在 App 端给内置组件
+// 的 ref，.style 可能是 null → 直接 el.style.setProperty 会炸
+// （2026-10-16 真机："Cannot read property 'setProperty' of null"，onReady /
+// onPageScroll 每帧一条全局错误）。必须先验 style.setProperty 可用再用。
+assert(/typeof c\.style\.setProperty === 'function'|typeof el\.style\.setProperty === 'function'/.test(home),
+  '写 --reveal 前先验目标节点的 style.setProperty 可用（App 端 ref 可能不是 DOM 节点）');
+assert(/if \(!el\) return/.test(home),
+  '拿不到节点就静默跳过（卡片默认 --reveal:1 常显，只是没有淡入，不能报错）');
 // syncReveal 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
 // 放到 methods 外（与生命周期选项平级）就不是实例方法 → 真机报
 // "this.syncReveal is not a function"（2026-10-16 真踩，脚本全绿却炸在基座上）。
