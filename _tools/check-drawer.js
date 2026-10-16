@@ -108,8 +108,7 @@ assert(!/drawer-list-up|drawer-card-in/.test(css), '不再有抽屉的出现动�
 assert(!/drawer-collapsed|drawer-animating|is-drawer|hero-tall/.test(home),
   '不再有折叠 / 动画 / 高矮开关这类状态 class');
 
-console.log('== 5. 顺序：「编辑首页」在卡片之后 ==');
-{
+console.log('== 5. 顺序：「编辑首页」在卡片之后 ==');{
   const iHero = home.indexOf('class="focus-hero"');
   const iList = home.indexOf('class="mod-list"');
   const iFoot = home.indexOf('class="home-foot"');
@@ -120,6 +119,12 @@ console.log('== 5. 顺序：「编辑首页」在卡片之后 ==');
   // 卡片区不能带内联高度/显隐样式（那正是上一版的抽屉做法）
   const list = home.slice(iList - 40, home.indexOf('>', iList) + 1);
   assert(!/:style=/.test(list), '.mod-list 上没有内联样式（不再由 JS 控高度）');
+  // 空态兜底：卡片被全部收纳时 hero 必须退回自然高度 ——
+  // 否则"＋ 添加组件 / 编辑首页"全在下一屏之后，而页面又几乎没得滚，用户以为加不回来。
+  assert(/:class="\{ 'hero-empty': !renderCards\.length \}"/.test(home),
+    'hero 在"卡片全被收纳"时挂 hero-empty');
+  const empty = rule('.focus-hero.hero-empty');
+  assert(/min-height:\s*0/.test(empty), 'hero-empty 时 hero 不再撑满一屏（兜底入口露在首屏）');
 }
 
 console.log(fail === 0 ? '\n上滑看卡片全部通过' : '\n失败 ' + fail + ' 项');

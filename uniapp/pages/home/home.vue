@@ -236,7 +236,7 @@
          可在「设置 → 首页样式」切回原卡片平铺。
          注：焦点模式下隐藏 action 卡（它的主按钮与 hero 重复），改由 hero 的
          两个大入口 + 下方「复习错题 / AI 薄弱点专练」小字承接，避免入口重复。 -->
-    <view v-if="isFocus" class="focus-hero">
+    <view v-if="isFocus" class="focus-hero" :class="{ 'hero-empty': !renderCards.length }">
       <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
       <view class="focus-cta">
         <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
@@ -3022,6 +3022,13 @@ export default {
      差值 (24 + 220 − 136) 补在 padding-top 上；状态栏也要从顶侧扣掉。 */
   padding: calc(108rpx - var(--status-bar-height, 0px)) 32rpx
            calc(24rpx + 220rpx + env(safe-area-inset-bottom, 0px));
+}
+/* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再撑满一屏 ——
+   否则「＋ 添加组件 / 编辑首页」整块都在下一屏之后，而页面又几乎没得滚，
+   用户会以为"组件加不回来了"。这一态让 hero 退回自然高度，兜底入口就露在首屏。 */
+.focus-hero.hero-empty {
+  min-height: 0;
+  padding: 40rpx 32rpx 24rpx;
 }
 .focus-keyinfo {
   text-align: center;
