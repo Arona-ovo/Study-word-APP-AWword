@@ -3,10 +3,10 @@
     class="container page-tabbar page-nav"
     :class="appTheme"
     :style="appBgStyle"
-    @touchstart="onSlideStart"
-    @touchmove="onSlideMove"
-    @touchend="onSlideEnd"
-    @touchcancel="onSlideEnd"
+    @touchstart="onRootTouchStart"
+    @touchmove="onRootTouchMove"
+    @touchend="onRootTouchEnd"
+    @touchcancel="onRootTouchEnd"
   >
     <!-- 悬浮顶栏：首页是「搜索 + AI 指令」双模式输入框 -->
     <float-navbar
@@ -211,22 +211,12 @@
     </view>
 
     <!-- 内容区：切 tab 时整体左右滑动（顶栏与底栏留在外面，不跟着滑） -->
-    <!-- 上滑手势挂在这一层：它包住了 hero、把手、卡片区和底部链接，
-         所以在下半屏**任何位置**往上滑都能把卡片拉出来。
-         ⚠️ 不能只挂在把手上：把手做得再高也只是中间一条带子，手指落在它下面
-         （底部链接、tabbar 上方那截空白）时 touchmove 根本没人接 ——
-         表现就是"只有点在把手上有用，在首页上滑毫无反应"。
-         起手点在 hero 里也不拦：那里是两颗入口按钮的地盘，滑动会顺带触发
-         按钮自己的 click，变成"一边开抽屉一边跳走"（见 dhStart 里的门槛线）。 -->
-    <view
-      class="page-slide"
-      :class="slideCls"
-      :style="slideStyle"
-      @touchstart="dhStart"
-      @touchmove="dhMove"
-      @touchend="dhEnd"
-      @touchcancel="dhEnd"
-    >
+    <!-- 上滑手势挂在**页面根节点**（见模板最上面的 onRootTouch*）：
+         整页任意位置往上滑都能把下面的卡片拉出来。
+         前两版分别挂在窄把手、再挂在把手加高后的空白带上，都不够 ——
+         只要不是"整页"，总有一部分区域手指落下去没人接 touchmove。
+         这里保持最简单的写法，别再往这一层加手势（会和根节点重复触发）。 -->
+    <view class="page-slide" :class="slideCls" :style="slideStyle">
     <!-- AI 指令：加载态 / 执行结果 / 错误提示 / 撤销 -->
     <view v-if="cmdBar" class="cmd-bar" :class="'is-' + cmdState">
       <view v-if="cmdBusy" class="cmd-spin"></view>
@@ -246,7 +236,7 @@
          其余卡片收进下方抽屉，上滑把手才展开。可在「设置 → 首页样式」切回原卡片平铺。
          注：焦点模式下隐藏 action 卡（它的主按钮与 hero 重复），改由 hero 的
          两个大入口 + 下方「复习错题 / AI 薄弱点专练」小字承接，避免入口重复。 -->
-    <view v-if="isFocus" class="focus-hero">
+    <view v-if="isFocus" class="focus-hero" :class="{ 'hero-tall': !drawerOpen }">
       <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
       <view class="focus-cta">
         <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
@@ -258,15 +248,13 @@
         <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
       </view>
     </view>
-    <!-- 抽屉把手：视觉上的"这里可以往上拉"+ 点击开关。
-         手势不挂在这儿，挂在外层 .page-slide（原因见上面的注释）。
-         收起时它是 hero 下面一整条高的空白带，展开后收窄成中间那条。
-         @tap 只挂在内条 .dh-bar 上：整块空白若响应点击，点一下就会误开抽屉。 -->
-    <view v-if="isFocus" class="drawer-handle" :class="{ 'dh-open': drawerOpen }">
+    <!-- 抽屉把手：收起 / 展开都是同一条短横杠，只是"下面还有东西"的视觉提示 + 点击开关。
+         文字与箭头都去掉了（用户要求别放常驻说明）——
+         "从下往上滑可以展开"这件事交给首次进入的新手引导讲（utils/onboarding.js 的 drawer 步）。
+         手势不在这儿，也不在外层：上滑是整页响应，挂在页面根节点上。 -->
+    <view v-if="isFocus" class="drawer-handle">
       <view class="dh-bar" @tap="toggleDrawer">
         <view class="dh-grip"></view>
-        <text class="dh-text">{{ drawerOpen ? $t('收起') : $t('上滑查看全部功能') }}</text>
-        <text class="dh-chev" :class="{ up: drawerOpen }">⌃</text>
       </view>
     </view>
 
@@ -1443,10 +1431,12 @@ export default {
 
     startPractice() {
       if (this.editing) return
+      if (this.dhSwallowTap()) return
       uni.navigateTo({ url: '/pkgStudy/pages/practice/practice?source=daily' })
     },
     goReview() {
       if (this.editing) return
+      if (this.dhSwallowTap()) return
       // 没有错题就别跳进空练习页 —— 直接说清楚错题从哪来
       if (!this.wrongCount) {
         uni.showToast({ title: t('还没有错题，练习时答错的词会进这里'), icon: 'none' })
@@ -1456,6 +1446,7 @@ export default {
     },
     goDrill() {
       if (this.editing) return
+      if (this.dhSwallowTap()) return
       if (!this.aiEnabled) {
         uni.showToast({ title: t('请先在设置中完成 AI 配置（') + this.aiReason + '）', icon: 'none' })
         return
@@ -1467,6 +1458,7 @@ export default {
      *  方法名刻意避开了历史遗留的那个命名（该校验钉死"不许存在"，防重复入口）。 */
     openWordDrill() {
       if (this.editing) return
+      if (this.dhSwallowTap()) return
       uni.navigateTo({ url: '/pkgStudy/pages/word-drill/word-drill?source=daily' })
     },
     /**
@@ -1557,13 +1549,6 @@ export default {
           if (h > 0) this.drawerH = h
         }).exec()
       } catch (e) { /* 量不到就保持 0，走宽松上限兜底 */ }
-      // 顺带量把手顶边 → 抽屉手势的起手门槛线（hero 是入口按钮区，不参与手势）
-      try {
-        uni.createSelectorQuery().in(this).select('.drawer-handle').boundingClientRect(res => {
-          const r = Array.isArray(res) ? res[0] : res
-          if (r && r.top != null) this.__dhGate = r.top
-        }).exec()
-      } catch (e) { /* 量不到就退回 dhGateY 的兜底比例 */ }
     },
     /** 触摸点在不同端放的位置不一样（touches / targetTouches / changedTouches），多兜几个来源 */
     dhPoint(e) {
@@ -1576,18 +1561,21 @@ export default {
       if (typeof a === 'number' && isFinite(a)) return a
       return (typeof b === 'number' && isFinite(b)) ? b : 0
     },
-    /**
-     * 起手门槛线：只有落点在这条线**以下**，本次触摸才参与抽屉手势。
-     * 线取把手顶边（measureDrawer 实测）；没量到就退回视口高的 60%。
-     * 为什么要有这条线：hero 里是「背句子 / 背单词」两颗入口按钮，
-     * 手指从按钮上往上划会顺带触发按钮自己的 click ——
-     * 变成"一边开抽屉一边跳走"。门槛线以下（把手整条空白带、底部链接、
-     * tabbar 上方那截空白）才放行，那也正是用户"从下往上滑"时手指落下的地方。
-     */
-    dhGateY() {
-      return (this.__dhGate != null) ? this.__dhGate : (this.guideViewportH() * 0.6)
+    /** 底栏（悬浮 tabbar）占的那条带子的上沿，px。上滑手势不进这一块 ——
+     *  手指落在底栏上是要切页的，当抽屉用会"一滑顺手换了页面"。
+     *  算法：视口高 − 底栏为 tabbar 预留的 220rpx（按屏宽换算成 px）。
+     *  量不到就返回 0 = 整页都放开：宁可多响应，也不能让用户"滑了没反应"。 */
+    dhFloorY() {
+      try {
+        const s = uni.getSystemInfoSync()
+        const w = (s && s.windowWidth) || 375
+        const h = (s && s.windowHeight) || 600
+        return h - (w * 220) / 750
+      } catch (e) { return 0 }
     },
-    /** 上滑手势：记下起点坐标，并判定本次触摸要不要参与 */
+    /** 上滑手势：记下起点坐标，并判定本次触摸要不要参与。
+     *  只要起点在「顶栏下方 ~ 底栏上沿」之间（也就是看得见的整块内容区），
+     *  不管落在 hero、把手、卡片还是底部链接上，都算。 */
     dhStart(e) {
       // 卡片平铺形态没有抽屉，不该拦任何东西（那个形态下页面是要正常滚动的）
       if (!this.isFocus) return
@@ -1596,8 +1584,8 @@ export default {
       const t = this.dhPoint(e)
       if (!t) { this.__dhY = null; return }
       const y = this.dhNum(t.clientY, t.pageY)
-      // 落点在 hero 里（门槛线以上）→ 本次不参与，把触摸完整留给入口按钮
-      if (y < this.dhGateY()) { this.__dhY = null; return }
+      const floor = this.dhFloorY()
+      if (floor > 0 && y >= floor) { this.__dhY = null; return }
       this.__dhY = y
       this.__dhX = this.dhNum(t.clientX, 0)
       // 0 未定轴 / 1 横向 / -1 纵向（定轴只做一次，见 dhMove）
@@ -1624,17 +1612,46 @@ export default {
       // 这正是"在首页上滑毫无反应"的真身。
       // 阈值 18px 略大于系统触摸容差（约 8~12px）：既躲开手抖，又赶在 touchcancel 之前落地。
       const NEED = 18
-      if (dy > NEED) { this.__dhY = null; this.openDrawer() }
+      if (dy > NEED) this.dhFire(true)
       else if (-dy > NEED) {
         // 往下划 = 想收起；但页面已经滚下去时不收（那是在往回翻内容，见 __pageTop）
         if ((this.__pageTop || 0) > 4) { this.__dhY = null; return }
-        this.__dhY = null
-        this.closeDrawer()
+        this.dhFire(false)
       }
+    },
+    /** 手势判定成立 → 执行开 / 收，并记一笔时间戳：
+     *  紧接着来的那一下 tap 是这次"滑"的余波，必须吞掉（见 dhSwallowTap）。 */
+    dhFire(open) {
+      this.__dhFiredAt = Date.now()
+      this.__dhY = null
+      if (open) this.openDrawer()
+      else this.closeDrawer()
+    },
+    /** 刚刚发生过一次上滑 / 下滑手势？
+     *  手指起点落在「背句子 / 背单词」这类按钮上时，平台在滑动之后仍可能补发一次
+     *  click —— 那就成了"一边把卡片拉出来一边跳进了练习页"。400ms 内的 tap 一律吞掉。 */
+    dhSwallowTap() {
+      return Date.now() - (this.__dhFiredAt || 0) < 400
     },
     dhEnd() {
       this.__dhY = null
       this.__dhAxis = 0
+    },
+    // ---------- 页面根节点的触摸：左右滑页 + 整页上滑抽屉 ----------
+    // 两组手势共用同一批事件（同一个元素对同一事件只能写一次绑定）。
+    // 各自内部都有"定轴"，横向归 tab-slide-mixin 的滑页，纵向归抽屉，互不抢：
+    // onSlideMove 一旦判定为纵向会自己停手，dhMove 判定为横向会作废本次。
+    onRootTouchStart(e) {
+      this.onSlideStart(e)
+      this.dhStart(e)
+    },
+    onRootTouchMove(e) {
+      this.onSlideMove(e)
+      this.dhMove(e)
+    },
+    onRootTouchEnd(e) {
+      this.onSlideEnd(e)
+      this.dhEnd()
     },
 
     // ---------- 顶部输入：搜索 / 指令双模式 ----------
@@ -3197,14 +3214,32 @@ export default {
 }
 
 /* ---------- 首页焦点模式（默认形态）：主页只聚焦「背单词 / 背句子」 ---------- */
+/* 焦点形态的 hero：内容垂直居中。
+   抽屉收起时（.hero-tall）它撑满「内容区 − 把手那条」，两个入口就落在屏幕正中；
+   抽屉展开时高度退回内容高、内边距也收回，卡片紧跟着上来 ——
+   两端都是具体长度，min-height / padding-top 都能插值，所以开合是滑上去的，不是跳的。 */
 .focus-hero {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  /* 把下方把手顶到接近视口底部，营造"抽屉坐在主页底下"的感觉 */
-  min-height: 52vh;
+  min-height: 0;
   padding: 40rpx 32rpx 24rpx;
   box-sizing: border-box;
+  transition: min-height 320ms cubic-bezier(0.22, 0.9, 0.28, 1),
+              padding-top 320ms cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+.focus-hero.hero-tall {
+  /* 内容区 = 视口 − 顶栏（状态栏 + 136rpx）− 底栏为 tabbar 预留的 220rpx − 安全区；
+     再减掉 hero 下面那条把手（56rpx），剩下的正好是"看得见的整屏"。
+     ⚠️ 这几个数要和 App.vue 的 .page-nav / .page-tabbar 对齐，改那边要同步这里。 */
+  min-height: calc(
+    100vh - var(--status-bar-height, 0px) - 136rpx - 220rpx
+          - env(safe-area-inset-bottom, 0px) - 56rpx
+  );
+  /* 顶栏留白（136rpx）比底栏留白（220rpx）少，加上 hero 下面还压着把手和
+     「编辑首页」，内容在整块里居中后会整体偏上约 80rpx。
+     把这半截差值补回来，两个入口才真的落在屏幕正中。 */
+  padding-top: 176rpx;
 }
 .focus-keyinfo {
   text-align: center;
@@ -3259,53 +3294,32 @@ export default {
 .focus-sub-link:active { color: #1d4fd8; color: var(--brand-strong, #1d4fd8); }
 .focus-sub-sep { font-size: 22rpx; color: #98a19b; color: var(--ink-3, #98a19b); }
 
-/* 抽屉把手 = 手势区。收起时故意很高 —— 吃掉 hero 以下到屏幕底的整块空白，
-   让"从下往上滑"有一个足够大的起手范围（窄把手只在它自己那几十 rpx 上有效）。
-   展开后收窄成中间那条。
-   ⚠️ 两端都必须是具体高度（vh / rpx 都行）：写成自然高 auto 就不可插值，
-   transition 会失效，收展看着就是硬切。
-   ⚠️ 高度别贪大：hero(52vh) + 本区 + 底部「编辑首页」要能塞进
-   内容区（100vh - 顶栏 136rpx - 底栏为 tabbar 预留的 220rpx），
-   给它 28vh 就会把「编辑首页」顶到 tabbar 后面去 —— 取 18vh，
-   正好盖住 hero 底边到 tabbar 顶边那条空白带。 */
+/* 抽屉把手：就是一条短横杠 —— "下面还有东西"的视觉提示 + 点击开关。
+   不收展、不占高度变化，高度固定 56rpx（.focus-hero.hero-tall 的算式里减的就是这条）。
+   文字与箭头都去掉了：常驻说明改成由首次进入的新手引导讲（onboarding 的 drawer 步）。
+   touch-action:none —— 从这里起手时不许浏览器把手势抢去滚动页面，
+   否则会发 touchcancel，上滑当场断掉。 */
 .drawer-handle {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  height: 18vh;
-  padding: 20rpx 0 24rpx;
-  margin-top: 4rpx;
-  overflow: hidden;
-  /* 不许浏览器把手势抢去做页面滚动：一滚动就会发 touchcancel，滑动当场断掉 */
+  height: 56rpx;
   touch-action: none;
-  transition: height 320ms cubic-bezier(0.22, 0.9, 0.28, 1);
 }
-.drawer-handle.dh-open { height: 96rpx; }
-/* 唯一响应点击的那条：点空白的地方不该把抽屉点开 */
+/* 唯一响应点击的那条 */
 .dh-bar {
   display: flex;
   align-items: center;
-  gap: 14rpx;
-  padding: 8rpx 28rpx;
+  justify-content: center;
+  padding: 12rpx 40rpx;
 }
 .dh-grip {
-  width: 64rpx;
+  width: 72rpx;
   height: 8rpx;
   border-radius: 999rpx;
   background: rgba(23, 32, 26, 0.22);
   background: rgba(var(--neutral-rgb, 23, 32, 26), 0.22);
 }
-.dh-text { font-size: 24rpx; color: #5a6560; color: var(--ink-2, #5a6560); }
-.dh-chev {
-  width: 0;
-  height: 0;
-  border-left: 10rpx solid transparent;
-  border-right: 10rpx solid transparent;
-  border-top: 12rpx solid rgba(23, 32, 26, 0.45);
-  border-top: 12rpx solid rgba(var(--neutral-rgb, 23, 32, 26), 0.45);
-  transition: transform 200ms ease;
-}
-.dh-chev.up { transform: rotate(180deg); }
 
 /* 焦点模式：卡片区是个可收起的抽屉。
    ⚠️ 高度必须由 JS 实测的具体数值来控制（0 ↔ 内容高）—— 以前写的是 0 ↔ none，
