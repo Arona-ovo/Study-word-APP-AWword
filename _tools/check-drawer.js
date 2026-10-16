@@ -6,6 +6,18 @@
 // 两个入口随之渐隐（合成器接管，零重排）。
 // "抽屉没有实体"= 下方卡片本身就是抽屉，靠滚动淡入 + 滑出来，而非独立浮层。
 //
+// ⚠️ 第十版（2026-10-17）：整张主页 = 一张**和屏幕一样大、且完全透明**的卡。
+//   上滑时是"这一整张卡"在往上走（外壳 .focus-hero 只吃 transform），
+//   滑动那一段卡面 .hero-glass 长出**模糊**把主页糊掉（用户："把主页变模糊，并且隐去"），
+//   滑回顶部一切归零 —— **背景重新高清**（用户："主页背景还是切回来要显示清晰的背景图片"）。
+//   这里撞的是和第八版**同一棵**树，只不过换了一层：卡面是 .focus-hero 的子节点，
+//   而 .focus-hero 以前要承担"入口渐隐"，一旦带 opacity 就自成 backdrop root，
+//   卡面从此糊不到背景 → 用户只看到"背景图纹丝不动地平移"。
+//   所以这里把 hero 拆成三层：外壳（transform）/ 卡面（backdrop-filter）/ 内容（opacity），
+//   **渐隐搬去内层 .hero-body**，外壳这辈子不许再带 opacity。
+//   模糊走"五档切 class + 恒定半径"：卡面背后是 fixed 不动的背景层，整段滚动里
+//   要糊的内容没变 → 每档至多重算一次高斯模糊（逐帧改半径 = 掉帧老路）。
+//
 // ⚠️ 第八版（2026-10-16 末）：只改了"玻璃不像玻璃"这一件事 —— 底板从 .mod-list::before
 //   搬到**外层 .mod-sheet::before**。CSS 里 backdrop root 由 opacity<1 / filter / mask /
 //   mix-blend-mode / will-change(这些) 创建：底板挂在要淡入的 .mod-list 身上时，
@@ -92,8 +104,8 @@ assert(/onPageScroll\(e\)/.test(home) && /e\.scrollTop/.test(home),
 // 默认 p=1 / revealOn=false：JS 一环没跑时卡片常显、入口不淡出（绝不能反过来藏起来）。
 assert(/revealP: 1/.test(home) && /revealOn: false/.test(home),
   'reveal 进度进 data（响应式），默认常显、不接手势');
-assert(/:style="listRevealStyle"/.test(home) && /:style="heroRevealStyle"/.test(home),
-  '卡片与入口的样式都由 :style 绑定下发（App 端唯一可用的样式通道）');
+assert(/:style="listRevealStyle"/.test(home) && /:style="heroCardStyle"/.test(home) && /:style="heroBodyStyle"/.test(home),
+  '卡片 / 全屏卡外壳 / 入口内容的样式都由 :style 绑定下发（App 端唯一可用的样式通道）');
 // 玻璃底板那一层也要走同一条通道（它吃位移，跟着卡片一起被"拉上来"）
 assert(/:style="sheetRevealStyle"/.test(home), '玻璃底板层也走 :style 绑定下发位移');
 // 内联写**真实属性**（opacity / transform）而不只是 CSS 变量：真实属性各端一定生效，
@@ -151,8 +163,10 @@ assert(/class="mod-throw" :class="popClass"/.test(home),
   assert(/prefers-reduced-motion: reduce[\s\S]{0,200}\.mod-throw\.pop-a[\s\S]{0,120}animation:\s*none/.test(css),
     '系统"减弱动效"下不放回弹');
 }
-  // 白得不像玻璃（2026-10-16 用户："底部背景太白了，根本不是玻璃的效果"）：
-  // 玻璃靠的是"透 + 明暗层次"，不是靠一层奶白垫片。
+  // 抽屉透明度在 2026-10-17 **调回来了**（用户："还是调回原来那样，这样子和卡片的
+  // 对比度比较高"）：上面那张全屏卡是透明的、只在上滑瞬间糊一下，于是这层是下面
+  // 那摞卡**唯一的实背景** —— 太透（0.09 那版）卡片跟底板几乎分不开。
+  // 但也不能一路抬上去：超过 0.2 就又变成那块被砍掉的奶白板。
   // ⚠️ 只量**表面那几层**（background-image）：那道 1.5rpx 的顶沿高光本来就该亮，
   //    它是"线"不是"面"，混在一起量会把这条线误判成奶白。
   {
@@ -160,11 +174,12 @@ assert(/class="mod-throw" :class="popClass"/.test(home),
     // ⚠️ 锚到语句末尾的 `);`：rgba(var(--surface-rgb, 255, 255, 255), 0.09) 里
     //    第一个能配上的数字是 var() 里兜底的 255，不锚末尾会把 alpha 读成 255。
     const bg = (veil.match(/background-color:[^;]*?,\s*([\d.]+)\s*\);/) || [])[1];
-    assert(Number(bg) <= 0.12, '玻璃本体色 ≤0.12（太实就变成一块白板，不是玻璃）');
+    assert(Number(bg) >= 0.12 && Number(bg) <= 0.2,
+      '玻璃本体色落在 0.12~0.2（比全屏卡实得多 → 卡片有对比；再实就变白板）');
     const img = (veil.match(/background-image:[\s\S]*?;/) || [''])[0];
     const whites = [...img.matchAll(/rgba\(255, 255, 255, ([\d.]+)\)/g)].map((m) => Number(m[1]));
-    assert(whites.length > 0 && Math.max(...whites) <= 0.22,
-      '表面高光最亮处 ≤0.22（叠出来的白要能透出背景，不能糊成奶白）');
+    assert(whites.length > 0 && Math.max(...whites) <= 0.36,
+      '表面高光最亮处 ≤0.36（够亮能托住对比度，又不至于糊成奶白）');
   }
 // syncReveal 必须待在 methods 里：onReady / onPageScroll / watch 都以 this.syncReveal 调用，
 // 放到 methods 外（与生命周期选项平级）就不是实例方法 → 真机报
@@ -248,10 +263,72 @@ console.log('== 3. hero 形态：铺满一屏 + 裸按钮入口渐隐 + 卡片�
   // 入口渐隐（2026-10-16 用户要求）：上滑时卡片淡入、两个入口渐隐；
   // 卡片滑回去 → fade 归 0 → 入口回来。同一条进度的正反两面。
   // ⚠️ 默认值必须是 0（全显示）：JS 一环没跑时入口一定要在，绝不能默认藏。
-  assert(/opacity:\s*calc\(1 - var\(--hero-fade, 0\)\)/.test(hero),
-    'hero 透明度 = 1 − --hero-fade（默认 0 = 全显示，JS 失效也不会藏起入口）');
-  assert(/pointer-events:\s*var\(--hero-pe, auto\)/.test(hero),
-    '淡到近乎全隐时关掉 pointer-events（不许点到看不见的按钮）');
+  // ---- 全屏那张卡（2026-10-17 第十版）：hero 拆成「外壳 / 卡面 / 内容」三层 ----
+  // 卡面 .hero-glass 是 .focus-hero 的**子节点** —— 外壳一带 opacity 就自成
+  // backdrop root，卡面从此糊不到 app 背景（用户看到的是"背景图纹丝不动地平移"）。
+  // 这是第十版的全关节，必须钉在**源头**上，而不是钉在"效果应该出现"上。
+  assert(!/opacity\s*:/.test(hero),
+    '.focus-hero 外壳上不许出现任何 opacity（一带就把卡面的 backdrop 隔离了）');
+  assert(!/backdrop-filter/.test(hero), '外壳自己不带 backdrop-filter（那是 .hero-glass 的活）');
+  assert(/class="hero-glass"/.test(home) && /class="hero-body"/.test(home),
+    'hero 拆成「外壳 transform / 卡面 hero-glass / 内容 hero-body」三层');
+  // 内容层：入口渐隐搬到这里（外壳再也不能吃 opacity）
+  {
+    const body = rule('.hero-body');
+    assert(body.length > 0, '存在 .hero-body 规则（入口渐隐在这一层）');
+    assert(/opacity:\s*calc\(1 - var\(--hero-fade, 0\)\)/.test(body),
+      'hero-body 透明度 = 1 − --hero-fade（默认 0 = 全显示，JS 失效也不会藏起入口）');
+    assert(/pointer-events:\s*var\(--hero-pe, auto\)/.test(body),
+      '淡到近乎全隐时关掉 pointer-events（不许点到看不见的按钮）');
+  }
+  // 整张主页自己就是"那张卡"：外壳往上抬 = 整屏一起往上走（用户："整体都有立体感"）
+  assert(/translate3d\(0,-/.test(home), '全屏卡外壳带一个向上的位移（整屏一起滑，不是只有下面在动）');
+  assert(/this\._heroLiftPx = this\.upx\(\d+\)/.test(home), '上抬距离走 upx→px 换算（内联不认 rpx）');
+  // 卡面：静止必须全透明（背景图要高清），只在上滑那一段长出模糊
+  {
+    const glass = rule('.hero-glass');
+    assert(glass.length > 0, '存在 .hero-glass 规则（全屏那张卡的卡面）');
+    // 用户原话："注意这里只是为了动画，主页背景还是切回来要显示清晰的背景图片"
+    // → 静止档必须什么都不做；反过来写成"默认就糊"，背景图就永远回不到高清。
+    assert(/--hero-glass-op:\s*0/.test(glass) && /opacity:\s*var\(--hero-glass-op, 0\)/.test(glass),
+      '卡面默认全透明（静止时背景图必须是高清的）');
+    assert(!/background-color/.test(glass),
+      '卡面不给本体色（没有模糊时它就是一片奶白垫片 —— 正是上一版被砍掉的东西）');
+    assert(/z-index:\s*-1/.test(glass) && /pointer-events:\s*none/.test(glass),
+      '卡面垫在内容之下且不吃点击');
+    // 五档齐不齐：少一档就是"台阶缺一级"
+    for (let i = 0; i <= 4; i++) {
+      assert(css.indexOf('.hero-glass-' + i + ' {') > 0, '存在第 ' + i + ' 档 hero-glass-' + i);
+    }
+    assert(/--hero-glass-blur:\s*var\(--glass-sheet/.test(css),
+      '满档复用 --glass-sheet（跟着画质档位缩放，glass:off 时一起退回 none）');
+    // 只过渡 opacity：**过渡模糊半径 = 逐帧重跑整屏高斯模糊**，是掉帧的老路
+    const tr = (glass.match(/transition:[^;]*/) || [''])[0];
+    assert(/opacity/.test(tr) && !/backdrop-filter|blur\(/.test(tr),
+      '卡面只过渡 opacity（不过渡模糊半径）');
+    // 档位只能由「切 class」驱动，不许把半径写进内联样式逐帧改
+    assert(/class="hero-glass" :class="glassLevel"/.test(home),
+      '卡面按 glassLevel 切 class 驱动（不逐帧写样式）');
+    // ⚠️ 只圈 glassLevel **函数体本身**（到它自己的 `},` 为止）：拿"到下一个方法名"
+    //    当边界会把下一段方法的注释也算进来 —— 那段注释正要讲 backdrop-filter，会误判。
+    const gStart = home.indexOf('glassLevel() {');
+    const gBody = gStart > 0 ? home.slice(gStart, home.indexOf('\n    },', gStart)) : '';
+    assert(gBody.length > 0 && !/backdrop-filter|setProperty/.test(gBody),
+      'glassLevel 只返回 class 名（不直接下发模糊半径 / 不碰 DOM）');
+    assert(/return 'hero-glass-' \+ n/.test(gBody) && /revealOn\) return 'hero-glass-0'/.test(gBody),
+      '不接手势时落在第 0 档（什么都不做 → 背景图高清）');
+    // 三条兜底，缺一条就有一类机器看不到 / 卡不住：
+    // ① App.vue 的 .bg-flat 用 !important 关掉了**所有** backdrop-filter，卡面必须抢回来
+    assert(/\.bg-flat \.hero-glass[\s\S]{0,200}!important/.test(css),
+      'bg-flat 下用 !important 把卡面的模糊抢回来（糊的是整张主页，不能省）');
+    // ② 整屏高斯是本 App 最贵的一笔绘制，低端机必须有退路
+    assert(/\.perf-smooth \.hero-glass[\s\S]{0,200}opacity:\s*0 !important/.test(css),
+      '流畅模式下整屏高斯直接退掉');
+    // ③ 不支持 backdrop-filter 的老 WebView：直接摘掉，**不许抬本体色救**
+    //    （抬本体色 = 一整块奶白垫片盖住主页，正是上一版被砍掉的那个东西）
+    assert(/@supports not[\s\S]{0,600}\.hero-glass \{[^}]*opacity:\s*0 !important/.test(css),
+      '老 WebView 不支持时直接摘掉卡面（不许抬本体色救，那是一整块奶白）');
+  }
   // 抽屉感③：首页这层随抽屉上来轻微缩小（景深）——抽屉在上、首页沉下去。
   assert(/transform:\s*scale\(calc\(1 - [\d.]+ \* var\(--hero-fade, 0\)\)\)/.test(hero),
     'hero 随 --hero-fade 轻微缩小（景深：抽屉在上、首页沉下去；仍是 transform）');

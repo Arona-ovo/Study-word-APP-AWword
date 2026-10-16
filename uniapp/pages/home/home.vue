@@ -234,21 +234,33 @@
     <!-- 焦点模式：主页只聚焦「背单词 / 背句子」两件大事 + 一行关键信息；
          其余卡片排在下面一屏，往上滑（原生滚动）就到。
          可在「设置 → 首页样式」切回原卡片平铺。
+         层次（2026-10-17 第十版）：整张主页就是一张**和屏幕一样大、且完全透明**的卡
+         —— 上滑时是"这一整张卡"在往上走（而不是只有下面那摞卡在动），所以整屏都有
+         立体感。三层分工必须严格，错一层运动就废（见下面各层的 CSS 注释）：
+           .focus-hero  外壳：**只吃 transform**（整屏上抬 + 轻微缩小）
+           .hero-glass  卡面：静止时必须**全透明**，上滑时才按进度长出模糊把主页糊掉
+           .hero-body   内容：关键信息 / 两个入口 / 小字，随上滑渐隐
+         ⚠️ 外壳**绝不能带 opacity**（这条是第十版的全部关节）：一旦带上，它就自成
+            backdrop root，卡面的 backdrop-filter 只能糊到这层内部那点东西 → 糊不到
+            背景图，且卡面会跟着内容一起淡掉 —— 背景根本不会变模糊。
          注：焦点模式下隐藏 action 卡（它的主按钮与 hero 重复），改由 hero
-         的两个大入口 + 下方「复习错题 / AI 薄弱点专练」小字承接，避免入口重复。
-         层次（2026-10-16 起）：hero 内容收进一张与下方卡片同宽的毛玻璃面板，
-         且 hero 比"铺满一屏"短 320rpx —— 下一张卡的上沿会从悬浮 tabbar 上方
-         探出来，首屏就看得见"下面还有一摞卡"，不再是空背景后面藏卡片。 -->
-    <view v-if="isFocus" class="focus-hero" :class="{ 'hero-empty': !renderCards.length }" :style="heroRevealStyle">
-      <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
-      <view class="focus-cta">
-        <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
-        <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
-      </view>
-      <view class="focus-sub">
-        <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
-        <text class="focus-sub-sep">·</text>
-        <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
+         的两个大入口 + 下方「复习错题 / AI 薄弱点专练」小字承接，避免入口重复。 -->
+    <view v-if="isFocus" class="focus-hero" :class="{ 'hero-empty': !renderCards.length }" :style="heroCardStyle">
+      <!-- 卡面：静止时 opacity 0 —— 主页背景必须是**高清**的背景图；
+           上滑时按进度长出模糊 + 抬起不透明度，整块主页随之"失焦退场"；
+           滑回顶部一切归零，背景重新清晰（用户要明确的就是这一条）。 -->
+      <view class="hero-glass" :class="glassLevel"></view>
+      <view class="hero-body" :style="heroBodyStyle">
+        <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
+        <view class="focus-cta">
+          <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
+          <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
+        </view>
+        <view class="focus-sub">
+          <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
+          <text class="focus-sub-sep">·</text>
+          <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
+        </view>
       </view>
     </view>
 
@@ -742,7 +754,33 @@ export default {
       if (!this.revealOn) return {}
       return { opacity: String(this.revealP) }
     },
-    heroRevealStyle() {
+    // 卡面（透明的那张全屏卡的"面"）：静止必须什么都不加（背景图要高清），
+    // 上滑时按五档长出模糊 —— 只切 **class**（0~4），不逐帧写样式：
+    // 卡面背后是 fixed 的背景层，整个滚动过程内容不变 → 每档至多重算一次。
+    // ⚠️ 半径必须**恒定 + 分档**，绝不逐帧算：整屏高斯模糊按帧重跑是掉帧的老路。
+    glassLevel() {
+      if (!this.revealOn) return 'hero-glass-0'
+      let n = Math.round(this.revealP * 4)
+      n = n < 0 ? 0 : n > 4 ? 4 : n
+      return 'hero-glass-' + n
+    },
+    // 整张主页"那张卡"的外壳：**只给 transform**（上抬 + 轻微缩小）——
+    // 上滑时是整屏一起往上走，而不是只有底下那摞卡在动（用户原话：整体都有立体感）。
+    // ⚠️ 只动 transform（合成器属性，零重排），多一个 height / padding 就又是掉帧老路。
+    // ⚠️ 这一层**绝对不许带 opacity**：opacity<1 会让它自成 backdrop root，
+    //    卡面（它的子节点）的 backdrop-filter 就糊不到 app 背景了（MEMORY 第 43 条
+    //    那棵树，这里是第二次撞上）→ 用户只会看到"背景图纹丝不动地平移"。
+    //    内容的渐隐因此交给内层 .hero-body，卡面在这里保持不透明地糊着。
+    heroCardStyle() {
+      if (!this.revealOn) return {}
+      const p = this.revealP
+      const lift = (p * this._heroLiftPx).toFixed(1)
+      return {
+        transform: 'translate3d(0,-' + lift + 'px,0) scale(' + (1 - 0.05 * p).toFixed(4) + ')'
+      }
+    },
+    // 卡片内容（关键信息 / 两个入口 / 小字）：随上滑渐隐，把位让给下面那摞卡。
+    heroBodyStyle() {
       if (!this.revealOn) return {}
       // 入口渐隐比卡片淡入**早一点到位**（×1.2）：按钮先让位，卡片再补上，
       // 上滑时看得出"主页在退场"，而不是两层一起平移。
@@ -750,7 +788,6 @@ export default {
       fade = fade > 1 ? 1 : fade
       return {
         opacity: (1 - fade).toFixed(3),
-        transform: 'scale(' + (1 - 0.05 * fade).toFixed(4) + ')',
         // 淡到基本看不见了就别再吃点击（CSS 里 pointer-events: var(--hero-pe, auto) 兜底）
         '--hero-pe': fade > 0.9 ? 'none' : 'auto'
       }
@@ -950,13 +987,16 @@ export default {
     this._scrollTop = 0        // 最近一次 onPageScroll 报上来的滚动位置（px）
     this._spanPx = 0          // 淡入距离（px，由 upx() 换算一次就够）
     this._parallaxPx = 0      // 卡片视差距离（px）
+    this._heroLiftPx = 0      // 全屏那张卡额外上抬的距离（px）
     this._drawerBuzzed = false // 抽屉"拉到位"这一下震过了没有（防止滑一次震一窝）
     try {
       this._spanPx = this.upx(520)
       this._parallaxPx = this.upx(220)
+      this._heroLiftPx = this.upx(56)
     } catch (e) {
       this._spanPx = 260
       this._parallaxPx = 110
+      this._heroLiftPx = 28
     }
   },
   onLoad() {
@@ -1073,8 +1113,8 @@ export default {
     playThrow() {
       this.popSeq = (this.popSeq || 0) + 1
     },
-    // 算"卡片淡入 / 入口渐隐"的进度并推进响应式数据（由 listRevealStyle / heroRevealStyle
-    // 变成内联样式下发 —— App 端唯一可用的样式通道，见那两个 computed 的注释）。
+    // 算"卡片淡入 / 主页退场"的进度并推进响应式数据（由 listRevealStyle / heroBodyStyle
+    // / heroCardStyle / glassLevel 四个 computed 变成内联样式 / class 下发 —— App 端唯一可用的样式通道，见那两个 computed 的注释）。
     //
     // 进度 = 已滑距离 / 淡入距离（520rpx）。不量节点、不看视口高，纯粹跟着滚动走：
     //   · 卡片静止时在折叠线之下（布局保证），p=0 → 卡片透明、入口全亮；
@@ -2930,17 +2970,19 @@ export default {
   bottom: -28rpx;
   z-index: -1;
   border-radius: 36rpx;
-  /* 本体色要克制：这是"隔着一层玻璃"，不是"垫了一块白板"。
-     之前 0.14 + 顶上 0.26 的高光，糊出来是一片奶白，反而最不像玻璃。 */
-  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.09);
+  /* 本体色（2026-10-17 调回来）：上面那张全屏卡是**透明**的、只在上滑时短暂地糊一下，
+     于是这一层就成了"下面那摞卡唯一的实背景"。0.09 那一版太透，卡片跟底板几乎分不开
+     （用户："还是调回原来那样，这样子和卡片的对比度比较高"）→ 回到 0.14 这一档：
+     仍能透出首页背景，但卡片压在上面看得出是一层实体。 */
+  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.14);
   /* 表面：光从上方来 —— 顶部一团环境反光 + 自上而下"亮 → 透 → 底部压暗"。
      平涂半透明看着就是一块灰片；有明暗过渡才是一块"有厚度、有朝向"的玻璃。 */
   background-image:
     radial-gradient(120% 74% at 50% -12%,
-      rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0) 62%),
+      rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 62%),
     linear-gradient(180deg,
-      rgba(255, 255, 255, 0.13) 0%,
-      rgba(255, 255, 255, 0.04) 38%,
+      rgba(255, 255, 255, 0.26) 0%,
+      rgba(255, 255, 255, 0.07) 38%,
       rgba(255, 255, 255, 0) 64%,
       rgba(var(--shadow-rgb, 23, 32, 26), 0.05) 100%);
   /* 底板比卡片糊得狠一点（20px vs 卡片 12px）：大面积才吃得住，也更接近苹果的 sheet */
@@ -2952,9 +2994,9 @@ export default {
      ③ 整圈 hairline 内描边 —— 边缘折射亮边；比 border 更贴圆角，还不占位
      ④ 双层外投影 —— 近层紧实（贴边）+ 远层扩散（抬起），真的"浮"起来 */
   box-shadow:
-    inset 0 1.5rpx 0 rgba(255, 255, 255, 0.45),
+    inset 0 1.5rpx 0 rgba(255, 255, 255, 0.6),
     inset 0 -1.5rpx 0 rgba(var(--shadow-rgb, 23, 32, 26), 0.08),
-    inset 0 0 0 1rpx rgba(255, 255, 255, 0.2),
+    inset 0 0 0 1rpx rgba(255, 255, 255, 0.32),
     0 -2rpx 10rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.1),
     0 -16rpx 48rpx rgba(var(--shadow-rgb, 23, 32, 26), 0.22);
   pointer-events: none;
@@ -2975,11 +3017,11 @@ export default {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   /* 没有模糊时靠本体色撑住可读性（比有模糊那版实一点，但仍不是纯白） */
-  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.45);
+  background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.6);
 }
 /* 不支持 backdrop-filter 的老 WebView：同样抬起本体色（仍留较多背景透出来）。 */
 @supports not (((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) or (-webkit-backdrop-filter: blur(1px))) {
-  .mod-sheet::before { background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.48); }
+  .mod-sheet::before { background-color: rgba(var(--surface-rgb, 255, 255, 255), 0.62); }
 }
 /* 抽屉"被丢过来"落位那一记 Q 弹：先冲过头再收回来稳住（2026-10-16 用户要的"Q 弹一点、
    像卡片从远处丢过来"）。幅度刻意压得很小 —— 大了就成了弹窗，廉价。
@@ -3331,18 +3373,87 @@ export default {
   /* 同 .page-tabbar：env() 在 Android webview 常报 0，用实测 --safe-b 兜底，
      否则两个入口的"正中"会往系统导航条里偏 */
   padding-bottom: calc(24rpx + 220rpx + max(env(safe-area-inset-bottom, 0px), var(--safe-b, 0px)));
-  /* 上滑时两个入口**渐隐**：--hero-fade 与卡片淡入共用同一条进度（syncReveal 写），
-     卡片出来 → 入口淡出；卡片滑回去 → fade 归 0 → 入口回来。
-     ⚠️ 默认必须是 0（全显示）：JS 一环没跑时入口一定要在，不能反过来藏起来。
-     ⚠️ 只动 opacity（合成器接管），指针事件在淡到 0.9 之后关掉，避免点空气。 */
-  opacity: calc(1 - var(--hero-fade, 0));
-  pointer-events: var(--hero-pe, auto);
+  /* ⚠️ 这一层**不写 opacity**：见 heroCardStyle 的注释 —— 一旦带上 opacity，
+     它就自成 backdrop root，卡面 .hero-glass 的 backdrop-filter 就糊不到 app 背景了
+     （整张卡看着只是在平移，背景图一动不动）。入口渐隐因此搬到了 .hero-body。 */
   /* 抽屉感③：首页这层随抽屉上来轻微缩小（景深）——抽屉在上面、首页沉下去。
-     ⚠️ 运行时由 heroRevealStyle 的内联样式覆盖（App 端没有 CSS 变量写入通道）；
+     ⚠️ 运行时由 heroCardStyle 的内联样式覆盖（App 端没有 CSS 变量写入通道）；
         这条只作为 JS 没跑时的静态兜底。
      ⚠️ 同样是 transform（合成器属性），不许动 height / padding。 */
   transform: scale(calc(1 - 0.05 * var(--hero-fade, 0)));
   transform-origin: 50% 42%;
+}
+/* 全屏那张卡的**卡面**：默认什么都不加（主页背景必须是**高清**的背景图片），
+   只有上滑切到下面那摞卡的那一段，才按进度长出模糊，把整块主页糊掉；
+   滑回顶部一切归零，背景重新清晰 —— 用户 2026-10-17 明确要的就是这一条
+   （"注意这里只是为了动画，主页背景还是切回来要显示清晰的背景图片"）。
+   ⚠️ 它是 .focus-hero 的**子节点**：所以 .focus-hero 绝对不能带 opacity（见上面那条）。
+   ⚠️ 模糊半径**恒定**、只在 0~4 五档之间切 class：卡面背后是 fixed 不动的背景层，
+      整段滚动里要糊的内容没变 → 每档至多重算一次高斯模糊。
+      逐帧改半径 = 整屏高斯按帧重跑，是掉帧的老路（绝不能回去）。
+   ⚠️ 透明度跟着档位一起走：就算某一档的字符串没生效，也还有"一点点加重"的层次，
+      不会是"要么全糊、要么完全没反应"的二选一。
+   ⚠️ 不给任何 background-color：没有模糊时它就只是一片奶白垫片 —— 正是上一版
+      被砍掉的那个东西。要的就是"只有模糊、没有垫片"。 */
+.hero-glass {
+  --hero-glass-blur: none;
+  --hero-glass-op: 0;
+  position: absolute;
+  /* 比 hero 本身大一圈：上抬 / 缩放时也不会在边缘露出没糊到的"亮边" */
+  left: -28rpx;
+  right: -28rpx;
+  top: -200rpx;
+  bottom: -200rpx;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--hero-glass-op, 0);
+  -webkit-backdrop-filter: var(--hero-glass-blur, none);
+  backdrop-filter: var(--hero-glass-blur, none);
+  /* 档位之间走一小段过渡：五档默认是台阶式跳变，加 160ms 让它看得连贯。
+     ⚠️ 只过渡 opacity（合成器属性）；backdrop-filter 的半径不过渡 ——
+        过渡半径 = 逐帧重算高斯模糊，就是上面说的那条老路。 */
+  transition: opacity 160ms linear;
+}
+/* 0 档：什么都不做 —— 静止 / 非焦点 / 全部收纳时都是这一档（背景高清） */
+.hero-glass-0 { --hero-glass-op: 0; --hero-glass-blur: none; }
+.hero-glass-1 { --hero-glass-op: 0.28; --hero-glass-blur: blur(6px) saturate(140%); }
+.hero-glass-2 { --hero-glass-op: 0.52; --hero-glass-blur: blur(12px) saturate(150%); }
+.hero-glass-3 { --hero-glass-op: 0.76; --hero-glass-blur: blur(18px) saturate(165%); }
+/* 满档直接复用抽屉底板那档（跟着画质档位等比缩放，glass:off 时一起退回 none） */
+.hero-glass-4 {
+  --hero-glass-op: 1;
+  --hero-glass-blur: var(--glass-sheet, blur(24px) saturate(180%));
+}
+/* ===== 卡面的三条兜底 =====
+   ⚠️ 顺序有讲究：下面这些都要**排在上面五档之后**（特异性相同 → 谁在后谁生效），
+      而 .bg-flat / .perf-smooth 之间的顺序同样不能颠倒。
+   ① .bg-flat（App.vue）会用 !important 关掉**所有** backdrop-filter（背景是平滑
+      渐变时不值当）。卡面恰恰相反：它糊的是**整张主页**（用户要的就是"把主页变
+      模糊"），就算背后是渐变也要糊 —— 不糊就没有"退场"，整段动画等于没做。
+      一条规则覆盖五档（档位值本来是 CSS 变量，这里照样跟着档位走）。 */
+.bg-flat .hero-glass {
+  -webkit-backdrop-filter: var(--hero-glass-blur, none) !important;
+  backdrop-filter: var(--hero-glass-blur, none) !important;
+}
+/* ② 流畅模式（低端机退路）：整屏高斯是本 App 最贵的一笔绘制，必须能退。
+   退掉之后就是"没有这一层" → 退化成只有内容渐隐 + 卡片上滑，跟改动前手感一样。 */
+.perf-smooth .hero-glass {
+  opacity: 0 !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+/* ③ 不支持 backdrop-filter 的老 WebView：同样直接把这层拿掉。
+   ⚠️ 不能像抽屉底板那样"抬本体色救回来" —— 这里抬本体色就是一整块奶白垫片盖住主页，
+      正是上一版被砍掉的那个东西。宁可没有这一层。 */
+@supports not (((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) or (-webkit-backdrop-filter: blur(1px))) {
+  .hero-glass { opacity: 0 !important; }
+}
+/* hero 内容层：关键信息 / 两个入口 / 小字。渐隐在这一层（外壳不能带 opacity）。
+   ⚠️ 默认必须全显示（--hero-fade 默认 0）：JS 一环没跑时入口一定要在。 */
+.hero-body {
+  width: 100%;
+  opacity: calc(1 - var(--hero-fade, 0));
+  pointer-events: var(--hero-pe, auto);
 }
 /* 卡片被**全部收纳**时（首屏只剩空态兜底）：hero 不再缩短 ——
    这一态要的就是"入口 + 兜底入口"挤在首屏。 */
