@@ -234,32 +234,39 @@
     <!-- 焦点模式：主页只聚焦「背单词 / 背句子」两件大事 + 一行关键信息；
          其余卡片排在下面一屏，往上滑（原生滚动）就到。
          可在「设置 → 首页样式」切回原卡片平铺。
-         层次（2026-10-17 第十版）：整张主页就是一张**和屏幕一样大、且完全透明**的卡
-         —— 上滑时是"这一整张卡"在往上走（而不是只有下面那摞卡在动），所以整屏都有
-         立体感。三层分工必须严格，错一层运动就废（见下面各层的 CSS 注释）：
+         层次（2026-10-17 第十版 / 第十一版）：整张主页就是一张**和屏幕一样大、且
+         完全透明**的卡 —— 上滑时是"这一整张卡"在往上走（而不是只有下面那摞卡在动），
+         所以整屏都有立体感。分工必须严格，错一层运动就废（见下面各层的 CSS 注释）：
+           .hero-card   外框：**什么都不吃**（无 transform / 无 opacity）
+           .hero-glass  卡面：挂在**外框**上，静止时全透明，上滑时按进度长出模糊
            .focus-hero  外壳：**只吃 transform**（整屏上抬 + 轻微缩小）
-           .hero-glass  卡面：静止时必须**全透明**，上滑时才按进度长出模糊把主页糊掉
            .hero-body   内容：关键信息 / 两个入口 / 小字，随上滑渐隐
          ⚠️ 外壳**绝不能带 opacity**（这条是第十版的全部关节）：一旦带上，它就自成
             backdrop root，卡面的 backdrop-filter 只能糊到这层内部那点东西 → 糊不到
             背景图，且卡面会跟着内容一起淡掉 —— 背景根本不会变模糊。
+         ⚠️ 卡面必须挂在 .hero-card 上、**不能挂进 .focus-hero**：外壳带 scale(0.95)，
+            卡面一旦是它的子节点就跟着一起缩 → 满糊时左右各空出 2.5% 屏宽
+            （2026-10-17 真机："整页模糊没有占满全屏，左右两边占不满"）。
+            挪出来之后宽度精确等于屏宽，模糊面积也最小（跟着外壳一起缩放得白算一圈）。
          注：焦点模式下隐藏 action 卡（它的主按钮与 hero 重复），改由 hero
          的两个大入口 + 下方「复习错题 / AI 薄弱点专练」小字承接，避免入口重复。 -->
-    <view v-if="isFocus" class="focus-hero" :class="{ 'hero-empty': !renderCards.length }" :style="heroCardStyle">
+    <view v-if="isFocus" class="hero-card">
       <!-- 卡面：静止时 opacity 0 —— 主页背景必须是**高清**的背景图；
            上滑时按进度长出模糊 + 抬起不透明度，整块主页随之"失焦退场"；
            滑回顶部一切归零，背景重新清晰（用户要明确的就是这一条）。 -->
       <view class="hero-glass" :class="glassLevel"></view>
-      <view class="hero-body" :style="heroBodyStyle">
-        <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
-        <view class="focus-cta">
-          <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
-          <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
-        </view>
-        <view class="focus-sub">
-          <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
-          <text class="focus-sub-sep">·</text>
-          <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
+      <view class="focus-hero" :class="{ 'hero-empty': !renderCards.length }" :style="heroCardStyle">
+        <view class="hero-body" :style="heroBodyStyle">
+          <view class="focus-keyinfo">{{ $t('连续 {n} 天 · 今日已练 {t} 题 · 待复习 {w}', { n: streak, t: today.total, w: wrongCount }) }}</view>
+          <view class="focus-cta">
+            <button class="focus-btn primary" @tap="startPractice">{{ $t('背句子') }}</button>
+            <button class="focus-btn ghost" @tap="openWordDrill">{{ $t('背单词') }}</button>
+          </view>
+          <view class="focus-sub">
+            <text class="focus-sub-link" @tap="goReview">{{ $t('复习错题') }}</text>
+            <text class="focus-sub-sep">·</text>
+            <text class="focus-sub-link" @tap="goDrill">{{ $t('AI 薄弱点专练') }}</text>
+          </view>
         </view>
       </view>
     </view>
@@ -768,9 +775,11 @@ export default {
     // 上滑时是整屏一起往上走，而不是只有底下那摞卡在动（用户原话：整体都有立体感）。
     // ⚠️ 只动 transform（合成器属性，零重排），多一个 height / padding 就又是掉帧老路。
     // ⚠️ 这一层**绝对不许带 opacity**：opacity<1 会让它自成 backdrop root，
-    //    卡面（它的子节点）的 backdrop-filter 就糊不到 app 背景了（MEMORY 第 43 条
-    //    那棵树，这里是第二次撞上）→ 用户只会看到"背景图纹丝不动地平移"。
-    //    内容的渐隐因此交给内层 .hero-body，卡面在这里保持不透明地糊着。
+    //    卡面（.hero-glass，挂在 .hero-card 上）的 backdrop-filter 就糊不到 app 背景了
+    //    （MEMORY 第 43 条那棵树，这里是第二次撞上）→ 只会看到"背景图纹丝不动地平移"。
+    //    内容的渐隐因此交给内层 .hero-body。
+    // ⚠️ 这一层的 scale 只作用于**内容**：卡面是兄弟节点（挂在 .hero-card 上），
+    //    不跟着缩 —— 否则满糊时左右各空出 2.5% 屏宽（2026-10-17 真机踩到）。
     heroCardStyle() {
       if (!this.revealOn) return {}
       const p = this.revealP
@@ -3349,6 +3358,20 @@ export default {
 }
 
 /* ---------- 首页焦点模式（默认形态）：主页只聚焦「背单词 / 背句子」 ---------- */
+/* 整张"全屏透明卡"的**外框**：自己什么都不吃（无 transform / 无 opacity），
+   只负责给卡面提供定位基准。
+   ⚠️ 卡面必须挂在这一层、不能挂进 .focus-hero：外壳带 scale(1 → 0.95)，
+      卡面一旦是它的子节点就跟着一起缩 → 满糊时左右各空出 2.5% 屏宽
+      （2026-10-17 真机："整页模糊没有占满全屏，左右两边占不满"）。
+      挪出来之后 -28rpx 抵消 container 的左右内边距，宽度**精确等于屏宽**；
+      想靠加大外扩去补 scale 是错的 —— 那等于把整屏高斯的面积放大三到四成，
+      正是这一版一直在躲的开销。
+   ⚠️ 这一层同样**不许带 opacity / filter**：一带就自成 backdrop root，
+      卡面的 backdrop-filter 就糊不到背景了（第 43 条那棵树，第三次经过它）。
+   ⚠️ 也不许带 transform —— 卡面会重新变成它的子节点式受害者。 */
+.hero-card {
+  position: relative;
+}
 /* 焦点模式的 hero：从顶栏底边一直铺到屏幕底边 ——
    下一张卡静止时**必然**在折叠线之下（结构保证，不靠 opacity）。
    ⚠️ 之前试过"缩短 320rpx 让卡片探出"——探出量依赖 --reveal 归零才不可见，
@@ -3358,6 +3381,11 @@ export default {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  /* 卡面 .hero-glass 是**兄弟**节点（都挂在 .hero-card 上），靠层级压在内容之下；
+     这一层必须自己站到卡面之上，否则整块主页内容会被那层模糊盖住。
+     ⚠️ position 不建 backdrop root，只有 opacity / filter / mask 那些才建。 */
+  position: relative;
+  z-index: 1;
   /* 铺到屏幕底边：下一张卡静止时**必然**在折叠线之下（结构保证，不靠 opacity）。
      ⚠️ 之前试过"缩短 320rpx 让卡片探出"——探出量依赖 --reveal 归零才不可见，
      JS 一环没跑卡片就露在首屏（真机翻车），别再走回头路。 */
@@ -3387,7 +3415,8 @@ export default {
    只有上滑切到下面那摞卡的那一段，才按进度长出模糊，把整块主页糊掉；
    滑回顶部一切归零，背景重新清晰 —— 用户 2026-10-17 明确要的就是这一条
    （"注意这里只是为了动画，主页背景还是切回来要显示清晰的背景图片"）。
-   ⚠️ 它是 .focus-hero 的**子节点**：所以 .focus-hero 绝对不能带 opacity（见上面那条）。
+   ⚠️ 它挂在 .hero-card 上（是 .focus-hero 的**兄弟**，不是子节点）：外壳带
+      scale(1 → 0.95)，卡面一旦进去就跟着缩，满糊时左右各空出 2.5% 屏宽。
    ⚠️ 模糊半径**恒定**、只在 0~4 五档之间切 class：卡面背后是 fixed 不动的背景层，
       整段滚动里要糊的内容没变 → 每档至多重算一次高斯模糊。
       逐帧改半径 = 整屏高斯按帧重跑，是掉帧的老路（绝不能回去）。
@@ -3399,12 +3428,15 @@ export default {
   --hero-glass-blur: none;
   --hero-glass-op: 0;
   position: absolute;
-  /* 比 hero 本身大一圈：上抬 / 缩放时也不会在边缘露出没糊到的"亮边" */
+  /* 左右各外扩 28rpx，正好抵消 .container 的左右内边距 → **宽度精确等于屏宽**。
+     ⚠️ 不要再往上加：卡面现在不受外壳 scale 影响，多加的每一寸都是白算的高斯模糊。
+     ⚠️ 上下只留"hero 上抬那 56rpx"需要的余量（外加一点富余），同理别贪。 */
   left: -28rpx;
   right: -28rpx;
-  top: -200rpx;
-  bottom: -200rpx;
-  z-index: -1;
+  top: -80rpx;
+  bottom: -120rpx;
+  /* 垫在兄弟节点 .focus-hero 之下（那一层 z-index:1） */
+  z-index: 0;
   pointer-events: none;
   opacity: var(--hero-glass-op, 0);
   -webkit-backdrop-filter: var(--hero-glass-blur, none);

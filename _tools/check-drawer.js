@@ -272,6 +272,34 @@ console.log('== 3. hero 形态：铺满一屏 + 裸按钮入口渐隐 + 卡片�
   assert(!/backdrop-filter/.test(hero), '外壳自己不带 backdrop-filter（那是 .hero-glass 的活）');
   assert(/class="hero-glass"/.test(home) && /class="hero-body"/.test(home),
     'hero 拆成「外壳 transform / 卡面 hero-glass / 内容 hero-body」三层');
+  // ---- 第十一版：卡面必须挂在 .hero-card 上，不能挂进 .focus-hero ----
+  // 外壳带 scale(1→0.95)，卡面一旦是它的子节点就跟着一起缩 → 满糊时左右各空出
+  // 2.5% 屏宽（2026-10-17 真机："整页模糊没有占满全屏，左右两边占不满"）。
+  // ⚠️ 修法不是"把外扩加大"：那等于把整屏高斯的面积放大三四成（掉帧老路）。
+  {
+    const tpl = home.slice(home.indexOf('<template>'), home.indexOf('</template>'))
+      .replace(/<!--[\s\S]*?-->/g, '');
+    const iCard = tpl.indexOf('class="hero-card"');
+    const iGlass = tpl.indexOf('class="hero-glass"');
+    const iHero = tpl.indexOf('class="focus-hero"');
+    assert(iCard >= 0, '存在 .hero-card 外框（卡面的定位基准）');
+    assert(iCard < iGlass && iGlass < iHero,
+      '卡面挂在 .hero-card 上、且排在 .focus-hero 之前（不受外壳 scale 影响）');
+    // 卡面必须在 hero 的**外面**：把它塞回 hero 里就又跟着缩了
+    const heroOpen = tpl.indexOf('>', iHero);
+    const heroClose = tpl.indexOf('</view>', heroOpen);
+    assert(iGlass < heroOpen || iGlass > heroClose,
+      '.hero-glass 不能落在 .focus-hero 内部（一进去就跟着 scale 缩，左右又空出来）');
+    const card = rule('.hero-card');
+    assert(card.length > 0, '存在 .hero-card 规则');
+    assert(!/transform|opacity|filter/.test(card),
+      '.hero-card 外框不带 transform / opacity / filter（带了卡面就跟着缩、或 backdrop 被隔离）');
+    assert(/position:\s*relative/.test(card), '.hero-card 是卡面的定位基准');
+    // 外扩量：左右正好抵消 .container 的 28rpx 内边距即可，不许为了补 scale 而加大
+    const g = rule('.hero-glass');
+    assert(/left:\s*-28rpx/.test(g) && /right:\s*-28rpx/.test(g),
+      '卡面左右只外扩 28rpx（正好抵消 container 内边距 = 屏宽；不许为补 scale 而加大）');
+  }
   // 内容层：入口渐隐搬到这里（外壳再也不能吃 opacity）
   {
     const body = rule('.hero-body');
@@ -294,8 +322,11 @@ console.log('== 3. hero 形态：铺满一屏 + 裸按钮入口渐隐 + 卡片�
       '卡面默认全透明（静止时背景图必须是高清的）');
     assert(!/background-color/.test(glass),
       '卡面不给本体色（没有模糊时它就是一片奶白垫片 —— 正是上一版被砍掉的东西）');
-    assert(/z-index:\s*-1/.test(glass) && /pointer-events:\s*none/.test(glass),
+    // 卡面与 .focus-hero 现在是**兄弟**，靠 z-index 分先后（不再是父子的 z-index:-1）
+    assert(/z-index:\s*0\b/.test(glass) && /pointer-events:\s*none/.test(glass),
       '卡面垫在内容之下且不吃点击');
+    assert(/z-index:\s*1\b/.test(rule('.focus-hero')),
+      '.focus-hero 自己要站到卡面之上（否则整块主页内容被那层模糊盖住）');
     // 五档齐不齐：少一档就是"台阶缺一级"
     for (let i = 0; i <= 4; i++) {
       assert(css.indexOf('.hero-glass-' + i + ' {') > 0, '存在第 ' + i + ' 档 hero-glass-' + i);
