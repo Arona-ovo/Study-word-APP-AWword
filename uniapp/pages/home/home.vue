@@ -997,16 +997,14 @@ export default {
     this._spanPx = 0          // 淡入距离（px，由 upx() 换算一次就够）
     this._parallaxPx = 0      // 卡片视差距离（px）
     this._heroLiftPx = 0      // 全屏那张卡额外上抬的距离（px）
+    this._deadPx = 0          // 起手死区（px）
     this._drawerBuzzed = false // 抽屉"拉到位"这一下震过了没有（防止滑一次震一窝）
-    try {
-      this._spanPx = this.upx(520)
-      this._parallaxPx = this.upx(220)
-      this._heroLiftPx = this.upx(56)
-    } catch (e) {
-      this._spanPx = 260
-      this._parallaxPx = 110
-      this._heroLiftPx = 28
-    }
+    this.remeasure()
+  },
+  // 尺寸变了就要重算（横竖屏切换 / 折叠屏展开 / 分屏）—— 见 remeasure 的注释
+  onResize() {
+    this.remeasure()
+    this.syncReveal(-1)
   },
   onLoad() {
     this.refreshDoc()
@@ -1114,6 +1112,26 @@ export default {
         return v / 2
       }
     },
+    // 把所有"rpx → px"的距离一次性重算。**屏幕尺寸变了必须重算一遍**：
+    // rpx 的换算基准是屏宽（750rpx = 屏宽），屏宽一变，之前缓存的 px 就全都不对了
+    // —— 视差距离、上抬距离、淡入距离都会跟新的屏幕比例脱节（横竖屏切换 /
+    // 折叠屏展开 / 分屏都会走到这里，靠 onResize 触发）。
+    // ⚠️ 缓存而不是每次现算：syncReveal 由 onPageScroll 逐帧调用，
+    //    upx() 的兜底分支要 getSystemInfoSync（同步原生调用，不便宜）。
+    remeasure() {
+      try {
+        this._spanPx = this.upx(520)
+        this._parallaxPx = this.upx(220)
+        this._heroLiftPx = this.upx(56)
+        this._deadPx = this.upx(16)
+      } catch (e) {
+        console.warn('[home] remeasure failed:', e)
+        this._spanPx = 260
+        this._parallaxPx = 110
+        this._heroLiftPx = 28
+        this._deadPx = 8
+      }
+    },
     // 抽屉"被丢过来"落位那一记 Q 弹：一次小阻尼回弹（先冲过头，再收回来稳住）。
     // ⚠️ 走 CSS keyframes 而不是逐帧改响应式数据：home.vue 模板很大，
     //    按帧写 = 整页按帧重渲染（前面 reveal 量化到 0.05 一档就是为此）。
@@ -1139,9 +1157,10 @@ export default {
       const focus = !!(this.isFocus && this.renderCards && this.renderCards.length)
       let p = 1
       if (focus) {
-        const span = this._spanPx || (this._spanPx = this.upx(520))
+        // ⚠️ 兜底里不能只补 span：屏宽变化后四个值都要跟着变（见 remeasure）
+        const span = this._spanPx || (this.remeasure(), this._spanPx)
         // 前 16rpx 是"死区"：刚起手那一点点抖动不该让卡片先闪一下
-        const dead = this.upx(16)
+        const dead = this._deadPx
         p = (this._scrollTop - dead) / span
         p = p < 0 ? 0 : p > 1 ? 1 : p
         // 抽屉拉到位 → 震一下（一次滑动只响一声；滑回去再拉才会再响）
@@ -3396,11 +3415,19 @@ export default {
   /* 上下留白相等 → 内容盒对称于整屏，两个入口落在屏幕正中：
      底栏预留 220rpx + 24rpx、顶栏占 136rpx，差值 (24 + 220 − 136) 补在 padding-top。
      ⚠️ 136rpx / 220rpx 要和 App.vue 的 .page-nav / .page-tabbar 对齐。 */
+  /* ⚠️ 纵向留白用 rpx（随屏宽缩放）+ **vh 上限**双重约束：
+     rpx 只跟**屏宽**走，屏高不管 —— 正常竖屏手机（约 1:2.1）没问题，但屏幕一"变扁"
+     （横屏、折叠屏展开成接近正方形），这 244rpx 换算出来能占掉屏高的六成，
+     内容盒被挤成负数 → 入口被顶出屏幕、hero 被撑得比屏幕还高，得滑很久才看到卡片。
+     min() 在竖屏下不生效（244rpx 只占屏高约 15%），只在真的变扁时才接管。
+     ⚠️ 第一条是老 webview（不支持 min()）的兜底，别删。 */
   padding: calc(108rpx - var(--status-bar-height, 0px)) 0
            calc(24rpx + 220rpx + env(safe-area-inset-bottom, 0px));
+  padding-top: min(calc(108rpx - var(--status-bar-height, 0px)), 14vh);
   /* 同 .page-tabbar：env() 在 Android webview 常报 0，用实测 --safe-b 兜底，
      否则两个入口的"正中"会往系统导航条里偏 */
   padding-bottom: calc(24rpx + 220rpx + max(env(safe-area-inset-bottom, 0px), var(--safe-b, 0px)));
+  padding-bottom: min(calc(24rpx + 220rpx + max(env(safe-area-inset-bottom, 0px), var(--safe-b, 0px))), 34vh);
   /* ⚠️ 这一层**不写 opacity**：见 heroCardStyle 的注释 —— 一旦带上 opacity，
      它就自成 backdrop root，卡面 .hero-glass 的 backdrop-filter 就糊不到 app 背景了
      （整张卡看着只是在平移，背景图一动不动）。入口渐隐因此搬到了 .hero-body。 */

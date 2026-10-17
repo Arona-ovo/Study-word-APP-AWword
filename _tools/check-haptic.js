@@ -83,13 +83,19 @@ assert(/import \* as haptic from '\.\.\/\.\.\/utils\/haptic\.js'/.test(ftb),
 const home = R('pages/home/home.vue');
 assert(/import \* as haptic from '\.\.\/\.\.\/utils\/haptic\.js'/.test(home), '首页引入 haptic');
 assert(/haptic\.tick\('drawer'\)/.test(strip(home)), '抽屉拉到位震一下（drawer 档）');
-assert(/_drawerBuzzed/.test(strip(home)), '一次滑动只震一声（滑回去再拉才会再响）');
+// ⚠️ 只断言"出现过 _drawerBuzzed 这个字段名"是不够的：把守卫 `if (!this._drawerBuzzed)`
+//    改成 `if (true)` 之后，字段依然在赋值语句里出现 → 断言照过，而抽屉会每帧震一次
+//    （2026-10-17 变异测试抓到）。必须钉住**那条判断本身**。
+assert(/if \(!this\._drawerBuzzed\) \{/.test(strip(home)),
+  '震之前先判"这一滑还没震过"（没有这道守卫，onPageScroll 每来一次就震一次）');
 {
   const i = strip(home).indexOf('syncReveal(scrollTop) {');
   const body = i > 0 ? strip(home).slice(i, strip(home).indexOf('\n    },', i)) : '';
   const iFire = body.indexOf("haptic.tick('drawer')");
   const iReset = body.indexOf('_drawerBuzzed = false');
   assert(iFire > 0 && iReset > iFire, '先震、再把"已震"标记复位放在回落分支里（不会每帧都震）');
+  assert(/if \(!this\._drawerBuzzed\) \{/.test(body),
+    '守卫就在 syncReveal 里（不是在别处判断的）');
 }
 const set = R('pkgManage/pages/settings/settings.vue');
 assert(/import \* as haptic from '\.\.\/\.\.\/\.\.\/utils\/haptic\.js'/.test(set), '设置页引入 haptic');

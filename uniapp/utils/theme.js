@@ -407,6 +407,9 @@ let _safeB = -1;
 function safeInsetPx() {
   if (_safeB >= 0) return _safeB;
   _safeB = 0;
+  // ⚠️ 下面这段只在**第一次**跑（后面都走缓存）→ 屏幕尺寸变了必须走
+  //    resetSafeInset() 清掉缓存再算，否则拿到的是旧屏幕的导航条高度
+  //    （横竖屏切换 / 折叠屏展开 / 分屏：见 theme-mixin 的 onResize）。
   let sys = null;
   try {
     if (typeof uni !== 'undefined' && uni.getSystemInfoSync) sys = uni.getSystemInfoSync() || null;
@@ -437,6 +440,12 @@ function safeInsetPx() {
     _safeB = 0;
   }
   return _safeB;
+}
+// 屏幕尺寸变了要清一次缓存：safeInsetPx 是按"当时那块屏幕"算的，屏高 / safeArea
+// 一变（横竖屏切换、折叠屏展开、分屏）旧值就失效了 —— 要么让位过头（胶囊浮在中间），
+// 要么让位不够（卡片钻进导航条）。清掉后下次 rootStyle() 会重算。
+export function resetSafeInset() {
+  _safeB = -1;
 }
 
 // 统一应用（主题色 + 背景 + 深色）

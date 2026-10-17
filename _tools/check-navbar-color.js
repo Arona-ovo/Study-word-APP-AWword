@@ -71,11 +71,18 @@ assert(/win\.setNavigationBarColor\(/.test(fnBody), '最终落到窗口 setNavig
 assert(/syncNavBarColor\(nativeBg\)/.test(code),
   'applyBackground 里传 nativeBg（与 setBackgroundColor 同源：浅/深兜底都在那算好了）');
 {
-  // 调用顺序：必须在 setNavigationBarColor 之后、return 之前，别插到函数中间
-  const iBg = code.indexOf('uni.setBackgroundColor');
-  const iNav = code.indexOf('uni.setNavigationBarColor');
-  const iSync = code.indexOf('syncNavBarColor(nativeBg)');
-  assert(iBg > 0 && iNav > 0 && iSync > iNav && iSync > iBg, '调用点在两个 uni.* 之后（同一段原生同步逻辑里）');
+  // 调用顺序：必须在 setNavigationBarColor 之后、return 之前，别插到函数中间。
+  // ⚠️ 三个位置必须在**同一个函数体内**取：直接 code.indexOf 会抓到别的函数 / 注释里
+  //    的同名调用（syncNavBarColor 自己体内就有 setNavigationBarColor），
+  //    那样比出来的顺序是错的 —— 2026-10-17 变异测试抓到这条一直是假绿。
+  const iFn = code.indexOf('function applyBackground');
+  assert(iFn >= 0, 'theme.js 有 applyBackground（原生同步的调用方）');
+  const fn = iFn >= 0 ? code.slice(iFn, code.indexOf('\n}', iFn)) : '';
+  const iBg = fn.indexOf('uni.setBackgroundColor');
+  const iNav = fn.indexOf('uni.setNavigationBarColor');
+  const iSync = fn.indexOf('syncNavBarColor(nativeBg)');
+  assert(iBg > 0 && iNav > 0 && iSync > iNav && iSync > iBg,
+    '调用点在 applyBackground 里的两个 uni.* 之后（同一段原生同步逻辑里）');
 }
 {
   // #ifdef 在函数体内（晚于函数名出现），所以取"函数头到第一个 #endif"这一段

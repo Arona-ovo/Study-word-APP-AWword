@@ -26,6 +26,16 @@ export default {
   onShow() {
     this.refreshAppTheme();
   },
+  // 屏幕尺寸变了（横竖屏切换 / 折叠屏展开 / 分屏）：rootStyle 里带了一堆按
+  // "当时那块屏幕"算出来的值（--safe-b 的实测导航条高度、背景图的铺法），
+  // 不重算就会跟新屏幕对不上。rpx 本身是响应式的（750rpx = 屏宽），
+  // 但凡是**用 JS 缓存过的 px** 都必须在这里清掉重来。
+  onResize() {
+    try {
+      theme.resetSafeInset();
+    } catch (e) {}
+    this.refreshAppTheme();
+  },
   onUnload() {
     try {
       if (typeof uni !== 'undefined' && typeof uni.$off === 'function') uni.$off('theme:change', this.refreshAppTheme);

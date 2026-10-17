@@ -112,8 +112,11 @@ assert(/:style="sheetRevealStyle"/.test(home), '玻璃底板层也走 :style 绑
 // CSS 变量在部分端可能拿不到 —— 动画这种"看不见就等于没做"的东西不能押在变量上。
 assert(/opacity: String\(this\.revealP\)/.test(home),
   '卡片内联写真实 opacity（不依赖 CSS 变量，各端一定生效）');
-assert(/transform: 'translate3d/.test(home),
-  '底板层内联写真实 transform（不依赖 CSS 变量，各端一定生效）');
+// ⚠️ 必须锚到 `+ off`（卡片那条）：第十一版 heroCardStyle 也用了 translate3d（+ lift），
+//    只写 /transform: 'translate3d/ 的话，删掉卡片这条也会被 hero 那条顶住 = 假绿
+//    （2026-10-17 变异测试抓到）。
+assert(/transform: 'translate3d\(0,' \+ off/.test(home),
+  '卡片内联写真实 transform（带视差位移 off，不依赖 CSS 变量）');
 assert(/opacity: \(1 - fade\)\.toFixed\(3\)/.test(home),
   '入口内联写真实 opacity（卡片出来→入口淡出，滑回去→入口回来）');
 // 非焦点 / 没卡（全收纳）必须常显、入口不淡出：那一屏全靠入口，淡掉就是空屏。
@@ -133,9 +136,19 @@ assert(/Math\.round\(p \* 20\) \/ 20/.test(home),
   '进度量化到 0.05 一档（不是每帧写一次，避免整页重渲染掉帧）');
 // 抽屉拉到位震一下（用户要的"加点动效或震动"），且一次滑动只响一声。
 assert(/haptic\.tick\('drawer'\)/.test(home), '抽屉拉到位震一下');
-assert(/_drawerBuzzed/.test(home), '一次滑动只震一声（滑回去再拉才会再响）');
+// ⚠️ 同上：只验字段名不够（`if (true)` 也能让它出现），要钉那条判断
+assert(/if \(!this\._drawerBuzzed\) \{/.test(home),
+  '一次滑动只震一声（有"已震"守卫；滑回去再拉才会再响）');
 // ---- 落位那一记 Q 弹（2026-10-16 用户："要有 Q 弹的动效，像卡片从远处丢过来"） ----
-assert(/playThrow\(\)/.test(home), '抽屉落位会放一次回弹（与震动同一时刻）');
+// ⚠️ 只写 /playThrow\(\)/ 会匹配到**方法定义本身**（`playThrow() {`）→ 删掉唯一的
+//    调用点也照样通过 = 假绿（2026-10-17 变异抓到）。必须带 `this.` 前缀（调用形态），
+//    并且落在 syncReveal 之后（调用点在那里面）。
+assert(/this\.playThrow\(\)/.test(home) &&
+       home.indexOf('this.playThrow()') > home.indexOf('syncReveal(scrollTop) {'),
+  '抽屉落位真的调用了回弹（不是只留一个没人调的定义）');
+// 量化过的进度必须真的写回响应式数据，否则内联样式永远停在初值
+assert(/Math\.abs\(q - this\.revealP\)/.test(home) && /this\.revealP = q/.test(home),
+  '进度跨档才写回 revealP（量化值与响应式数据必须对得上）');
 assert(/popSeq/.test(home) && /popSeq % 2 \? 'pop-a' : 'pop-b'/.test(home),
   '回弹用 pop-a / pop-b **交替**（同一个 class 摘了戴上会被一次渲染合并，第二次放不响）');
 assert(!/this\.popSeq = true/.test(home) && /this\.popSeq = \(this\.popSeq \|\| 0\) \+ 1/.test(home),
@@ -258,6 +271,10 @@ console.log('== 3. hero 形态：铺满一屏 + 裸按钮入口渐隐 + 卡片�
   // （底栏 220 + 24、顶栏 136，差值 108 补在 padding-top）。
   assert(/108rpx/.test(pad) && /220rpx/.test(pad) && /safe-area-inset-bottom/.test(pad),
     'padding 上下对称于整屏（108 = 24 + 220 − 136）→ 入口在屏幕正中');
+  // 左右必须是 0：hero 与下方卡片同宽，一眼看过去才是"一摞卡"。
+  // ⚠️ 上面那条只验了上下（108 / 220），横向写成 32rpx 也照样通过 = 假绿
+  //    （2026-10-17 变异抓到）→ 这条专门钉横向。
+  assert(/\)\s+0\s+calc\(24rpx/.test(pad), 'hero 左右内边距是 0（与下方卡片同宽）');
   assert(/justify-content:\s*center/.test(hero), 'hero 内容垂直居中');
   assert(!/transition/.test(hero), 'hero 上没有任何过渡（高度 / 内边距不参与动画）');
   // 入口渐隐（2026-10-16 用户要求）：上滑时卡片淡入、两个入口渐隐；
