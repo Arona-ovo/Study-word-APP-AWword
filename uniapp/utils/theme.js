@@ -254,6 +254,43 @@ function syncStatusBarStyle(dark) {
   }
 }
 
+// uni.setNavigationBarColor 的失败兜底（用法见 applyBackground 里那条调用）。
+// ⚠️ 这条 API 要落到**当前页面实例**上：页面还没创建时（启动就 apply 的那一次），
+//    回调里回的是 "page not found"。早期没写 fail，uni 会把原始 errMsg 直接打到
+//    控制台（2026-10-18 Web 版一进来就刷两条
+//    {errMsg: "setNavigationBarColor:fail page not found"}），看着像崩了，其实
+//    功能一点没少 —— 但控制台不能留这种噪音。
+//    分层处理：① 页面没就绪（时序问题）→ 排一次稍后的补刷，不浪费 warn；
+//              ② 补刷还不成、或别的真失败 → 按项目规矩用中文 warn 出来。
+let _navBarRetried = false;
+function navBarOptsWithFail(opts) {
+  const fallback = Object.assign({}, opts);
+  fallback.fail = function (e) {
+    const msg = String((e && e.errMsg) || (e && e.message) || e || '');
+    if (msg.indexOf('page not found') >= 0) {
+      if (_navBarRetried) {
+        console.warn('[theme] setNavigationBarColor 补刷后仍是 page not found（放弃；只影响原生导航条配色）');
+        return;
+      }
+      _navBarRetried = true;
+      setTimeout(function () {
+        try {
+          if (typeof uni !== 'undefined' && uni && typeof uni.setNavigationBarColor === 'function') {
+            // ⚠️ 补刷这条同样要带 fail：不带的话页面还是没就绪时会再一次把原始
+            //    errMsg 打到控制台（等于只治了一半）。这一个已经是最后一次机会了。
+            uni.setNavigationBarColor(navBarOptsWithFail(opts));
+          }
+        } catch (e2) {
+          console.warn('[theme] setNavigationBarColor 补刷失败:', (e2 && e2.message) || e2);
+        }
+      }, 300);
+      return;
+    }
+    console.warn('[theme] setNavigationBarColor failed:', msg);
+  };
+  return fallback;
+}
+
 // ---------- 深色模式判定 ----------
 // 系统主题：① uni.getSystemInfoSync().theme（需 manifest 开 darkmode）
 //          ② App 端 plus.nativeUI.getUIStyle()  ③ H5 的 prefers-color-scheme
@@ -386,10 +423,14 @@ function applyBackground(key, image, mask, blur, dark) {
   }
   try {
     if (typeof uni !== 'undefined' && uni && typeof uni.setNavigationBarColor === 'function') {
-      uni.setNavigationBarColor({ frontColor: dark ? '#ffffff' : '#000000', backgroundColor: nativeBg });
+      // ⚠️ 必须带 fail 回调（见 navBarOptsWithFail 的注释）：uni 这条 API 依赖**当前页面**，
+      //    启动就 apply 时页面还没建 → 回 "page not found"，不带 fail 那条原始 errMsg
+      //    会被直接打到控制台（看着像报错，实际不影响功能）。
+      const navOpts = { frontColor: dark ? '#ffffff' : '#000000', backgroundColor: nativeBg };
+      uni.setNavigationBarColor(navBarOptsWithFail(navOpts));
     }
   } catch (e) {
-    /* 部分端不支持，忽略 */
+    console.warn('[theme] setNavigationBarColor 调用失败:', (e && e.message) || e);
   }
   // 底部系统导航条那条白的根源（见函数注释）：窗口级 navigationBarColor 跟背景走
   syncNavBarColor(nativeBg);
@@ -416,6 +457,16 @@ function safeInsetPx() {
   } catch (e) {
     // 拿不到系统信息就保持 0：env() 那条还在兜底
     console.warn('[theme] safeInsetPx sysinfo failed:', e);
+  }
+  // ⚠️ 只有"webview 真的通铺到屏幕底"时，"屏幕底 − safeArea.bottom"才是系统条的高度。
+  //    App 端正常 lost≈0（float-tabbar 里的 probeVisible 打的就是这个差）；浏览器窗口里
+  //    lost 是浏览器自己的 UI / 任务栏占掉的一二百 px —— HBuilderX 跑 Web 版时 lost=249，
+  //    于是算出 249px 再被下面的封顶丢掉，每次启动都刷一条"超限丢弃"
+  //    （2026-10-18 控制台：那条 warn 是纯噪音）。
+  //    这种布局下压根不存在"盖在页面之上的系统条" → 直接归 0，让位交回 env()。
+  if (sys) {
+    const lost = sys.screenHeight && sys.windowHeight ? sys.screenHeight - sys.windowHeight : 0;
+    if (lost > 96) return 0;
   }
   let diag = '';
   if (sys) {

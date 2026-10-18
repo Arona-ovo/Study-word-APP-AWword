@@ -91,6 +91,30 @@ assert(/syncNavBarColor\(nativeBg\)/.test(code),
   assert(iDef > fnStart && iEnd > iDef, '函数体内被 #ifdef APP-PLUS / #endif 包住（只在 App 端编译）');
 }
 
+console.log('== 1.7 uni.setNavigationBarColor 的失败兜底（不许甩原始 errMsg 到控制台） ==');
+// 2026-10-18 Web 版控制台一进来就刷两条 {errMsg: "setNavigationBarColor:fail page not found"}：
+// 启动就 apply，可这条 API 要落到**当前页面实例**上 —— 页面还没建，uni 就回 "page not found"。
+// 那时候没写 fail 回调，原始 errMsg 被直接打出来，看着像崩了（其实一点功能没少）。
+// 契约：必须带 fail → 页面未就绪排一次补刷；真失败要中文 warn（不许完全静默）。
+{
+  const iApply = code.indexOf('function applyBackground');
+  const applyBody = iApply >= 0 ? code.slice(iApply, code.indexOf('\n}', iApply)) : '';
+  assert(/uni\.setNavigationBarColor\(navBarOptsWithFail\(navOpts\)\)/.test(applyBody),
+    '调用走 navBarOptsWithFail（带 fail 回调，uni 不再把原始 errMsg 打到控制台）');
+  const iHelper = code.indexOf('function navBarOptsWithFail');
+  assert(iHelper >= 0, '有 navBarOptsWithFail helper');
+  const helperBody = iHelper >= 0 ? code.slice(iHelper, code.indexOf('\n}', iHelper)) : '';
+  assert(/fallback\.fail = function/.test(helperBody), '返回的对象上挂了 fail');
+  assert(/page not found/.test(helperBody) && /setTimeout/.test(helperBody) && /uni\.setNavigationBarColor\(navBarOptsWithFail\(opts\)\)/.test(helperBody),
+    '识别 page not found 并排一次迟到的补刷（页面起来后再染一次；补刷这条也带 fail）');
+  assert(/console\.warn\(/.test(helperBody), '补刷仍失败 / 别的失败要 console.warn（ 不许完全静默）');
+  // webview 没通铺到屏幕底时（浏览器窗口 / 没重排）：screenHeight − safeArea.bottom 不是系统条
+  const iSafe = code.indexOf('function safeInsetPx');
+  const safeBody = iSafe >= 0 ? code.slice(iSafe, code.indexOf('\n}', iSafe)) : '';
+  assert(/lost > 96/.test(safeBody) && /return 0/.test(safeBody),
+    'webview 没通铺到屏幕底时不算系统条 inset（浏览器窗口 lost 一二百 px，别再刷"超限丢弃"）');
+}
+
 console.log('== 2. 行为：换背景 / 深色模式都跟着走 ==');
 const mem = {};
 const flags = [];
@@ -171,6 +195,71 @@ console.log('== 3. 错误形态：原生调用失败 / plus.android 缺失都不
   try { theme.apply(); } catch (e) { threw = e; }
   assert(threw === null, 'runtimeMainActivity() 为 null 时不炸');
   plusStub.android.runtimeMainActivity = saved;
+}
+
+console.log('== 4. setNavigationBarColor 报 page not found 时的补刷与降级 ==');
+{
+  // uni 这条 API 要落到**当前页面实例**上：启动就 apply 时页面还没建 → 回 "page not found"
+  // （2026-10-18 Web 版控制台刷了两条原始 errMsg）。期望：不炸、不当场刷 warn（那是时序
+  // 不是错误）、排一次补刷；页面起来后真的再染一次；补刷仍失败才 warn 出来。
+  const navLog = [];
+  const warns = [];
+  const timers = [];
+  const savedWarn = console.warn;
+  const savedTimer = global.setTimeout;
+  const savedNav = global.uni.setNavigationBarColor;
+  console.warn = (m) => { warns.push(String(m)); };
+  global.setTimeout = (fn, ms) => { timers.push({ fn: fn, ms: ms }); return 0; };
+  global.uni.setNavigationBarColor = (o) => {
+    navLog.push(o);
+    if (o && typeof o.fail === 'function') o.fail({ errMsg: 'setNavigationBarColor:fail page not found' });
+  };
+  // ⚠️ 定时器必须**加载时注入**（lib/load 的 sandbox 在 createContext 那一刻就把
+  //    setTimeout 快照进去了，事后改 global.setTimeout 不影响已经 load 好的模块 →
+  //    只能带着桩 reload 一份）。
+  const theme2 = load('utils/theme.js', {
+    settings, color, plus: plusStub,
+    setTimeout: (fn, ms) => { timers.push({ fn: fn, ms: ms }); return 0; }
+  });
+  let threw = null;
+  try { theme2.apply(); } catch (e) { threw = e; }
+  assert(threw === null, 'page not found 时 apply() 不炸（实际：' + (threw && threw.message) + '）');
+  assert(navLog.length >= 1 && typeof navLog[0].fail === 'function', '调用带了 fail 回调（uni 不会再甩原始 errMsg）');
+  assert(warns.length === 0, '第一次 page not found 不 warn（是时序问题，靠补刷解决）：' + warns.join(' | '));
+  const later = timers.filter((t) => t.ms === 300);
+  assert(later.length >= 1, '排了一次 300ms 后的补刷（页面建好后重试）');
+  later.forEach((t) => t.fn());   // 手动"到点"
+  assert(navLog.length >= 2, '补刷真的又调了一次 setNavigationBarColor（页面起来后颜色能落上）');
+  assert(warns.length >= 1 && /page not found/.test(warns.join(' ')),
+    '补刷仍失败 → 用中文 warn 出来（不许完全静默）');
+  console.warn = savedWarn;
+  global.setTimeout = savedTimer;
+  global.uni.setNavigationBarColor = savedNav;
+}
+
+{
+  // ⚠️ 只测 "page not found" 会让"真失败静默"变成假绿（2026-10-18 变异测试抓到）：
+  //    那条兜底 warn 被删掉后脚本照样全绿 —— 所以失败形态必须两种都测。
+  const warns2 = [];
+  const timers2 = [];
+  const savedWarn2 = console.warn;
+  const savedNav2 = global.uni.setNavigationBarColor;
+  const theme3 = load('utils/theme.js', {
+    settings, color, plus: plusStub,
+    setTimeout: (fn, ms) => { timers2.push({ fn: fn, ms: ms }); return 0; }
+  });
+  console.warn = (m) => { warns2.push(String(m)); };
+  global.uni.setNavigationBarColor = (o) => {
+    if (o && typeof o.fail === 'function') o.fail({ errMsg: 'setNavigationBarColor:fail not supported' });
+  };
+  let threw2 = null;
+  try { theme3.apply(); } catch (e) { threw2 = e; }
+  console.warn = savedWarn2;
+  global.uni.setNavigationBarColor = savedNav2;
+  assert(threw2 === null, '非 page not found 的失败同样不炸（实际：' + (threw2 && threw2.message) + '）');
+  assert(warns2.some((w) => /setNavigationBarColor/.test(w)),
+    '真失败要当场 warn 出来（不许完全静默）：' + warns2.join(' | '));
+  assert(timers2.length === 0, '真失败不排补刷（重试也没用，别空转）');
 }
 
 console.log(fail === 0 ? '\n导航条底色同步全部通过' : '\n失败 ' + fail + ' 项');
