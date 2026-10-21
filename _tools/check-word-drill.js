@@ -125,6 +125,75 @@ function wipe() {
   });
   is(sameable === 0 || samePos === sameable, '有同词性候选时优先拿它当干扰项（' + samePos + '/' + sameable + '）');
 
+  /* ---------------- 2.5 干扰项：像 + 每次不一样（2026-10-21 重做） ---------------- */
+  // 旧实现是"同词性 → 取词表里最靠前的三个"，既没随机（每次进背单词都一模一样），
+  // 也不像（那三个跟要背的词毫无关系）。这两条都必须钉住，否则会静默退化。
+  console.log('== 2.5 干扰项：像 / 每次不一样 ==');
+  const PROBE = ALL[3];
+  {
+    const sets = {};
+    for (let i = 0; i < 24; i++) {
+      const it = ws.toItem(PROBE, ALL, BID);
+      sets[it.options.filter(o => o !== String(PROBE.m).trim()).slice().sort().join('|')] = 1;
+    }
+    const kinds = Object.keys(sets).length;
+    is(kinds >= 8, '同一个词连造 24 次，干扰项不是固定的那三个（' + kinds + ' 种组合）');
+  }
+  {
+    const it = ws.toItem(PROBE, ALL, BID);
+    const sets = {};
+    let answerOk = true;
+    let shapeOk = true;
+    for (let i = 0; i < 24; i++) {
+      ws.refreshOptions(it, ALL);
+      sets[it.modes.recog.options.filter(o => o !== String(PROBE.m).trim()).slice().sort().join('|')] = 1;
+      if (it.modes.recog.options[it.modes.recog.answerIndex] !== String(PROBE.m).trim()) answerOk = false;
+      if (it.options[it.answerIndex] !== String(PROBE.m).trim()) answerOk = false;
+      if (new Set(it.modes.recog.options).size !== it.modes.recog.options.length) shapeOk = false;
+    }
+    const kinds = Object.keys(sets).length;
+    is(kinds >= 8, 'refreshOptions 连刷 24 次也在换（' + kinds + ' 种组合）');
+    is(answerOk, '刷新后 answerIndex 仍指向正确释义（modes 与顶层两份都同步）');
+    is(shapeOk, '刷新后选项不重复');
+  }
+  {
+    // "像"的判据：抽出来的干扰项，平均相似度要明显高于"随便抓三个同词性词"。
+    // 绝对阈值不稳（有的词在词书里确实没有近义词），用**对照**才有说服力。
+    let got = 0, gotN = 0, rnd = 0, rndN = 0;
+    let egot = 0, egotN = 0, ernd = 0, erndN = 0;
+    deck.forEach(d => {
+      const ans = String(d.m).trim();
+      const pos = String(d.pos || '');
+      d.options.forEach(o => { if (o !== ans) { got += ws.zhSim(ans, o); gotN++; } });
+      d.modes.recall.options.forEach(o => { if (o !== d.w) { egot += ws.enSim(d.w, o); egotN++; } });
+      const peers = ALL.filter(e => e.id !== d.id && String(e.pos || '') === pos && String(e.m || '').trim() !== ans);
+      for (let i = 0; i < 3 && peers.length; i++) {
+        const p = peers[Math.floor(Math.random() * peers.length)];
+        rnd += ws.zhSim(ans, String(p.m).trim()); rndN++;
+        ernd += ws.enSim(d.w, String(p.w || '')); erndN++;
+      }
+    });
+    const a = got / Math.max(1, gotN), b = rnd / Math.max(1, rndN);
+    const ea = egot / Math.max(1, egotN), eb = ernd / Math.max(1, erndN);
+    // 两个条件都要：只比倍数在对照≈0 时会变成"只要不是全 0 就过"，只比差值在
+    // 词书特别大时又会把"稍微像一点"也算过。
+    is(a > b * 1.5 && a - b > 0.02, '中文干扰项比"随便抓同词性"更像（' + a.toFixed(3) + ' vs 对照 ' + b.toFixed(3) + '）');
+    is(ea > eb * 1.5 && ea - eb > 1, '英文干扰项比"随便抓同词性"更形近（' + ea.toFixed(2) + ' vs 对照 ' + eb.toFixed(2) + '）');
+  }
+  {
+    // 页面契约：每出一题都要重抽（同一个词会回来考三关、答错还会重排队）
+    const wdRaw = fs.readFileSync(path.join(ROOT, 'pkgStudy/pages/word-drill/word-drill.vue'), 'utf8').replace(/\r\n/g, '\n');
+    const wdCode = wdRaw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    // ⚠️ 锚点要带缩进和签名：`setupQuestion(` 会先匹配到调用处（start 里的那句），
+    //    从那里切出来的片段根本不包含出题逻辑 → 断言假绿。
+    const iSetup = wdCode.indexOf('    setupQuestion(i) {');
+    const body = iSetup >= 0 ? wdCode.slice(iSetup, wdCode.indexOf('\n    },', iSetup)) : '';
+    is(iSetup >= 0 && /wordSession\.refreshOptions\(/.test(body), '背单词页每次出题都重抽干扰项');
+    // ⚠️ 光有调用不够：refreshOptions 拿不到候选池会直接 return（等于没抽）——
+    //    只扫调用时"把 _pool 置空"这种坏法居然全绿（2026-10-21 变异测试抓到）。
+    is(/this\._pool = wordbook\.bookWords\(/.test(wdCode), 'start() 缓存整本书当候选池（池子空 = 根本不抽）');
+  }
+
   /* ---------------- 3. 三种来源的语义 ---------------- */
   console.log('== 3. 来源语义 ==');
   wipe();

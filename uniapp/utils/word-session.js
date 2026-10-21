@@ -112,14 +112,95 @@ export function pickWords(n, bookId, source, today) {
   return picked.concat(rest).slice(0, want).map(x => x.entry);
 }
 
-// 干扰项：优先同词性的其它词 —— 四个选项都是名词时才有迷惑性，
-// 混一个动词进去一眼就看出来了，那种"假难度"没有训练价值。
-// 词书太小凑不满时降级到任意词性的其它词。
-function distractors(entry, pool) {
+// ---------- 干扰项：像 + 每次不一样 ----------
+// ⚠️ 2026-10-21 重做。旧实现是"按词性分两堆 → slice(0, 3)"，两个毛病：
+//   ① 取到的是**词表里排最靠前的同词性词**，一次抽好之后整场不变 →
+//      用户每次进背单词看到的另外三个一模一样；
+//   ② 那三个跟要背的词毫无关系，只是恰好同词性 —— 没有迷惑性，等于白送。
+// 现在两步：先按"像不像"打分排序，再**从最像的一批里随机抽**。
+//   像 = 有迷惑性（真难度）；随机 = 每次不一样（不会背成"选项固定"的假记忆）。
+// ⚠️ 仍然同词性优先：四个选项都是名词时才有迷惑性，混一个动词进去一眼就看出来了。
+const NEAR_POOL = 12;   // 从最像的这么多里随机抽（池子越小越难，越大越随机）
+
+// 中文释义的"像"：共享的二字块越多越像。
+// "减少；降低" 与 "降低；缩减" 很像是真的像；"苹果" 与 "提高" 一点也不像。
+// 只看汉字（词性标注里的 n. / v. 符号不参与，否则所有 v. 都"很像"）。
+const HAN_RE = /[\u4e00-\u9fa5]/;
+function hanGrams(s) {
+  const t = String(s || '');
+  const out = [];
+  for (let i = 0; i < t.length - 1; i++) {
+    if (HAN_RE.test(t[i]) && HAN_RE.test(t[i + 1])) out.push(t.slice(i, i + 2));
+  }
+  return out;
+}
+export function zhSim(a, b) {
+  const ga = hanGrams(a);
+  const gb = hanGrams(b);
+  if (!ga.length || !gb.length) return 0;
+  const left = {};
+  ga.forEach(g => { left[g] = (left[g] || 0) + 1; });
+  let hit = 0;
+  gb.forEach(g => { if (left[g] > 0) { left[g]--; hit++; } });
+  return hit / (ga.length + gb.length - hit);   // 0~1 的 Jaccard
+}
+
+// 英文词形的"像"：公共前缀最吃重（前缀相同的词最容易看混），其次是公共后缀，
+// 长度差是扣分项 —— 四个选项里混一个明显更长/更短的，不认得也能靠长度猜出来。
+export function enSim(a, b) {
+  const x = String(a || '').toLowerCase();
+  const y = String(b || '').toLowerCase();
+  if (!x || !y) return 0;
+  let pre = 0;
+  const maxPre = Math.min(x.length, y.length);
+  while (pre < maxPre && x[pre] === y[pre]) pre++;
+  let suf = 0;
+  const maxSuf = Math.min(x.length, y.length) - pre;
+  while (suf < maxSuf && x[x.length - 1 - suf] === y[y.length - 1 - suf]) suf++;
+  return pre * 2 + suf - Math.abs(x.length - y.length) * 0.5;
+}
+
+// 洗牌后取前 need 个
+function take(rows, need) {
+  const pool = rows.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = pool[i];
+    pool[i] = pool[j];
+    pool[j] = t;
+  }
+  return pool.slice(0, need).map(x => x.text);
+}
+
+// "算不算像"的下限。⚠️ 不能只看 score > 0：
+//   中文那边 >0 就够（= 至少共享一个二字词块，信号已经很强）；
+//   英文那边 >0 太松（只要首字母相同就有分），得抬到 3 —— 那才叫"形近词"。
+const ZH_NEAR = 0.08;
+const EN_NEAR = 3;
+
+/**
+ * 抽干扰项（rows 已按 score 降序）：
+ *   ① 优先只从**真的像**的那批里随机抽（score >= floor）；
+ *   ② 像的不够（词书里确实没有近义 / 形近词）再从其余候选里随机补。
+ * ⚠️ 关键是"随机"：旧实现取的是排序后的前 need 个 —— 那就是每次都一样的固定三个。
+ */
+function sampleNear(rows, need, floor) {
+  if (!rows.length || need <= 0) return [];
+  let cut = 0;
+  while (cut < rows.length && rows[cut].score >= floor) cut++;
+  const got = take(rows.slice(0, cut), need);
+  if (got.length < need) {
+    got.push.apply(got, take(rows.slice(cut, cut + NEAR_POOL), need - got.length));
+  }
+  return got;
+}
+
+// 认得出（看英文选中文）：干扰项按**中文释义**的相似度排
+function distractors(entry, pool, need) {
   const own = String(entry.w || '').toLowerCase();
   const pos = String(entry.pos || '');
-  const used = {};
   const answer = String(entry.m || '').trim();
+  const used = {};
   used[answer] = true;
   const same = [];
   const other = [];
@@ -129,21 +210,23 @@ function distractors(entry, pool) {
     const mean = String(p.m || '').trim();
     if (!mean || used[mean]) return;
     used[mean] = true;
-    if (String(p.pos || '') === pos) same.push(mean);
-    else other.push(mean);
+    const row = { text: mean, score: zhSim(answer, mean) };
+    if (String(p.pos || '') === pos) same.push(row);
+    else other.push(row);
   });
-  return { same: same, other: other };
+  const bySim = (a, b) => b.score - a.score;
+  same.sort(bySim);
+  other.sort(bySim);
+  const got = sampleNear(same, need, ZH_NEAR);
+  // 同词性不够（词书小 / 该词性词少）再从别的词性里补
+  if (got.length < need) got.push.apply(got, sampleNear(other, need - got.length, ZH_NEAR));
+  return got;
 }
 
-/**
- * 反向题的干扰项：给中文释义，选项是**英文单词**。
- * 同样优先同词性；另外按"长度差"排序取最接近的 ——
- * 四个选项里混一个明显更长/更短的词，用户不认得也能靠长度猜出来（那是假难度）。
- */
-function wordDistractors(entry, pool) {
+// 想得起（看中文选英文）：干扰项按**词形**的相似度排
+function wordDistractors(entry, pool, need) {
   const own = String(entry.w || '').toLowerCase();
   const pos = String(entry.pos || '');
-  const len = own.length;
   const used = {};
   used[own] = true;
   const same = [];
@@ -152,12 +235,49 @@ function wordDistractors(entry, pool) {
     const w = String(p.w || '').toLowerCase();
     if (!w || used[w]) return;
     used[w] = true;
-    const row = { w: p.w, gap: Math.abs(w.length - len) };
+    const row = { text: p.w, score: enSim(own, w) };
     if (String(p.pos || '') === pos) same.push(row);
     else other.push(row);
   });
-  const sort = arr => arr.sort((a, b) => a.gap - b.gap).map(x => x.w);
-  return { same: sort(same), other: sort(other) };
+  const bySim = (a, b) => b.score - a.score;
+  same.sort(bySim);
+  other.sort(bySim);
+  const got = sampleNear(same, need, EN_NEAR);
+  if (got.length < need) got.push.apply(got, sampleNear(other, need - got.length, EN_NEAR));
+  return got;
+}
+
+/** 三种题型的选项一次造齐（造题只用本地数据，没有网络开销） */
+function buildOptions(entry, pool) {
+  const need = MAX_OPTIONS - 1;
+  const answer = String(entry.w || '');
+  const mean = String(entry.m || '').trim();
+  const packed = pack([mean].concat(distractors(entry, pool, need)), mean);
+  const wpacked = pack([answer].concat(wordDistractors(entry, pool, need)), answer);
+  return {
+    recog: packed,
+    recall: wpacked,
+    spell: { answer: answer, hint: spellHint(entry.w) }
+  };
+}
+
+/**
+ * 同一场次里重抽干扰项（同一个词第二次出现时换一批选项）。
+ * 三关之间、或者答错被退回重排队再出现时，选项不该还是原来那三个 ——
+ * 背单词页每次出题前调一次。不传 pool 就当没这事（调用方拿不到词表时别炸）。
+ */
+export function refreshOptions(item, pool) {
+  if (!item || !pool || pool.length < 2) return item;
+  const opts = buildOptions({ id: item.id, w: item.w, pos: item.pos, m: item.m }, pool);
+  item.modes = {
+    recog: opts.recog,
+    recall: opts.recall,
+    spell: opts.spell
+  };
+  // 顶层这两个字段是向后兼容用的（翻译练习页的确认题还在读），必须跟着一起换
+  item.options = opts.recog.options;
+  item.answerIndex = opts.recog.answerIndex;
+  return item;
 }
 
 /** 拼写提示：首字母 + 其余用下划线（a _ _ _ e 比直接给 a**** 更像"提示"而非"剧透"） */
@@ -212,22 +332,14 @@ function pickExample(entry) {
 export function toItem(entry, pool, bookId) {
   const map = wordbook.masteryMap(bookId) || {};
   const rec = map[entry.id] || null;
-  const answer = String(entry.m || '').trim();
-  const d = distractors(entry, pool);
-  const bag = d.same.concat(d.other);
-  const raw = [answer].concat(bag.slice(0, MAX_OPTIONS - 1));
-  const packed = pack(raw, answer);
   const example = pickExample(entry);
-
   // 三档题型一次造齐（造题只用本地数据，没有网络开销）：
   //   recog  认得出 —— 看英文选中文（识别，最浅的一档，老版本只有这一种）
   //   recall 想得起 —— 看中文选英文（反向提取，比"认"难一档）
   //   spell  写得出 —— 看中文+首字母手写英文（产出，最难，也最练拼写）
   // 确认会话按连对次数逐档往上走，同一个词不会连着考同一种题型。
-  const wd = wordDistractors(entry, pool);
-  const wbag = wd.same.concat(wd.other);
-  const wraw = [String(entry.w || '')].concat(wbag.slice(0, MAX_OPTIONS - 1));
-  const wpacked = pack(wraw, String(entry.w || ''));
+  // ⚠️ 选项走 buildOptions：干扰项是"像的里面随机抽"（见 NEAR_POOL 那一段的注释）。
+  const opts = buildOptions(entry, pool);
 
   return {
     id: entry.id,
@@ -238,13 +350,9 @@ export function toItem(entry, pool, bookId) {
     custom: !!entry.custom,
     // 顶层 options/answerIndex 就是 recog 的那一份：
     // 翻译练习页的确认题还在用这两个字段（向后兼容，别删）
-    options: packed.options,
-    answerIndex: packed.answerIndex,
-    modes: {
-      recog: { options: packed.options, answerIndex: packed.answerIndex },
-      recall: { options: wpacked.options, answerIndex: wpacked.answerIndex },
-      spell: { answer: String(entry.w || ''), hint: spellHint(entry.w) }
-    },
+    options: opts.recog.options,
+    answerIndex: opts.recog.answerIndex,
+    modes: opts,
     exampleEn: example ? example.en : '',
     exampleZh: example ? example.zh : '',
     mastery: rec ? (Number(rec.m) || 0) : 0,

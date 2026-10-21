@@ -482,6 +482,8 @@ export default {
       }
       this.source = source
       this.questions = deck
+      // 干扰项候选池（整本书）：出题时按它重抽选项 —— 缓存一份，别每题都去词表里捞一次
+      this._pool = wordbook.bookWords(this.bookId) || []
       // 多次确认会话：复习首答对即算记住（need=1）；日常 / 新词要连过三关。
       // 三关的题型序列按用户挑的作答方式起头、其余轮转（选拼写就 写→认→想），
       // 这样既尊重选择，又保证同一个词不会三遍考同一种提取方式。
@@ -555,6 +557,10 @@ export default {
         : { streak: 0, need: wordSession.CONFIRM_TIMES, mode: 'recog' }
       const curMode = step.mode || 'recog'
       this.curMode = curMode
+      // 每出一题重抽一次干扰项：同一个词会回来考三关、答错还会重排队，
+      // 选项要是始终那三个，就成了"背选项"而不是"背单词"（2026-10-21 用户反馈）。
+      // 抽的是"跟这个词最像的一批里随机三个"（见 word-session 的 NEAR_POOL）。
+      if (this._pool && this._pool.length > 1) wordSession.refreshOptions(item, this._pool)
       // 选项随题型走：认得出给中文选项，想得起给英文选项
       const bank = (item.modes || {})[curMode] || {}
       if (curMode === 'recog' || curMode === 'recall') {
