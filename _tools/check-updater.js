@@ -579,7 +579,7 @@ assert(up.cmpVersion(up.parseVersion(NEWER), LV) > 0,
   deps.updater = updaterSpy;
   deps.settings = settingsForUp;
   deps.t = (k) => String(k);   // 译文函数：直接回 key，断言文案选了哪条
-  deps.BUILD_INFO = { version: '1.4.4', versionCode: 144 };
+  deps.BUILD_INFO = { version: '1.4.5', versionCode: 145 };
   deps.FloatNavbar = { name: 'FloatNavbar' };
   deps.AppDialog = { name: 'AppDialog' };
 
