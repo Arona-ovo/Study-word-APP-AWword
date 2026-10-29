@@ -7,7 +7,6 @@
     <view class="fnb" :class="{ 'fnb-search-mode': search, 'fnb-cmd-mode': isCommand }">
       <view class="fnb-side" :class="{ 'fnb-side-flat': isFlat }" @tap="onLeftTap">
         <text v-if="!search && showBack" class="fnb-back" hover-class="fnb-back-press" hover-start-time="0" hover-stay-time="70">‹</text>
-        <view v-else-if="busy" class="fnb-spin" hover-start-time="0" hover-stay-time="70"></view>
         <view v-else-if="search && isCommand" class="fnb-wand" hover-class="fnb-mag-press" hover-start-time="0" hover-stay-time="70">
           <view class="wand-v"></view>
           <view class="wand-h"></view>
@@ -55,6 +54,10 @@
         @tap="onRightTap"
       >
         <text v-if="search && value" class="fnb-clear">×</text>
+        <!-- 非搜索态的忙碌指示放这儿（左槽留给返回键）：AI 重排在跑时右槽转圈，
+             返回键始终是左槽主职，两种状态互不顶掉 —— 以前挤在左槽会把返回键顶掉，
+             同一个页面"加载完才冒出返回键"，看着就像返回键时有时无。 -->
+        <view v-else-if="!search && busy" class="fnb-spin" hover-start-time="0" hover-stay-time="70"></view>
         <!-- 非搜索态：右侧一颗放大镜，明示"这条顶栏点得开"。
              还没答完题时置灰而不是藏起来 —— 藏了用户会以为这功能不存在（见项目约定 16）。 -->
         <view v-else-if="!search && searchable" class="fnb-mag" hover-class="fnb-mag-press" hover-start-time="0" hover-stay-time="70">
@@ -127,12 +130,22 @@ export default {
     actions: { type: Array, default: () => [] }
   },
   data() {
-    return { barH: 0, focused: false }
+    // stackN: -1 = 还没量过（先沿用实时栈）；量过之后以量到的值为准
+    return { barH: 0, focused: false, stackN: -1 }
   },
   computed: {
+    /**
+     * 返回键显示与否。
+     * ⚠️ 页面栈**不能只在创建时问一次**：页面组件创建时 getCurrentPages() 常常
+     *   还没把当前页算进去（栈里只有上一页），于是"从底栏页直接点进来的页面"全部
+     *   判定成栈深 1 = 没有返回键 —— 这就是"有的页面有箭头、有的没有"的来处。
+     *   两道保险：① 页面显式声明 :back="true/false"（推荐，绝对确定）；
+     *   ② 不声明时挂载后再量一次栈深（那时当前页已在栈里），且是响应式的。
+     */
     showBack() {
       if (this.back === true) return true
       if (this.back === false) return false
+      if (this.stackN >= 0) return this.stackN > 1
       try {
         const pages = getCurrentPages()
         return Array.isArray(pages) && pages.length > 1
@@ -173,8 +186,12 @@ export default {
       h = 0
     }
     this.barH = h
+    // 创建时量一次栈深（当前页可能还没进栈）
+    this.measureStack()
   },
   mounted() {
+    // 挂载后再量一次栈深：这时当前页一定已经在栈里了（创建时未必）
+    this.measureStack()
     // 冷启动兜底：个别端在 created 时会拿到 statusBarHeight = 0，
     // 搜索框整个顶进状态栏里，看起来就像"搜索框不见了"。挂载后再补取一次。
     if (this.barH) return
@@ -239,8 +256,10 @@ export default {
       if (!this.search) { this.onBack(); return }
       this.$emit('search', this.value || '')
     },
-    // 右槽：搜索态 = 清除；非搜索态 = 搜索入口（与点标题同义）
+    // 右槽：搜索态 = 清除；非搜索态 = 搜索入口（与点标题同义）。
+    // busy 时右槽是转圈，不是搜索入口，点了不该触发搜索
     onRightTap() {
+      if (this.busy) return
       if (this.search) { this.onClear(); return }
       this.onTitleTap()
     },
@@ -266,13 +285,32 @@ export default {
     onActionTap(key) {
       this.$emit('action', key)
     },
+    /**
+     * 返回。⚠️ 不能直接 navigateBack —— 那样会绕开页面的 onBackPress：
+     * 强制模式页正是靠 onBackPress 在强制模式下把人按住的，顶栏要是自己走一条路，
+     * "点左上角就跑出去了"，强制模式等于没有。
+     * 所以先同步 emit 一次 veto 回调：页面想拦就当场调用它（emit 是同步的，
+     * 页面拿到回调时还没导航），没拦才真的返回。
+     */
     onBack() {
       if (!this.showBack) return
+      let vetoed = false
+      this.$emit('before-back', () => { vetoed = true })
+      if (vetoed) return
       const pages = (typeof getCurrentPages === 'function' ? getCurrentPages() : []) || []
       if (pages.length > 1) {
         uni.navigateBack()
       } else {
         uni.switchTab({ url: '/pages/home/home' })
+      }
+    },
+    /** 把当前页面栈深度记进响应式字段（栈还没建好时记 -1，保持"没量过"） */
+    measureStack() {
+      try {
+        const pages = (typeof getCurrentPages === 'function' ? getCurrentPages() : []) || []
+        this.stackN = Array.isArray(pages) ? pages.length : -1
+      } catch (e) {
+        this.stackN = -1
       }
     }
   }

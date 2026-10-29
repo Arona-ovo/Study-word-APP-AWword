@@ -47,9 +47,26 @@ export const LIGHT_BG = '#e4e9e4';
 export const FONT_STACKS = {
   system: '-apple-system, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif',
   serif: 'Georgia, "Songti SC", "Times New Roman", "SimSun", serif',
-  rounded: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif'
+  // 第三档原先叫 rounded（PingFang/Hiragino 圆体），但在安卓和 iOS 上都退化成和
+  // system 一模一样的无衬线（系统里没有那几个族名）——点了毫无变化，用户以为坏了。
+  // 改成等宽：Android 有 Roboto Mono / Droid Sans Mono，数字与英文真的会变等宽
+  // （中文仍回落到系统字，属预期）。键名保留 rounded 是为了不破坏 AI 指令 theme.set
+  // 的取值域（page-schema.js 的 FONTS 与「圆体」关键词），只把字族换成等宽。
+  rounded: 'ui-monospace, "SF Mono", "Roboto Mono", "Droid Sans Mono", "Courier New", monospace'
 };
+// 设置页外观里按这张表渲染字体选择器（name 走 $t）。key 必须与 FONT_STACKS 对齐。
+export const FONT_OPTIONS = [
+  { key: 'system', name: '系统', stack: FONT_STACKS.system },
+  { key: 'serif', name: '衬线', stack: FONT_STACKS.serif },
+  { key: 'rounded', name: '等宽', stack: FONT_STACKS.rounded }
+];
 export const DENSITY_GAP = { compact: '14rpx', cozy: '24rpx', relaxed: '34rpx' };
+// 设置页外观里按这张表渲染间距选择器（name 走 $t）。key 必须与 DENSITY_GAP 对齐。
+export const DENSITY_OPTIONS = [
+  { key: 'compact', name: '紧凑' },
+  { key: 'cozy', name: '适中' },
+  { key: 'relaxed', name: '宽松' }
+];
 
 // 浅色档整体压深过一轮（原来每个预设的头一档都在 #f2-#ff 之间，铺开就是"一屏白"）：
 // 色相与配比不动，只把三个色标各压深一档，渐变两头也拉开一点，层次才看得出来。
@@ -553,6 +570,28 @@ export function setCustomColor(hex) {
   } catch (e) {}
   apply();
   return c;
+}
+
+// 字体族：写 settings.theme.font → apply() 重算 --app-font（页面根节点消费）。
+// 非法值一律兜底 system（宁可用默认字，也不要一个空 stack 让全站回落到衬线）。
+export function setFont(key) {
+  const k = FONT_STACKS[key] ? key : 'system';
+  try {
+    settings.set({ theme: { font: k } });
+  } catch (e) {}
+  apply();
+  return k;
+}
+
+// 密度：写 settings.theme.density → apply() 重算 --app-gap（卡片外层间距消费）。
+// 非法值兜底 cozy（默认档），和 setFont 同款处理。
+export function setDensity(key) {
+  const k = DENSITY_GAP[key] ? key : 'cozy';
+  try {
+    settings.set({ theme: { density: k } });
+  } catch (e) {}
+  apply();
+  return k;
 }
 
 export function setMask(v) {

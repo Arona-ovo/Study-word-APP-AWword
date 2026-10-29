@@ -82,7 +82,7 @@ function defaults() {
       bgBlur: 0,           // 背景模糊半径（px，0-24）
       dark: false,         // 深色模式（followSystem 为 true 时被系统值覆盖）
       followSystem: false, // 跟随系统深色模式
-      font: 'system',      // 字体：system | serif | rounded（AI 指令 theme.set 可改）
+      font: 'system',      // 字体：system | serif | rounded（键名保留 rounded，已改为等宽字族；AI 指令 theme.set 可改）
       density: 'cozy',     // 密度：compact | cozy | relaxed（AI 指令 theme.set 可改）
       // 练习页顶部两条进度条（已做 / 已会）要不要同色系。
       //   true  同色系：已做 = 主题色的浅版，已会 = 主题色实心（整体跟主题走）

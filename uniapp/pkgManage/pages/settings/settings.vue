@@ -164,6 +164,48 @@
         </view>
         <view class="bg-hint">{{ $t('背景在最底层且固定不动：上下滑动时只有卡片、胶囊这些窗体在动。玻璃窗体透出背景的同时仍与背景分层；"淡化"在深色模式下叠的是黑色，用来给背景降亮度。') }}</view>
 
+        <!-- 字体：选字体必须"看得见差别"，不然等于盲选 —— 每档样例用该档字族内联渲染 -->
+        <view class="sub-title">{{ $t('字体') }}</view>
+        <view class="font-row">
+          <view
+            v-for="f in fonts"
+            :key="f.key"
+            class="font-chip"
+            :class="{ active: fontKey === f.key }"
+            :data-k="f.key"
+            @tap="pickFont"
+          >
+            <!-- 样例自带该档字体 —— 选字体必须"看得见差别"，不然等于盲选。
+                 这是全项目唯一允许内联字族的地方：字族取自 theme.js 的 FONT_STACKS，
+                 不写死在页面里，FONT_OPTIONS 与 FONT_STACKS 对齐才不会出现"选了没反应"。 -->
+            <text class="font-sample" :style="{ fontFamily: f.stack }">Aa 12:30</text>
+            <text class="font-name">{{ $t(f.name) }}</text>
+          </view>
+        </view>
+        <view class="bg-hint">{{ $t('只换字体族，字号、字重、间距都不变；选完立刻生效，不用重启。') }}</view>
+
+        <!-- 间距：只改卡片之间的纵向间距，不动卡片内部排版 -->
+        <view class="sub-title">{{ $t('间距') }}</view>
+        <view class="font-row">
+          <view
+            v-for="d in densities"
+            :key="d.key"
+            class="font-chip"
+            :class="{ active: densityKey === d.key }"
+            :data-k="d.key"
+            @tap="pickDensity"
+          >
+            <!-- 三条横杠示意"卡片之间"的间距：疏密按档位走，一眼能分辨 -->
+            <view class="dg-demo" :style="{ gap: densityDemo(d.key) }">
+              <view class="dg-bar"></view>
+              <view class="dg-bar"></view>
+              <view class="dg-bar"></view>
+            </view>
+            <text class="font-name">{{ $t(d.name) }}</text>
+          </view>
+        </view>
+        <view class="bg-hint">{{ $t('只改卡片之间的纵向间距，不动卡片内部的排版和字号。紧凑能一屏多放一张卡，宽松看着更透气。') }}</view>
+
         <!-- 练习页顶部那两条进度条的颜色：默认跟主题走（浅色 / 主题色），
              也可以让"已会"那条单独用绿色，两条靠色相而不是深浅区分 -->
         <view class="sub-title">{{ $t('练习进度条') }}</view>
@@ -1010,6 +1052,8 @@ import {
   currentAccent, setAccent,
   currentBgImage, currentMask, setMask, currentBlur, setBlur,
   currentCustomColor, setCustomColor,
+  currentFont, setFont, currentDensity, setDensity,
+  FONT_OPTIONS, DENSITY_OPTIONS,
   chooseBackgroundImage, clearBgImage,
   isDark, systemPrefersDark, currentDark, currentFollowSystem, setDark, setFollowSystem,
   barsSyncColors,
@@ -1079,6 +1123,11 @@ export default {
       accentKey: 'blue',
       backgrounds: BACKGROUNDS,
       bgKey: 'default',
+      // 字体 / 间距：选择器由 theme.js 的 FONT_OPTIONS / DENSITY_OPTIONS 驱动
+      fonts: FONT_OPTIONS,
+      fontKey: 'system',
+      densities: DENSITY_OPTIONS,
+      densityKey: 'cozy',
       bgImage: '',
       mask: 0.35,
       blur: 0,
@@ -1427,6 +1476,8 @@ export default {
     // 后台那次预下载可能已经把包下好了 —— 进页面时重新看一眼，别拿旧状态糊弄人
     this.updateReady = !!updater.stagedPath()
     this.accentKey = currentAccent()
+    this.fontKey = currentFont()
+    this.densityKey = currentDensity()
     this.bgKey = currentBg()
     this.bgImage = currentBgImage()
     this.customHex = currentCustomColor() || DEFAULT_CUSTOM
@@ -2023,6 +2074,26 @@ export default {
       this.accentKey = key
       setAccent(key)
       this.refreshAppTheme()
+    },
+    // 字体族：写盘 + 重算 --app-font（refreshAppTheme 会把新的 rootStyle 挂回根节点）
+    pickFont(e) {
+      const key = e.currentTarget.dataset.k
+      this.fontKey = key
+      setFont(key)
+      this.refreshAppTheme()
+    },
+    pickDensity(e) {
+      const key = e.currentTarget.dataset.k
+      this.densityKey = key
+      setDensity(key)
+      this.refreshAppTheme()
+    },
+    // 间距示意横杠的行距（纯视觉，不是真实 --app-gap 值：真实的 14/24/34rpx
+    // 塞进 40rpx 高的格子里会溢出）。三档按"密→疏"拉开，一眼能分辨。
+    densityDemo(key) {
+      if (key === 'compact') return '2rpx'
+      if (key === 'relaxed') return '10rpx'
+      return '5rpx'
     },
     pickBg(e) {
       const key = e.currentTarget.dataset.k
@@ -2661,6 +2732,71 @@ export default {
   color: var(--ink-3, #98a19b);
   letter-spacing: 1rpx;
   padding: 24rpx 0 4rpx;
+}
+
+/* ===== 字体 / 间距选择器（外观）=====
+   三档小方块，样例自带该档字族 / 间距示意 —— 选字体必须"看得见差别"，不然等于盲选。 */
+.font-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20rpx;
+  padding: 12rpx 0 8rpx;
+}
+
+.font-chip {
+  flex: 1 1 0;
+  min-width: 150rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20rpx 12rpx 16rpx;
+  box-sizing: border-box;
+  border-radius: 20rpx;
+  background: rgba(255, 255, 255, 0.5);
+  background: rgba(var(--surface-rgb, 255, 255, 255), 0.5);
+  border: 2rpx solid rgba(23, 32, 26, 0.08);
+  border: 2rpx solid var(--hairline, rgba(23, 32, 26, 0.08));
+  transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease;
+}
+
+.font-chip:active { opacity: 0.7; }
+
+.font-chip.active {
+  border-color: rgba(46, 107, 255, 0.5);
+  border-color: rgba(var(--brand-rgb, 46, 107, 255), 0.5);
+  background: rgba(46, 107, 255, 0.08);
+  background: rgba(var(--brand-rgb, 46, 107, 255), 0.08);
+}
+
+/* 样例自带该档字族：选字体必须看得见差别 */
+.font-sample {
+  font-size: 34rpx;
+  line-height: 1.2;
+  color: #17201a;
+  color: var(--ink-1, #17201a);
+  margin-bottom: 10rpx;
+}
+
+.font-name {
+  font-size: 22rpx;
+  color: #5a6560;
+  color: var(--ink-2, #5a6560);
+  letter-spacing: 1rpx;
+}
+
+/* 间距示意：三条横杠，行距按档位走 */
+.dg-demo {
+  display: flex;
+  flex-direction: column;
+  width: 56rpx;
+  margin: 6rpx 0 10rpx;
+}
+
+.dg-bar {
+  height: 8rpx;
+  border-radius: 4rpx;
+  background: #5a6560;
+  background: var(--ink-2, #5a6560);
 }
 
 /* 主题色：一行小圆点 */

@@ -96,7 +96,32 @@ eq(titleBar.isFlat, false, '非搜索模式不收起（返回键槽保持 72rpx�
 eq(titleBar.showBack, true, '栈深 > 1 显示返回键');
 titleBar.onLeftTap();
 yes(uniCalls.indexOf('navigateBack') >= 0, '点击走 navigateBack');
-eq(titleBar.emits.length, 0, '没有抛出 search');
+eq(titleBar.emits.filter(e => e.n === 'search').length, 0, '没有抛出 search');
+// 返回前先同步问页面能不能 veto（before-back 回调）：强制模式页可借此把人按住，
+// 顶栏不能自己绕开页面的 onBackPress 直接走 navigateBack
+const bb = titleBar.emits.find(e => e.n === 'before-back');
+yes(!!bb, '先发 before-back 让页面有机会拦截');
+yes(typeof bb.v === 'function', 'before-back 带一个 veto 回调');
+
+// veto 路径：父页面在 @before-back 里同步调用回调 → 不导航。
+// 真实环境里 uni.$emit 会同步执行父页面的 handler，回调在 onBack 继续之前就生效；
+// 这里用自定义 $emit 模拟"父页面同步拦截"。注意 mount() 不跑 created/mounted，
+// stackN 仍是 -1，showBack 回落到 getCurrentPages —— 必须先把栈深撑到 2 才走得到 before-back；
+// 且 mount() 会在返回前覆盖 $emit，所以得在 mount 之后再替换。
+uniCalls.length = 0;
+backPages.length = 0;
+backPages.push({}, {});   // 栈深 2
+let vetoed = false;
+const vetoBar = mount({ search: false, value: '', title: '词库' });
+vetoBar.$emit = (n, v) => { if (n === 'before-back') { v(); vetoed = true; } };
+vetoBar.onLeftTap();
+yes(vetoed && uniCalls.indexOf('navigateBack') < 0, 'veto 后不再 navigateBack');
+// 对照：不拦截时才真的导航
+uniCalls.length = 0;
+const noVeto = mount({ search: false, value: '', title: '词库' });
+noVeto.onLeftTap();
+yes(uniCalls.indexOf('navigateBack') >= 0, '不被拦截时走 navigateBack');
+
 uniCalls.length = 0;
 backPages.length = 0;      // 栈深 1
 const rootBar = mount({ search: false, value: '', title: '词库' });

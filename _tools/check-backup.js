@@ -329,6 +329,18 @@ function seedStorage() {
     currentAccent: () => 'blue', setAccent: noop,
     currentBgImage: () => '', currentMask: () => 0, setMask: noop, currentBlur: () => 0, setBlur: noop,
     currentCustomColor: () => '', setCustomColor: noop,
+    FONT_OPTIONS: [
+      { key: 'system', name: '系统', stack: 'system-stack' },
+      { key: 'serif', name: '衬线', stack: 'serif-stack' },
+      { key: 'rounded', name: '等宽', stack: 'mono-stack' }
+    ],
+    DENSITY_OPTIONS: [
+      { key: 'compact', name: '紧凑' },
+      { key: 'cozy', name: '适中' },
+      { key: 'relaxed', name: '宽松' }
+    ],
+    currentFont: () => 'system', setFont: noop,
+    currentDensity: () => 'cozy', setDensity: noop,
     chooseBackgroundImage: async () => '', clearBgImage: noop,
     isDark: () => false, systemPrefersDark: () => false, currentDark: () => false,
     currentFollowSystem: () => true, setDark: noop, setFollowSystem: noop,

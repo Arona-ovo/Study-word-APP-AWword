@@ -403,7 +403,18 @@ const St = loadCode(settingsScript, {
   currentAccent: () => 'blue', currentBg: () => 'sky', currentBgImage: () => '',
   currentCustomColor: () => '', currentMask: () => 0.35, currentBlur: () => 0,
   isDark: () => false, currentFollowSystem: () => false, systemPrefersDark: () => false,
-  barsSyncColors: () => true, currentSmooth: () => false
+  barsSyncColors: () => true, currentSmooth: () => false,
+  FONT_OPTIONS: [
+    { key: 'system', name: '系统', stack: 'system-stack' },
+    { key: 'serif', name: '衬线', stack: 'serif-stack' },
+    { key: 'rounded', name: '等宽', stack: 'mono-stack' }
+  ],
+  DENSITY_OPTIONS: [
+    { key: 'compact', name: '紧凑' },
+    { key: 'cozy', name: '适中' },
+    { key: 'relaxed', name: '宽松' }
+  ],
+  currentFont: () => 'system', setFont: () => {}, currentDensity: () => 'cozy', setDensity: () => {}
 }, 'settings.vue').default;
 
 const svm = Object.assign({}, St.data ? St.data() : {}, St.methods || {});

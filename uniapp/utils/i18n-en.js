@@ -737,6 +737,18 @@ export default {
   '浅色': 'Light',
   '主题色': 'Accent color',
   '背景': 'Background',
+  '字体': 'Font',
+  '间距': 'Spacing',
+  '系统': 'System',
+  '衬线': 'Serif',
+  '等宽': 'Monospace',
+  '紧凑': 'Compact',
+  '适中': 'Cozy',
+  '宽松': 'Roomy',
+  '只换字体族，字号、字重、间距都不变；选完立刻生效，不用重启。':
+    'Only the font family changes — size, weight and spacing stay the same. Applies instantly, no restart needed.',
+  '只改卡片之间的纵向间距，不动卡片内部的排版和字号。紧凑能一屏多放一张卡，宽松看着更透气。':
+    'Only the vertical gap between cards changes, not the layout or text size inside them. Compact fits one more card per screen; Roomy feels more airy.',
   '相册': 'Gallery',
   '正在使用自定义图片': 'Using a custom image',
   '恢复预设': 'Restore preset',
